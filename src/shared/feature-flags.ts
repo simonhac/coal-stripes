@@ -34,11 +34,6 @@ class FeatureFlagsStore {
   }
 
   get(flag: string): boolean {
-    // TEMPORARY: Always return true for gestureLogging
-    if (flag === 'gestureLogging') {
-      return true;
-    }
-    
     // If flag doesn't exist, create it with default value false
     if (!this.flags.has(flag)) {
       this.flags.set(flag, false);

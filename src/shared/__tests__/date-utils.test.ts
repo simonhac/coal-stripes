@@ -118,6 +118,16 @@ describe('Date Utilities', () => {
       expect(getDaysBetween(start2, end2)).toBe(364); // 365 days in regular year minus 1
     });
 
+    test('is DST-safe: exact inverse of CalendarDate.add across a DST boundary', () => {
+      // Dec 2006 is AEDT (DST); adding ~19.5yrs lands in Jul 2026 (AEST, no DST).
+      // A local-time diff would be an hour short here and Math.floor would drop a
+      // day (7131), landing boundary navigation 1 day off the present.
+      const start = new CalendarDate(2006, 12, 31);
+      for (const days of [7132, 5000, 1234, 366, 90]) {
+        expect(getDaysBetween(start, start.add({ days }))).toBe(days);
+      }
+    });
+
     test('should handle large date ranges', () => {
       const start = new CalendarDate(2020, 1, 1);
       const end = new CalendarDate(2025, 1, 1);

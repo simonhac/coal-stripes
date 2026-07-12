@@ -46,3 +46,9 @@ server.log
 dev.log
 /logs/
 /forks/
+.env*.local
+
+# build / test artifacts
+/.next-build/
+/test-results/
+/playwright-report/

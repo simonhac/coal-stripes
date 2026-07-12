@@ -92,7 +92,7 @@ export class OEClientQueued {
         // Enhance error with request details
         if (error && typeof error === 'object') {
           (error as any).requestDetails = {
-            url: fullUrl,
+            url,
             method: 'GET',
             networkCode,
             facilityCodes: facilityList

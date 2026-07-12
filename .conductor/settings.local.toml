@@ -1,0 +1,23 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+# Local Conductor config for coal-stripes (Next.js + npm).
+# Setup and run are thin wrappers around env/setup.ts and env/run.ts (run via tsx).
+
+[scripts]
+# Runs once when a workspace is created: npm install + Vercel link + pull the
+# development env (OPENELECTRICITY_API_KEY) into .env.local so the app can load data.
+setup = "npx tsx env/setup.ts"
+
+# Each workspace gets its own CONDUCTOR_PORT, so multiple can run at once.
+run_mode = "concurrent"
+
+[scripts.run.dev]
+# Next.js dev server, bound to CONDUCTOR_PORT (falls back to a free port from 3000).
+command = "npx tsx env/run.ts"
+default = true
+icon = "play"
+
+[scripts.run.test]
+# Jest unit tests in watch mode.
+command = "npm run test:watch"
+icon = "test-tube"

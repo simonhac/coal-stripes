@@ -1,323 +1,266 @@
-import { useRef, useEffect, useCallback, useState } from 'react';
-import { useSpring, config } from '@react-spring/web';
+import { useRef, useCallback, useEffect } from 'react';
+import { Controller } from '@react-spring/web';
 import { useDrag, useWheel } from '@use-gesture/react';
-import { featureFlags } from '@/shared/feature-flags';
 import { DATE_BOUNDARIES } from '@/shared/config';
-import { isOffsetOutOfBounds } from '@/shared/date-boundaries';
+import { resolveDragRelease, rubberbandClamp } from '@/shared/gesture-physics';
 
 interface GestureSpringOptions {
-  currentOffset: number;  // The actual current offset from parent
-  maxOffset: number;
+  currentOffset: number; // fractional day-offset from parent (the source of truth; 0 = earliestDataEndDay)
+  maxOffset: number; // latestDataDay offset; minOffset is implicitly 0
   onOffsetChange: (offset: number, isDragging: boolean) => void;
 }
 
-// Constants - no magic numbers
-const VELOCITY_THRESHOLD = 0.2;
-const MOMENTUM_SCALE = 300;
-const WHEEL_SENSITIVITY = 0.5;
+// ── Tunables ────────────────────────────────────────────────────────────────
+// Momentum bounds + projection live in @/shared/gesture-physics (pure, tested).
+const SPRING_BACK = { tension: 200, friction: 26 }; // rubber-band snap to bound
+const MOMENTUM_SPRING = { tension: 90, friction: 22 }; // coasting glide to a projected target
+const NAV_SPRING = { tension: 210, friction: 30 }; // keyboard / month-click glide
+const NAV_ANIMATE_MAX_DAYS = 366; // glide programmatic nav up to ~1yr; snap bigger jumps instantly
+const WHEEL_SCALE = 1; // day-axis pixels per wheel pixel (tune for trackpad feel)
+const RUBBERBAND = 0.15; // @use-gesture resistance coefficient past bounds (drag)
+const WHEEL_STRETCH_DAYS = 60; // max elastic overscroll for the wheel, in days
+
+type Phase = 'idle' | 'drag' | 'wheel' | 'spring' | 'navigate';
 
 /**
- * Pure gesture and spring physics hook
- * Deals only with numeric offsets, no date knowledge
+ * Pure gesture + spring physics for the horizontal day-axis.
+ *
+ * One persistent react-spring value `x` holds a PIXEL position on the day-axis
+ * (`x = dayOffset * pixelsPerDay`). It is not bound to any DOM style — rendering
+ * is canvas-reslice, so the spring drives everything through `onOffsetChange`.
+ * @use-gesture owns the bounds + rubber-band resistance; react-spring owns the
+ * release momentum (decay), snap-back, and keyboard/month glide.
+ *
+ * Deals only in numeric offsets — no date knowledge.
  */
 export function useGestureSpring({
   currentOffset,
   maxOffset,
   onOffsetChange,
 }: GestureSpringOptions) {
-  const minOffset = 0;  // Always 0 - the earliest offset
   const elementRef = useRef<HTMLDivElement>(null);
-  const lastLoggedOffsetRef = useRef<number | null>(null);
-  
-  // Current position - use a ref to track the actual position
-  const [currentPosition, setCurrentPosition] = useState(currentOffset);
-  const positionRef = useRef(currentOffset);
-  
-  // Update ref when position changes
-  const updatePosition = useCallback((newPos: number) => {
-    positionRef.current = newPos;
-    setCurrentPosition(newPos);
-  }, []);
-  
-  // Animation config - when null, no spring is mounted
-  const [animationConfig, setAnimationConfig] = useState<{
-    from: number;
-    to: number;
-    config: any;
-  } | null>(null);
-  
-  // Only create spring when we have an animation to run
-  const [springValues, springApi] = useSpring(() => {
-    if (!animationConfig) {
-      // No animation, return static value
-      return { offset: currentPosition };
-    }
-    
-    return {
-      from: { offset: animationConfig.from },
-      to: { offset: animationConfig.to },
-      config: animationConfig.config,
-      onChange: (result) => {
-        const rawOffset = result.value.offset;
-        const roundedOffset = Math.round(rawOffset);
-        
-        if (featureFlags.get('gestureLogging') && roundedOffset !== lastLoggedOffsetRef.current) {
-          console.log('📍 POS:', {
-            offset: roundedOffset,
-            raw: rawOffset.toFixed(2),
-            outOfBounds: roundedOffset < minOffset || roundedOffset > maxOffset,
-            ts: Date.now()
-          });
-          lastLoggedOffsetRef.current = roundedOffset;
-        }
-        
-        // Update position during animation
-        updatePosition(rawOffset);
-        onOffsetChange(roundedOffset, false);
-      },
-      onRest: (result) => {
-        const finalOffset = Math.round(result.value.offset);
-        if (featureFlags.get('gestureLogging')) {
-          console.log('🏁 ANIMATION COMPLETE:', {
-            offset: finalOffset,
-            ts: Date.now()
-          });
-        }
-        
-        // Update final position and clear animation
-        updatePosition(finalOffset);
-        onOffsetChange(finalOffset, false);
-        setAnimationConfig(null); // Unmount the spring
-      }
-    };
-  }, [animationConfig]); // Recreate spring when animation config changes
-  
-  // Track if we're dragging
-  const isDraggingRef = useRef(false);
-  
-  // Get element width for pixel->day conversion
+
+  // Fresh-per-render mirrors so gesture callbacks never read stale props
+  // (repo rule: initialise every gesture from the parent's current offset).
+  const currentOffsetRef = useRef(currentOffset);
+  const maxOffsetRef = useRef(maxOffset);
+  const onOffsetChangeRef = useRef(onOffsetChange);
+  currentOffsetRef.current = currentOffset;
+  maxOffsetRef.current = maxOffset;
+  onOffsetChangeRef.current = onOffsetChange;
+
+  // Per-gesture invariants + bookkeeping
+  const ppdRef = useRef(1); // pixels per day, captured at gesture start
+  const phaseRef = useRef<Phase>('idle');
+  const lastActivePRef = useRef(0); // last active (rubber-banded) px — the true visual release position
+  const wheelRawPxRef = useRef(0); // raw (un-clamped) accumulated wheel position (px) within a burst
+  const lastEmittedRef = useRef<number | null>(null);
+  const lastDraggingRef = useRef(false);
+  const settleTargetPxRef = useRef<number | null>(null); // exact final px for a settling animation
+
   const getPixelsPerDay = useCallback(() => {
-    if (!elementRef.current) return 1;
-    const width = elementRef.current.getBoundingClientRect().width;
-    return width / DATE_BOUNDARIES.TILE_WIDTH;
+    const el = elementRef.current;
+    if (!el) return ppdRef.current || 1; // before layout: keep last good value
+    const width = el.getBoundingClientRect().width;
+    return width > 0 ? width / DATE_BOUNDARIES.TILE_WIDTH : ppdRef.current || 1;
   }, []);
-  
-  // Drag handler - no spring during drag, just direct updates
-  const dragBind = useDrag(
-    ({ 
-      first,
-      active,
-      movement: [mx], 
-      velocity: [vx],  // Note: This is always positive (it's speed, not velocity)
-      direction: [dx],  // This is -1, 0, or 1 (the actual direction)
-      memo  // Will be undefined on first call
-    }) => {
-      // Initialize memo with current offset on first drag
-      if (memo === undefined) {
-        memo = currentOffset;
-      }
-      if (first) {
-        isDraggingRef.current = true; // Mark as dragging
-        // Cancel any ongoing animation
-        setAnimationConfig(null);
-        
-        if (featureFlags.get('gestureLogging')) {
-          const pixPerDay = getPixelsPerDay();
-          console.log('🎬 DRAG START:', { 
-            offset: Math.round(memo),
-            pixelsPerDay: pixPerDay.toFixed(2),
-            elementWidth: elementRef.current?.getBoundingClientRect().width
-          });
+
+  // Emit to the parent: quantise to whole days + dedupe so setEndDate only fires
+  // on day-boundary crossings (not every animation frame).
+  const emit = useCallback((p: number, dragging: boolean) => {
+    const days = Math.round(p / ppdRef.current);
+    if (days === lastEmittedRef.current && dragging === lastDraggingRef.current) return;
+    lastEmittedRef.current = days;
+    lastDraggingRef.current = dragging;
+    onOffsetChangeRef.current(days, dragging);
+  }, []);
+
+  // ── One persistent spring holding p (pixels) ────────────────────────────────
+  // A standalone Controller (not useSpring) so it's fully imperative and immune
+  // to the parent's re-renders. useSpring re-syncs to its initial `{ x: 0 }` on
+  // every render, and since emit() re-renders the parent each frame, that would
+  // drag the spring to 0 mid-animation. The Controller is created once.
+  const apiRef = useRef<Controller<{ x: number }> | null>(null);
+  if (!apiRef.current) {
+    apiRef.current = new Controller<{ x: number }>({
+      x: 0,
+      // Only the release/keyboard animations emit here; active drag/wheel emit in
+      // their own handlers (crisp, zero-frame latency).
+      onChange: (result: { value: { x: number } }) => {
+        const phase = phaseRef.current;
+        if (phase !== 'spring' && phase !== 'navigate') return;
+        emit(result.value.x, false);
+      },
+      onRest: (result: { finished?: boolean }) => {
+        // Ignore interrupted rests (e.g. stop() on a new gesture) so we don't
+        // finalise/freeze an animation that's being replaced.
+        if (!result.finished) return;
+        const phase = phaseRef.current;
+        if (phase === 'spring' || phase === 'navigate') {
+          // Emit the intended target exactly — the spring can settle a hair short,
+          // which would land a boundary snap 1 day off.
+          emit(settleTargetPxRef.current ?? apiRef.current!.get().x, false);
+          phaseRef.current = 'idle';
         }
+      },
+    });
+  }
+  const api = apiRef.current;
+
+  const boundsPx = useCallback(
+    () => ({ left: 0, right: maxOffsetRef.current * ppdRef.current }),
+    []
+  );
+  const seedFromCurrent = useCallback((): [number, number] => {
+    ppdRef.current = getPixelsPerDay(); // runs before bounds + handler → one ppd for the gesture
+    return [currentOffsetRef.current * ppdRef.current, 0];
+  }, [getPixelsPerDay]);
+
+  // ── Drag (mouse + touch, via pointer events) ────────────────────────────────
+  const dragBind = useDrag(
+    ({ first, active, tap, offset: [ox], velocity: [vx], direction: [dx] }) => {
+      if (first) {
+        phaseRef.current = 'drag';
+        api.stop(); // cancel any running decay/spring/navigate before we take over
       }
-      
-      const pixelsPerDay = getPixelsPerDay();
-      const dayDelta = mx / pixelsPerDay; // Don't round - keep it smooth
-      const targetOffset = memo - dayDelta; // Drag left = increase offset
-      
-      // Debug: log the relationship between movement and offset
-      if (featureFlags.get('gestureLogging') && !active && Math.abs(vx) > 0.1) {
-        console.log('🔍 DRAG PHYSICS:', {
-          mx: mx.toFixed(1),
-          speed: vx.toFixed(2),  // vx is always positive (speed)
-          direction: dx,  // -1, 0, or 1
-          mxDirection: mx > 0 ? 'RIGHT' : mx < 0 ? 'LEFT' : 'NONE',
-          dragDirection: dx < 0 ? 'LEFT' : dx > 0 ? 'RIGHT' : 'NONE',
-          offsetChange: (targetOffset - memo).toFixed(1),
-          offsetDirection: targetOffset > memo ? 'INCREASING' : targetOffset < memo ? 'DECREASING' : 'NONE'
+
+      if (active) {
+        lastActivePRef.current = ox; // includes rubber-band stretch past bounds
+        emit(ox, true); // emit directly during the gesture; the spring is only for release animations
+        return;
+      }
+
+      // ── Release ──
+      if (tap) {
+        // A tap (e.g. clicking a month label) — don't move; let the click through.
+        phaseRef.current = 'idle';
+        return;
+      }
+
+      // Decide the outcome with the pure, tested physics (all in day-offsets).
+      // vx is speed (px/ms, ≥0); dx is the sign — both already in the transformed
+      // (day-axis) space. lastActivePRef is the visual, possibly rubber-banded px.
+      const ppd = ppdRef.current;
+      const result = resolveDragRelease({
+        releaseDays: lastActivePRef.current / ppd,
+        min: 0,
+        max: maxOffsetRef.current,
+        speedDaysPerMs: vx / ppd,
+        directionSign: dx,
+      });
+
+      const targetPx = result.target * ppd;
+      // 'settle', or a momentum/snap whose target rounds to the current day, is a
+      // no-op: emit directly. A 0-frame spring never fires onRest, which would latch
+      // isDragging=true (set by the active-drag emit) and kill keyboard navigation.
+      if (result.kind === 'settle' || Math.round(targetPx / ppd) === Math.round(lastActivePRef.current / ppd)) {
+        phaseRef.current = 'idle';
+        emit(targetPx, false);
+      } else {
+        // 'snap' (rubber-band back to bound) or 'momentum' (glide to a bounded,
+        // clamped projected target). Start fresh from the visual release position
+        // (at rest) — the projected target already encodes the throw, so the spring
+        // must not carry the flick velocity, or it overshoots to 2006.
+        phaseRef.current = 'spring';
+        settleTargetPxRef.current = targetPx;
+        api.start({
+          from: { x: lastActivePRef.current },
+          to: { x: targetPx },
+          config: result.kind === 'momentum' ? MOMENTUM_SPRING : SPRING_BACK,
         });
       }
-      
-      if (active) {
-        // During drag: allow some elasticity past bounds
-        const ELASTIC_LIMIT = 100; // Max units past bounds
-        const clampedOffset = Math.max(minOffset - ELASTIC_LIMIT, Math.min(maxOffset + ELASTIC_LIMIT, targetOffset));
-        
-        // Direct state update - no spring!
-        updatePosition(clampedOffset);
-        
-        // Log and notify parent
-        const roundedOffset = Math.round(clampedOffset);
-        if (featureFlags.get('gestureLogging') && roundedOffset !== lastLoggedOffsetRef.current) {
-          console.log('🎭 DRAG:', {
-            offset: roundedOffset,
-            raw: clampedOffset.toFixed(2),
-            ts: Date.now()
-          });
-          lastLoggedOffsetRef.current = roundedOffset;
-        }
-        // Update parent during drag for real-time feedback
-        onOffsetChange(roundedOffset, true); // true = dragging
-      } else {
-        // Released: clear dragging flag and check for momentum or snapback
-        isDraggingRef.current = false;
-        
-        // Use the ACTUAL current position from the ref - this is where we visually are
-        const releasePos = positionRef.current;
-        const outOfBounds = isOffsetOutOfBounds(releasePos);
-        
-        if (outOfBounds) {
-          // Snapback to nearest boundary - mount a spring for this
-          const snapTarget = releasePos < minOffset ? minOffset : maxOffset;
-          if (featureFlags.get('gestureLogging')) {
-            console.log('🔙 SNAPBACK:', { 
-              from: releasePos, 
-              to: snapTarget,
-              distance: snapTarget - releasePos
-            });
-          }
-          // Mount a spring for snapback animation
-          setAnimationConfig({
-            from: releasePos,
-            to: snapTarget,
-            config: { tension: 120, friction: 20 } // Gentle spring
-          });
-        } else if (Math.abs(vx) > VELOCITY_THRESHOLD) {
-          // Apply momentum - mount a spring for this
-          // IMPORTANT: vx is always positive (it's speed), dx is the direction (-1, 0, 1)
-          // We need to combine them to get the true velocity vector
-          const trueVelocity = vx * dx;  // Combine speed with direction
-          // In our viewport: drag right (dx=1) should decrease offset (go back in time)
-          // So positive velocity should decrease offset
-          const momentumPixels = trueVelocity * MOMENTUM_SCALE;
-          const momentumDays = momentumPixels / pixelsPerDay; // Don't round
-          const momentumTarget = releasePos - momentumDays;  // Subtract: positive velocity decreases offset
-          const clampedTarget = Math.max(minOffset, Math.min(maxOffset, momentumTarget));
-          
-          if (featureFlags.get('gestureLogging')) {
-            console.log('🚀 MOMENTUM:', { 
-              speed: vx,  // Always positive
-              direction: dx,  // -1, 0, or 1
-              dragDirection: dx < 0 ? 'LEFT' : dx > 0 ? 'RIGHT' : 'NONE',
-              trueVelocity,
-              momentumDays: momentumDays.toFixed(1),
-              from: releasePos,  // Log actual position
-              to: clampedTarget,
-              distance: clampedTarget - releasePos,
-              expectedMotion: dx < 0 ? 'FORWARD_IN_TIME' : dx > 0 ? 'BACKWARD_IN_TIME' : 'NONE'
-            });
-          }
-          
-          // Mount a spring for momentum animation - from actual position
-          setAnimationConfig({
-            from: releasePos,
-            to: clampedTarget,
-            config: { tension: 170, friction: 26 }
-          });
-        } else {
-          // No momentum, no out of bounds - stay exactly where we are
-          // No spring needed!
-          if (featureFlags.get('gestureLogging')) {
-            console.log('✋ STAY:', { 
-              at: releasePos
-            });
-          }
-          // Just update the position, no animation
-          updatePosition(releasePos);
-          onOffsetChange(Math.round(releasePos), false);
-        }
-      }
-      
-      return memo;
     },
     {
       axis: 'x',
-      filterTaps: true,
+      filterTaps: true, // taps still reach tile / month-click handlers
+      rubberband: RUBBERBAND, // real resistance past bounds while dragging
+      transform: ([x, y]) => [-x, -y], // invert: drag content right ⇒ day-offset decreases
+      from: seedFromCurrent,
+      bounds: boundsPx,
     }
   );
-  
-  // Wheel handler - direct updates during scroll, ephemeral spring after
+
+  // ── Wheel / trackpad (the OS supplies inertia; we just track + settle) ───────
   const wheelBind = useWheel(
-    ({ delta: [dx], active }) => {
-      const dayDelta = dx * WHEEL_SENSITIVITY; // Don't round - smooth scrolling
-      const targetOffset = currentOffset + dayDelta;  // Use currentOffset from props, not stale ref
-      const clampedOffset = Math.max(minOffset, Math.min(maxOffset, targetOffset));
-      
-      if (featureFlags.get('gestureLogging')) {
-        console.log('🎡 WHEEL:', {
-          dx,
-          dayDelta,
-          currentOffset: Math.round(positionRef.current),
-          targetOffset,
-          clampedOffset,
-          active
-        });
+    ({ first, last, delta: [dxv] }) => {
+      // @use-gesture zeroes the wheel delta if transform/from/bounds are set on
+      // useWheel, so we accumulate the raw per-event delta ourselves. Momentum
+      // comes for free from the OS inertial wheel stream (a decaying tail).
+      if (first) {
+        phaseRef.current = 'wheel';
+        api.stop();
+        ppdRef.current = getPixelsPerDay();
+        wheelRawPxRef.current = currentOffsetRef.current * ppdRef.current;
       }
-      
-      if (active) {
-        // During scroll: cancel any animation and apply direct update
-        setAnimationConfig(null);  // Cancel any ongoing animation
-        updatePosition(clampedOffset);
-        onOffsetChange(Math.round(clampedOffset), false);
-      } else {
-        // After scroll: create ephemeral spring for smooth animation
-        // Only animate if we're not already at the target
-        const currentPos = currentOffset;  // Use currentOffset from props
-        if (Math.abs(currentPos - clampedOffset) > 0.1) {
-          if (featureFlags.get('gestureLogging')) {
-            console.log('🎢 WHEEL ANIMATION:', { 
-              from: currentPos,
-              to: clampedOffset,
-              distance: clampedOffset - currentPos
-            });
-          }
-          
-          // Mount a spring for wheel animation
-          setAnimationConfig({
-            from: currentPos,
-            to: clampedOffset,
-            config: { tension: 300, friction: 30 }
-          });
+      // A delayed trailing wheelEnd can fire ~140ms after the last event — by then a
+      // drag or keyboard nav may own the phase; don't let the stale burst clobber it.
+      if (phaseRef.current !== 'wheel') return;
+
+      const ppd = ppdRef.current;
+      const maxP = maxOffsetRef.current * ppd;
+      wheelRawPxRef.current += dxv * WHEEL_SCALE;
+      // Elastic resistance past the ends (into the display slop), snapping back on rest.
+      const displayPx = rubberbandClamp(wheelRawPxRef.current, 0, maxP, WHEEL_STRETCH_DAYS * ppd);
+      lastActivePRef.current = displayPx;
+      emit(displayPx, false);
+
+      if (last) {
+        if (wheelRawPxRef.current < 0 || wheelRawPxRef.current > maxP) {
+          phaseRef.current = 'spring';
+          const target = wheelRawPxRef.current < 0 ? 0 : maxP;
+          settleTargetPxRef.current = target;
+          api.start({ from: { x: displayPx }, to: { x: target }, config: SPRING_BACK });
         } else {
-          // Already at target, just update
-          updatePosition(clampedOffset);
-          onOffsetChange(Math.round(clampedOffset), false);
+          phaseRef.current = 'idle';
         }
       }
     },
-    {
-      axis: 'x'
-    }
+    { axis: 'x' }
   );
-  
-  // Combine bindings - properly merge the event handler objects
-  const bind = () => {
-    return {
-      ...dragBind(),
-      ...wheelBind()
-    };
-  };
-  
-  // Prevent browser navigation on horizontal scroll
+
+  const bind = useCallback(() => ({ ...dragBind(), ...wheelBind() }), [dragBind, wheelBind]);
+
+  // ── Programmatic navigation (keyboard arrows, month clicks) ──────────────────
+  // Animates the same spring to an absolute day-offset, anchored on the parent's
+  // current offset, emitting non-dragging updates so header + tiles move together.
+  const navigateToOffset = useCallback(
+    (target: number) => {
+      api.stop();
+      ppdRef.current = getPixelsPerDay();
+      const ppd = ppdRef.current;
+      const clamped = Math.max(0, Math.min(maxOffsetRef.current, target));
+      const from = currentOffsetRef.current;
+      // Only glide for short hops (arrow keys, nearby months). A large jump would
+      // sweep through years of tiles frame-by-frame and crawl, so snap it instantly.
+      const animate = Math.abs(clamped - from) <= NAV_ANIMATE_MAX_DAYS;
+      phaseRef.current = 'navigate';
+      settleTargetPxRef.current = clamped * ppd;
+      api.start({
+        from: { x: from * ppd },
+        to: { x: clamped * ppd },
+        immediate: !animate,
+        config: NAV_SPRING,
+      });
+    },
+    [api, getPixelsPerDay]
+  );
+
+  // Block the browser's back/forward history-swipe on horizontal trackpad/wheel over
+  // the viz. (@use-gesture can't preventDefault here without zeroing the wheel delta,
+  // so a scoped, non-passive window listener does it instead.)
   useEffect(() => {
-    const handleWheel = (e: WheelEvent) => {
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && e.deltaX !== 0) {
+    const onWheel = (e: WheelEvent) => {
+      const el = elementRef.current;
+      if (
+        el && e.target instanceof Node && el.contains(e.target) &&
+        Math.abs(e.deltaX) > Math.abs(e.deltaY) && e.deltaX !== 0
+      ) {
         e.preventDefault();
       }
     };
-    window.addEventListener('wheel', handleWheel, { passive: false });
-    return () => window.removeEventListener('wheel', handleWheel);
+    window.addEventListener('wheel', onWheel, { passive: false });
+    return () => window.removeEventListener('wheel', onWheel);
   }, []);
-  
-  return { bind, elementRef };
+
+  return { bind, elementRef, navigateToOffset };
 }

@@ -111,7 +111,7 @@ export async function GET(request: Request) {
 		console.error("API Error:", error);
 		
 		// Check if this is an OpenElectricity API error
-		let errorResponse: any = {
+		const errorResponse: any = {
 			error: error instanceof Error ? error.message : "Internal server error",
 		};
 		

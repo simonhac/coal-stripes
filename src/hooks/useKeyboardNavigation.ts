@@ -2,30 +2,26 @@ import { useCallback, useEffect } from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { DATE_BOUNDARIES } from '@/shared/config';
-import { useDateRangeAnimator } from './useDateRangeAnimator';
 
 interface UseKeyboardNavigationOptions {
   currentEndDate: CalendarDate | null;
-  onDateNavigate: (date: CalendarDate, isDragging: boolean) => void;
+  /** Animate to an absolute end date (drives the shared gesture spring). */
+  navigateToDate: (date: CalendarDate) => void;
   isDragging?: boolean;
   disabled?: boolean;
 }
 
 /**
- * Hook for handling keyboard navigation
- * Uses the DateRangeAnimator for smooth animated transitions
+ * Hook for handling keyboard navigation.
+ * Delegates the actual animation to the shared gesture spring via `navigateToDate`
+ * so keyboard, month-clicks, drag, and wheel all move through one animator.
  */
 export function useKeyboardNavigation({
   currentEndDate,
-  onDateNavigate,
+  navigateToDate,
   isDragging = false,
   disabled = false,
 }: UseKeyboardNavigationOptions) {
-  const animator = useDateRangeAnimator({
-    currentEndDate: currentEndDate || getDateBoundaries().latestDataDay,
-    onDateNavigate,
-  });
-
   // Navigate by months
   const navigateByMonths = useCallback((months: number) => {
     if (!currentEndDate) return;
@@ -41,8 +37,8 @@ export function useKeyboardNavigation({
       targetDate = boundaries.earliestDataEndDay;
     }
     
-    animator.navigateToDate(targetDate);
-  }, [currentEndDate, animator]);
+    navigateToDate(targetDate);
+  }, [currentEndDate, navigateToDate]);
 
   // Navigate to a specific month
   const navigateToMonth = useCallback((year: number, month: number) => {
@@ -58,14 +54,14 @@ export function useKeyboardNavigation({
       targetDate = boundaries.earliestDataEndDay;
     }
     
-    animator.navigateToDate(targetDate);
-  }, [animator]);
+    navigateToDate(targetDate);
+  }, [navigateToDate]);
 
   // Navigate to today (yesterday actually)
   const navigateToToday = useCallback(() => {
     const boundaries = getDateBoundaries();
-    animator.navigateToDate(boundaries.latestDataDay);
-  }, [animator]);
+    navigateToDate(boundaries.latestDataDay);
+  }, [navigateToDate]);
 
   // Navigate to January 1 of a given year
   const navigateToYearStart = useCallback((targetYear: number) => {
@@ -81,14 +77,14 @@ export function useKeyboardNavigation({
       targetDate = boundaries.earliestDataEndDay;
     }
     
-    animator.navigateToDate(targetDate);
-  }, [animator]);
+    navigateToDate(targetDate);
+  }, [navigateToDate]);
 
   // Navigate to start (earliest data end day)
   const navigateToStart = useCallback(() => {
     const boundaries = getDateBoundaries();
-    animator.navigateToDate(boundaries.earliestDataEndDay);
-  }, [animator]);
+    navigateToDate(boundaries.earliestDataEndDay);
+  }, [navigateToDate]);
 
   // Keyboard event handler
   useEffect(() => {

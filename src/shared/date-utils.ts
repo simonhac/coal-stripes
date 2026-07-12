@@ -9,13 +9,13 @@ import { fromDate, toZoned, CalendarDate, parseDate, today } from '@internationa
  * @returns Number of days between the dates (negative if end is before start)
  */
 export function getDaysBetween(start: CalendarDate, end: CalendarDate): number {
-  // Convert CalendarDate objects to JavaScript Date objects
-  const startDate = new Date(start.year, start.month - 1, start.day);
-  const endDate = new Date(end.year, end.month - 1, end.day);
-  
-  // Calculate difference in milliseconds and convert to days
-  const diffInMs = endDate.getTime() - startDate.getTime();
-  return Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+  // Use UTC midnights so the difference is always an exact multiple of a day.
+  // (Local `new Date(y, m, d)` would be an hour short across a DST boundary,
+  //  and Math.floor would then drop a whole day — making this non-inverse with
+  //  CalendarDate.add and landing boundary navigation 1 day off.)
+  const startMs = Date.UTC(start.year, start.month - 1, start.day);
+  const endMs = Date.UTC(end.year, end.month - 1, end.day);
+  return Math.round((endMs - startMs) / (1000 * 60 * 60 * 24));
 }
 
 /**

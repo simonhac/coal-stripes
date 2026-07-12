@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getDaysBetween } from '@/shared/date-utils';
@@ -11,7 +11,6 @@ import { RegionSection } from '../components/RegionSection';
 import { DateRange } from '../components/DateRange';
 import { yearDataVendor, getRegionNames } from '@/client/year-data-vendor';
 import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
-import { useDateRangeAnimator } from '@/hooks/useDateRangeAnimator';
 import { useGestureSpring } from '@/hooks/useGestureSpring';
 import './opennem.css';
 
@@ -24,149 +23,52 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  
+
   // Calculate animated date range from animatedEndDate
   const animatedDateRange = animatedEndDate ? {
     start: animatedEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
     end: animatedEndDate
   } : null;
-  
-  // Set up keyboard navigation
-  const { navigateToMonth } = useKeyboardNavigation({
-    currentEndDate: endDate,
-    onDateNavigate: (date, isDragging) => {
-      setEndDate(date);
-      setIsDragging(isDragging);
-    },
-    isDragging,
-  });
-  
-  // Use navigateToMonth directly as it already has the correct signature
-  const handleMonthClick = navigateToMonth;
-  
-  // Handle date navigation with unified gesture control
-  const handleDateNavigate = useCallback((newEndDate: CalendarDate, isDragging: boolean) => {
+
+  // Handle date navigation — sets the target (header) and the rendered date
+  // (tiles) together so header and tiles always move in lock-step.
+  const handleDateNavigate = useCallback((newEndDate: CalendarDate, dragging: boolean) => {
     setEndDate(newEndDate);
-    setIsDragging(isDragging);
-    // Sync animated date - during drag it updates continuously, 
-    // when not dragging it's for direct navigation
+    setIsDragging(dragging);
     setAnimatedEndDate(newEndDate);
   }, []);
-  
-  // Calculate offset bounds for gesture spring
-  const boundaries = getDateBoundaries();
+
+  // Offset bounds for the gesture spring (offset 0 = earliestDataEndDay).
+  const boundaries = useMemo(() => getDateBoundaries(), []);
   const currentEndDateForGesture = endDate || boundaries.latestDataDay;
   const currentOffset = getDaysBetween(boundaries.earliestDataEndDay, currentEndDateForGesture);
   const maxOffset = getDaysBetween(boundaries.earliestDataEndDay, boundaries.latestDataDay);
-  
-  // Handle offset changes from gesture spring
-  const handleOffsetChange = useCallback((offset: number, isDragging: boolean) => {
-    // Convert offset to date (can be negative for elastic overshoot)
-    const newEndDate = boundaries.earliestDataEndDay.add({ days: offset });
-    handleDateNavigate(newEndDate, isDragging);
+
+  // Gesture spring → date. Offset can be negative for elastic overshoot.
+  const handleOffsetChange = useCallback((offset: number, dragging: boolean) => {
+    handleDateNavigate(boundaries.earliestDataEndDay.add({ days: offset }), dragging);
   }, [boundaries, handleDateNavigate]);
-  
-  // Set up unified gesture handling with spring animations
-  const { bind, elementRef } = useGestureSpring({
+
+  // Unified gesture + spring navigation: drag, wheel, touch, and programmatic.
+  const { bind, elementRef, navigateToOffset } = useGestureSpring({
     currentOffset,
     maxOffset,
     onOffsetChange: handleOffsetChange,
   });
-  
-  // Handle date navigation from tiles and regions
-  useEffect(() => {
-    const handleDateNavigateEvent = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      const { newEndDate, isDragging } = customEvent.detail;
-      
-      if (newEndDate) {
-        handleDateNavigate(newEndDate, isDragging);
-      }
-    };
-    
-    const handleDateAnimate = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      const { animatedEndDate, targetEndDate, isAnimating } = customEvent.detail;
-      
-      // Only update if the date actually changed
-      setAnimatedEndDate(prev => {
-        if (!prev || prev.compare(animatedEndDate) !== 0) {
-          return animatedEndDate;
-        }
-        return prev;
-      });
-      
-      // When animation completes, ensure we're exactly at target
-      if (!isAnimating && targetEndDate) {
-        setAnimatedEndDate(prev => {
-          if (!prev || prev.compare(targetEndDate) !== 0) {
-            return targetEndDate;
-          }
-          return prev;
-        });
-      }
-    };
-    
-    window.addEventListener('date-navigate', handleDateNavigateEvent);
-    window.addEventListener('date-animate', handleDateAnimate);
-    
-    return () => {
-      window.removeEventListener('date-navigate', handleDateNavigateEvent);
-      window.removeEventListener('date-animate', handleDateAnimate);
-    };
-  }, [handleDateNavigate]); // Update when handleDateNavigate changes
-  
-  // Create a shared animator for handling drag physics
-  const handleAnimatorNavigate = useCallback((date: CalendarDate, isDragging: boolean) => {
-    setEndDate(date);
-    setIsDragging(isDragging);
-    if (!isDragging) {
-      setAnimatedEndDate(date);
-    }
-  }, []);
-  
-  // Use a ref to store the current end date for the animator to avoid recreating it
-  const animatorEndDateRef = useRef(endDate || getDateBoundaries().latestDataDay);
-  useEffect(() => {
-    animatorEndDateRef.current = endDate || getDateBoundaries().latestDataDay;
-  }, [endDate]);
-  
-  const dragAnimator = useDateRangeAnimator({
-    currentEndDate: animatorEndDateRef.current,
-    onDateNavigate: handleAnimatorNavigate,
+
+  // Animate to an absolute end date through the same spring (keyboard + months).
+  const navigateToDate = useCallback((date: CalendarDate) => {
+    navigateToOffset(getDaysBetween(boundaries.earliestDataEndDay, date));
+  }, [boundaries, navigateToOffset]);
+
+  // Keyboard navigation drives the same spring via navigateToDate.
+  const { navigateToMonth } = useKeyboardNavigation({
+    currentEndDate: endDate,
+    navigateToDate,
+    isDragging,
   });
-  
-  // Handle drag end events that need snap-back checking
-  useEffect(() => {
-    const handleDragStart = () => {
-      dragAnimator.startDrag();
-    };
-    
-    const handleDragVelocity = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      const { velocity } = customEvent.detail;
-      dragAnimator.updateVelocity(velocity);
-    };
-    
-    const handleDragEnd = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      const { applyMomentum } = customEvent.detail;
-      
-      // Use the shared animator to handle snap-back
-      dragAnimator.endDrag(applyMomentum);
-    };
-    
-    window.addEventListener('drag-start', handleDragStart);
-    window.addEventListener('drag-velocity', handleDragVelocity);
-    window.addEventListener('drag-end', handleDragEnd);
-    
-    return () => {
-      window.removeEventListener('drag-start', handleDragStart);
-      window.removeEventListener('drag-velocity', handleDragVelocity);
-      window.removeEventListener('drag-end', handleDragEnd);
-    };
-  }, [dragAnimator]);
-  
+  const handleMonthClick = navigateToMonth;
+
   // Target date range (for display in header)
   const targetDateRange = endDate ? {
     start: endDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
@@ -180,19 +82,19 @@ export default function Home() {
         const boundaries = getDateBoundaries();
         const calculatedEndDate = boundaries.latestDataDay;
         const startDate = calculatedEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }); // For determining which years to load
-        
+
         // Determine which years we need
         const startYear = startDate.year;
         const endYear = calculatedEndDate.year;
         const years = startYear === endYear ? [startYear] : [startYear, endYear];
-        
+
         // Load all required years
         const yearPromises = years.map(year => yearDataVendor.requestYear(year));
         const yearResults = await Promise.all(yearPromises);
-        
+
         // Extract facilities by region from the loaded data
         const regionFacilityMaps = new Map<string, Map<string, string>>();
-        
+
         for (const yearData of yearResults) {
           for (const unit of yearData.data.data) {
             if (unit.region) {
@@ -203,15 +105,15 @@ export default function Home() {
             }
           }
         }
-        
+
         // Convert to sorted structure
         const facilitiesMap = new Map<string, { code: string; name: string }[]>();
-        
+
         // Get all region codes and sort alphabetically by long name
         const allRegionCodes = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1', 'WEM'];
         const sortedRegions = allRegionCodes
           .sort((a, b) => getRegionNames(a).long.localeCompare(getRegionNames(b).long));
-        
+
         // Process each region
         for (const regionCode of sortedRegions) {
           const facilityMap = regionFacilityMaps.get(regionCode);
@@ -222,9 +124,9 @@ export default function Home() {
             facilitiesMap.set(regionCode, sortedFacilities);
           }
         }
-        
+
         setFacilitiesByRegion(facilitiesMap);
-        
+
         // Only set end date after data is loaded
         setEndDate(calculatedEndDate);
         setAnimatedEndDate(calculatedEndDate);
@@ -235,7 +137,7 @@ export default function Home() {
         setLoading(false);
       }
     }
-    
+
     initialLoad();
   }, []);
 
@@ -249,15 +151,15 @@ export default function Home() {
   useEffect(() => {
     const handleGlobalTouch = (e: TouchEvent) => {
       const target = e.target as HTMLElement;
-      
+
       // Check if the touch is on an interactive element
-      const isInteractiveElement = 
+      const isInteractiveElement =
         target.closest('.opennem-facility-label') ||
         target.closest('.opennem-region-label') ||
         target.closest('.opennem-facility-canvas') ||
         target.closest('.opennem-month-label') ||
         target.closest('.tooltip-container');
-      
+
       // If touching outside interactive elements, clear any pinned tooltips
       if (!isInteractiveElement) {
         const event = new CustomEvent('tooltip-data-hover-end');
@@ -266,7 +168,7 @@ export default function Home() {
     };
 
     document.addEventListener('touchstart', handleGlobalTouch);
-    
+
     return () => {
       document.removeEventListener('touchstart', handleGlobalTouch);
     };
@@ -277,10 +179,10 @@ export default function Home() {
     const checkMobile = () => {
       setIsMobile(window.innerWidth <= 768);
     };
-    
+
     checkMobile();
     window.addEventListener('resize', checkMobile);
-    
+
     return () => {
       window.removeEventListener('resize', checkMobile);
     };
@@ -314,7 +216,7 @@ export default function Home() {
     <>
       {/* Performance Monitor */}
       <PerformanceDisplay />
-      
+
       {/* Header */}
       <OpenElectricityHeader />
 
@@ -325,11 +227,14 @@ export default function Home() {
         </div>
 
         {/* Main Stripes Visualization */}
-        <div 
+        <div
           ref={(el) => {
             containerRef.current = el;
             elementRef.current = el;
-          }} 
+          }}
+          data-testid="stripes-viz"
+          data-offset={Math.round(currentOffset)}
+          data-max-offset={maxOffset}
           className="opennem-stripes-viz"
           style={{ touchAction: 'none' }}
           {...bind()}
@@ -348,7 +253,7 @@ export default function Home() {
               />
             );
           })}
-          
+
           {/* Bottom spacer */}
           <div style={{ height: '50px', clear: 'both' }} />
         </div>

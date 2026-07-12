@@ -173,7 +173,7 @@ describe('YearDataVendor', () => {
       expect(stats.numItems).toBe(0);
       expect(stats.totalKB).toBe(0);
       expect(stats.labels).toEqual([]);
-      expect(stats.activeLabels).toEqual([]);
+      expect(stats.activeRequestsWithRetries).toEqual([]);
       expect(stats.queuedLabels).toEqual([]);
     });
 
@@ -208,7 +208,7 @@ describe('YearDataVendor', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       
       const stats = vendor.getCacheStats();
-      expect(stats.activeLabels).toContain('2023');
+      expect(stats.activeRequestsWithRetries.map(r => r.label)).toContain('2023');
       
       // Clean up - wait for the request to complete
       await promise;
