@@ -64,18 +64,11 @@ const CompositeTileComponent = ({
   
   // Use provided animated date range, or calculate from endDate
   const dateRange = useMemo(() => {
-    const range = animatedDateRange || {
+    return animatedDateRange || {
       start: endDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }), // TILE_WIDTH days total (inclusive)
       end: endDate
     };
-    // Log only when it changes and only for one facility to avoid spam
-    if (facilityCode === 'MW') {
-      console.log(`📅 CompositeTile (${facilityCode}):`, {
-        range: `${range.start.toString()} to ${range.end.toString()}`
-      });
-    }
-    return range;
-  }, [animatedDateRange, endDate, facilityCode]);
+  }, [animatedDateRange, endDate]);
   
   // Calculate which tiles we need synchronously
   const startYear = dateRange.start.year;
@@ -226,10 +219,9 @@ const CompositeTileComponent = ({
         tooltipData.label = `${facilityName} ${unitName}`;
       }
       
-      // Report to tile monitor
-      // Note: tooltip returns startDate, not date, and capacityFactor, not value
-      const tooltipDate = tooltipData.date || tooltipData.startDate;
-      const tooltipValue = tooltipData.value !== undefined ? tooltipData.value : tooltipData.capacityFactor;
+      // Report to tile monitor (TooltipData exposes startDate + capacityFactor)
+      const tooltipDate = tooltipData.startDate;
+      const tooltipValue = tooltipData.capacityFactor;
       
       if (tooltipDate) {
         // Calculate day offset from earliestDataEndDay (offset 0 = first valid end date)
@@ -240,7 +232,7 @@ const CompositeTileComponent = ({
           dayOffset,
           tooltipDate.toString(),
           facilityName,
-          unitName || tooltipData.unitName,
+          unitName || tooltipData.unitName || null,
           tooltipValue
         );
       } else {
@@ -249,7 +241,7 @@ const CompositeTileComponent = ({
           null,
           null,
           facilityName,
-          unitName || tooltipData.unitName,
+          unitName || tooltipData.unitName || null,
           tooltipValue
         );
       }

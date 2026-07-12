@@ -6,7 +6,16 @@ describe('RequestQueue', () => {
 
   beforeEach(() => {
     // Use no-op logger for tests
-    queue = new RequestQueue(undefined, new NoOpRequestQueueLogger());
+    queue = new RequestQueue({
+      maxConcurrent: 1,
+      minInterval: 10,
+      maxRetries: 0,
+      retryDelayBase: 1000,
+      retryDelayMax: 30000,
+      timeout: 5000,
+      circuitBreakerThreshold: 5,
+      circuitBreakerResetTime: 60000
+    }, new NoOpRequestQueueLogger());
   });
 
   afterEach(() => {
