@@ -1,5 +1,21 @@
 'use client';
 
+/**
+ * One facility's stripe row: a canvas showing the trailing 365-day window of
+ * daily capacity factors, one pixel column per day.
+ *
+ * Rendering approach: each calendar year of data is pre-rendered once into an
+ * offscreen canvas (FacilityYearTile, one pixel per day per unit). This
+ * component just RESLICES those pre-rendered tiles — it copies the visible
+ * portion of the current year (and, when the window straddles New Year, the
+ * adjacent year) into a fixed 365px-wide canvas that CSS stretches to fit.
+ * That makes drag/wheel navigation a pair of cheap drawImage calls per frame
+ * rather than a repaint of thousands of day-cells.
+ *
+ * While a year's data is still loading, the pending region gets an animated
+ * shimmer; a year outside the available range renders as the pale blue
+ * "no data" colour.
+ */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { FacilityYearTile } from '@/client/facility-year-tile';
@@ -327,8 +343,6 @@ const CompositeTileComponent = ({
               right: rightFacilityTile,
               rightState: 'hasData'
             }));
-            if (!tiles.left) {
-            }
           } else {
             setTiles(prev => ({ ...prev, rightState: 'error' }));
           }
@@ -408,9 +422,6 @@ const CompositeTileComponent = ({
       animationFrameRef.current = null;
     }
 
-    // Get the actual width from the parent container
-    // const containerElement = canvas.parentElement;
-    
     // Set height from available tiles or use last known height
     let canvasHeight = lastKnownHeightRef.current;
     if (tiles.left) {
@@ -424,9 +435,9 @@ const CompositeTileComponent = ({
     // Apply minimum height if specified
     const displayHeight = Math.max(canvasHeight, minCanvasHeight);
     
-    // Set canvas size - keep internal resolution at 365 pixels wide
-    // and let CSS stretch it
-    canvas.width = 365;
+    // Set canvas size - keep internal resolution at one pixel per day
+    // (TILE_WIDTH wide) and let CSS stretch it
+    canvas.width = DATE_BOUNDARIES.TILE_WIDTH;
     canvas.height = canvasHeight;
     canvas.style.width = '100%';
     canvas.style.height = `${displayHeight}px`;
@@ -564,19 +575,20 @@ const CompositeTileComponent = ({
           const now = performance.now();
           const delta = now - lastAnimationTimeRef.current;
           lastAnimationTimeRef.current = now;
+          // Sweep at 0.2 canvas-px per ms (~1.8s to cross a full-width region)
           shimmerOffsetRef.current = (shimmerOffsetRef.current + delta * 0.2) % (shimmerWidth * 2);
-          
-          // Fill base color (slightly darker for more contrast)
+
+          // Fill base colour (slightly darker for more contrast)
           ctx.fillStyle = '#e0e0e0';
           ctx.fillRect(shimmerX, 0, shimmerWidth, canvas.height);
-          
-          // Draw shimmer effect
+
+          // Draw a soft white highlight band, 40% of the region wide
           const gradientWidth = shimmerWidth * 0.4;
           const gradientX = shimmerX + shimmerOffsetRef.current - gradientWidth;
-          
+
           const gradient = ctx.createLinearGradient(gradientX, 0, gradientX + gradientWidth, 0);
           gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
-          gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');  // Increased from 0.4 to 0.6
+          gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');
           gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
           
           ctx.save();
@@ -620,12 +632,12 @@ const CompositeTileComponent = ({
       // Update hover indicator if mouse is over any canvas
       const elementAtMouse = document.elementFromPoint(e.clientX, e.clientY);
       if (elementAtMouse && elementAtMouse.classList.contains('opennem-facility-canvas')) {
+        const tileWidth = DATE_BOUNDARIES.TILE_WIDTH; // all canvases are TILE_WIDTH px wide internally
         const rect = elementAtMouse.getBoundingClientRect();
         const x = e.clientX - rect.left;
-        const canvasX = (x / rect.width) * 365; // Assuming all canvases are 365px wide internally
-        const dayColumn = Math.floor(canvasX);
-        if (dayColumn >= 0 && dayColumn < 365) {
-          const percentage = (dayColumn / 365) * 100;
+        const dayColumn = Math.floor((x / rect.width) * tileWidth);
+        if (dayColumn >= 0 && dayColumn < tileWidth) {
+          const percentage = (dayColumn / tileWidth) * 100;
           document.documentElement.style.setProperty('--hover-x', `${percentage}%`);
         }
       }
@@ -660,8 +672,6 @@ const CompositeTileComponent = ({
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, [updateTooltip, facilityCode, clientToCanvasCoordinates]);
-  
-  // Mouse event handlers are defined above, no duplicates needed here
 
   // Touch handlers for hover functionality
   const touchHandlers = useTouchAsHover({

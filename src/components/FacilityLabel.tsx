@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback } from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { yearDataVendor, calculateAverageCapacityFactor } from '@/client/year-data-vendor';
+import { usePinnableTooltip } from '@/hooks/usePinnableTooltip';
 
 interface FacilityLabelProps {
   facilityCode: string;
@@ -11,49 +12,27 @@ interface FacilityLabelProps {
   dateRange: { start: CalendarDate; end: CalendarDate };
 }
 
+/**
+ * A facility's name in the left column. Hovering shows the facility's average
+ * capacity factor over the displayed period; clicking/tapping pins it.
+ */
 export function FacilityLabel({
   facilityCode,
   facilityName,
   regionCode,
   dateRange
 }: FacilityLabelProps) {
-  const [isPinned, setIsPinned] = useState(false);
-  const touchHandledRef = useRef(false);
+  const matches = useCallback(
+    (data: Record<string, unknown>) =>
+      data.facilityCode === facilityCode && data.regionCode === regionCode,
+    [facilityCode, regionCode]
+  );
 
-  // Listen for tooltip events to track if this facility is pinned
-  useEffect(() => {
-    const handleTooltipUpdate = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      const data = customEvent.detail;
-      
-      // Check if this facility is the one that's pinned
-      if (data && data.facilityCode === facilityCode && data.regionCode === regionCode) {
-        setIsPinned(data.pinned || false);
-      } else if (data) {
-        // Another tooltip is active, so this one is not pinned
-        setIsPinned(false);
-      }
-    };
-
-    const handleTooltipEnd = () => {
-      setIsPinned(false);
-    };
-
-    window.addEventListener('tooltip-data-hover', handleTooltipUpdate);
-    window.addEventListener('tooltip-data-hover-end', handleTooltipEnd);
-
-    return () => {
-      window.removeEventListener('tooltip-data-hover', handleTooltipUpdate);
-      window.removeEventListener('tooltip-data-hover-end', handleTooltipEnd);
-    };
-  }, [facilityCode, regionCode]);
-
-  const sendTooltipData = (pinned: boolean = false) => {
+  const sendTooltipData = (pinned: boolean) => {
     const stats = yearDataVendor.calculateFacilityStats(regionCode, facilityCode, dateRange);
     if (!stats) {
       // No data available for this date range - clear tooltip
-      const event = new CustomEvent('tooltip-data-hover-end');
-      window.dispatchEvent(event);
+      window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'));
       return;
     }
     const avgCapacityFactor = calculateAverageCapacityFactor(stats);
@@ -68,77 +47,14 @@ export function FacilityLabel({
         facilityCode: facilityCode,
         pinned
       };
-      
-      // Broadcast the tooltip data
-      const event = new CustomEvent('tooltip-data-hover', { 
-        detail: tooltipData
-      });
-      window.dispatchEvent(event);
-    }
-  };
-  
-  const handleMouseEnter = () => {
-    // Don't send hover tooltip if already pinned
-    if (!isPinned) {
-      sendTooltipData(false);
-    }
-  };
-  const handleClick = () => {
-    // Ignore click if touch was just handled
-    if (touchHandledRef.current) {
-      console.log(`FacilityLabel ${facilityCode}: Ignoring click after touch`);
-      touchHandledRef.current = false;
-      return;
-    }
-    
-    if (isPinned) {
-      // If already pinned, send hover-end event to unpin
-      setIsPinned(false); // Update local state immediately
-      const event = new CustomEvent('tooltip-data-hover-end');
-      window.dispatchEvent(event);
-    } else {
-      // Pin the tooltip
-      setIsPinned(true); // Update local state immediately
-      sendTooltipData(true);
+      window.dispatchEvent(new CustomEvent('tooltip-data-hover', { detail: tooltipData }));
     }
   };
 
-  // For labels, we want touch to trigger click behavior
-  const handleTouchStart = (e: React.TouchEvent) => {
-    // Prevent the default touch behavior but allow click to fire
-    e.stopPropagation();
-    
-    // Set flag to ignore the subsequent click event
-    touchHandledRef.current = true;
-    
-    // Touch on labels should immediately trigger the same as click
-    console.log(`FacilityLabel ${facilityCode}: Touch start, isPinned=${isPinned}`);
-    if (isPinned) {
-      // If already pinned, send hover-end event to unpin
-      setIsPinned(false); // Update local state immediately
-      const event = new CustomEvent('tooltip-data-hover-end');
-      window.dispatchEvent(event);
-    } else {
-      // Pin the tooltip
-      setIsPinned(true); // Update local state immediately
-      sendTooltipData(true);
-    }
-  };
+  const { handlers } = usePinnableTooltip({ matches, sendTooltipData });
 
   return (
-    <div 
-      className="opennem-facility-label"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={() => {
-        // Only send hover-end if not pinned
-        if (!isPinned) {
-          const event = new CustomEvent('tooltip-data-hover-end');
-          window.dispatchEvent(event);
-        }
-      }}
-      onClick={handleClick}
-      onTouchStart={handleTouchStart}
-    >
+    <div className="opennem-facility-label" {...handlers}>
       {facilityName}
     </div>
   );

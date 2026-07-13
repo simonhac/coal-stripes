@@ -37,7 +37,6 @@ export class FacilityYearTile {
   }
 
   private renderCanvas(): void {
-    // const startTime = performance.now();
     
     // Width is exactly the number of days
     const daysInYear = this.facility.units[0]?.history.data.length || 365;
@@ -182,8 +181,6 @@ export class FacilityYearTile {
       });
     }
 
-    // const renderTime = performance.now() - startTime;
-    // console.log(`[FacilityYearTile] Rendered: ${this.facility.facilityCode}-${this.year} (${renderTime.toFixed(0)}ms)`);
   }
 
   /**

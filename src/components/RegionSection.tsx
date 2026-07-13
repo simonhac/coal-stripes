@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { CompositeTile } from './CompositeTile';
-import { CapFacTooltip, TooltipData, getTooltipFormattedDate } from './CapFacTooltip';
+import { CapFacTooltip, TooltipData } from './CapFacTooltip';
 import { CapFacXAxis } from './CapFacXAxis';
 import { FacilityLabel } from './FacilityLabel';
 import { RegionLabel } from './RegionLabel';
@@ -31,29 +31,7 @@ export function RegionSection({
   // Get region names
   const regionNames = getRegionNames(regionCode);
   const tooltipRegionName = isMobile ? regionNames.short : regionNames.long;
-  
-  
-  // Debug helper to format tooltip data
-  const _formatTooltipDebug = (data: TooltipData): string => {
-    // Format date
-    const dateStr = getTooltipFormattedDate(data);
-    
-    // Build identifier
-    const network = data.network || '';
-    const region = data.regionCode;
-    const facility = data.facilityCode || '';
-    const unit = data.unitName || '';
-    const parts = [network, region, facility, unit].filter(p => p);
-    const identifier = parts.length > 0 ? parts.join('.') : data.label;
-    
-    // Format capacity factor
-    const cf = data.capacityFactor !== null 
-      ? `${data.capacityFactor.toFixed(1)}%` 
-      : '—';
-    
-    return `${dateStr} ${identifier} ${cf}`.trim();
-  };
-  
+
   // Listen for ALL tooltip hover events
   useEffect(() => {
     const handleTooltipHover = (e: Event) => {
@@ -64,7 +42,6 @@ export function RegionSection({
       if (data) {
         // Check if hover is from our region or another region
         if (data.regionCode === regionCode) {
-          // console.log(`${regionCode} got hover: ${formatTooltipDebug(data)}`);
           setTooltipData(data);
         } else {
           // the hover is for a different region -- create an appropriate data object for this region
@@ -85,7 +62,7 @@ export function RegionSection({
               break;
 
             default:
-              console.log(`${regionCode} got ${data.regionCode}'s update with unknown tooltip type`);
+              console.warn(`${regionCode} got ${data.regionCode}'s update with unknown tooltip type`);
               setTooltipData(null);
               return;
           }
@@ -103,8 +80,7 @@ export function RegionSection({
             regionCode: regionCode,
             pinned: data.pinned
           }
-        
-          // console.log(`${regionCode} got ${data.regionCode}'s update: ${formatTooltipDebug(myTooltipData)}`);
+
           setTooltipData(myTooltipData);
         }
       }

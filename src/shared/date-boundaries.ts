@@ -3,7 +3,7 @@ import { getTodayAEST, getDaysBetween } from '@/shared/date-utils';
 import { DATE_BOUNDARIES } from '@/shared/config';
 
 /**
- * Centralized date boundary calculations for the application
+ * Centralised date boundary calculations for the application
  * All date boundary logic should use this module to ensure consistency
  */
 
@@ -97,17 +97,6 @@ export function getDateBoundaries() {
       return null;
     }
   };
-}
-
-/**
- * Check if an offset (days from earliestDataEndDay) is within valid data bounds
- * @param offset Days since earliestDataEndDay (0 = earliestDataEndDay)
- * @returns true if offset is out of bounds
- */
-export function isOffsetOutOfBounds(offset: number): boolean {
-  const boundaries = getDateBoundaries();
-  const maxOffset = getDaysBetween(boundaries.earliestDataEndDay, boundaries.latestDataDay);
-  return offset < 0 || offset > maxOffset;
 }
 
 // Export a type for the return value

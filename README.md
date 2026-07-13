@@ -1,6 +1,6 @@
 # Coal Stripes Visualisation
 
-A simple coal availability 'stripes' visualisation (attempting to) vaguely using OpenElectricity design language.
+A reference app demonstrating the [OpenElectricity](https://openelectricity.org.au) API: a 'stripes' visualisation of the daily capacity factors of every operating coal unit in Australia, navigable day-by-day back to 2006.
 
 <div align="center">
 <img src="coal-stripes-screenshot.png" alt="Coal Stripes Visualisation" width="80%">
@@ -8,31 +8,35 @@ A simple coal availability 'stripes' visualisation (attempting to) vaguely using
 
 ## Overview
 
-This application visualises Australian coal power plant capacity factors over the last 365 days using a "stripes" visualisation pattern inspired by OpenElectricity. Each horizontal stripe represents a coal unit's capacity factor over the past 365 days, with grey shading indicating capacity factor (darker = higher capacity) and red indicating zero (or negligible) generation.
+Each horizontal stripe is one coal generating unit; each pixel column is one day of the displayed 365-day window. Shading encodes the unit's daily capacity factor — light grey (25%) to black (100%) — with red marking days below 25% (effectively offline) and pale blue marking days with no data. Drag, scroll, or use the keyboard to slide the window across ~19 years of history.
 
-## Features
+## How this app uses the OpenElectricity API
 
-- **Real-time Data**: Fetches last 365 days of coal unit capacity factor data for all Australian coal units
-- **Regional Grouping**: Organises data by state (NSW, QLD, VIC, WA) and groups units by facility
-- **Interactive Tooltips**: Hover over any stripe to see date, facility, unit name, and capacity factor
-- **Responsive Design**: Matches OpenElectricity's visual design language
-- **Grey Scale Mapping**: 256 shades of grey mapping capacity factors from 0.5-100%
-- **Offline Indication**: Red coloring for units with capacity factors below 0.5%
+This is the part the repo exists to demonstrate. The server (never the browser) talks to OpenElectricity via the official [`openelectricity`](https://www.npmjs.com/package/openelectricity) npm package, using two endpoints:
 
-## Tech Stack
+1. **Facilities** — fetch all operating coal units:
+   `getFacilities({ status_id: ['operating'], fueltech_id: ['coal_black', 'coal_brown'] })`
+2. **Facility time series** — fetch daily energy per unit, one calendar year per request:
+   `getFacilityData(network, facilityCodes, ['energy'], { interval: '1d', dateStart, dateEnd })`
 
-- **Next.js 15.4.1** with TypeScript and Turbopack
-- **OpenElectricity API** integration via `@openelectricity/client`
-- **DM Sans** font family for authentic OpenElectricity styling
-- **Custom CSS** implementing OpenElectricity design patterns
+Daily energy (MWh) is then converted to a capacity factor: `(energy / 24h) / registered_capacity`. A null reading means "no data" and is never conflated with 0 (a unit that ran but generated nothing).
+
+Suggested reading order:
+
+| File | What it shows |
+|------|---------------|
+| `src/server/queued-oeclient.ts` | Wrapping the OpenElectricity SDK with rate limiting and retries |
+| `src/server/cap-fac-data-service.ts` | The two API queries, and turning energy into capacity factors |
+| `src/app/api/capacity-factors/route.ts` | Serving the data to the browser with layered caching |
+| `src/client/year-data-vendor.ts` | The client fetching from our route (never OpenElectricity directly) |
+| `src/shared/types.ts` | The JSON contract between our server and client |
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 18+ 
-- npm or yarn
-- OpenElectricity API key
+- Node.js 18+
+- An OpenElectricity API key — free from [openelectricity.org.au](https://openelectricity.org.au)
 
 ### Installation
 
@@ -47,177 +51,88 @@ This application visualises Australian coal power plant capacity factors over th
    npm install
    ```
 
-3. Create environment file:
+3. Create your environment file and add your API key:
    ```bash
    cp .env.example .env.local
    ```
 
-4. Add your OpenElectricity API key to `.env.local`:
-   ```env
-   OPENELECTRICITY_API_KEY=your_api_key_here
-   OPENELECTRICITY_API_URL=https://api.openelectricity.org.au
-   NODE_ENV=development
-   ENABLE_FILE_LOGGING=true  # Set to false for serverless deployments
-   ```
-
-5. Run the development server:
+4. Run the development server:
    ```bash
    npm run dev
    ```
 
-6. Open [http://localhost:3000](http://localhost:3000) in your browser
+5. Open [http://localhost:3000](http://localhost:3000)
 
-### Getting an API Key
+## Architecture
 
-Visit [OpenElectricity](https://openelectricity.org.au) to obtain a free API key for accessing Australian electricity market data.
-
-## Data Source
-
-This visualisation uses data from OpenElectricity, which provides access to Australian National Electricity Market (NEM) data. The application fetches:
-
-- All coal-fired generation units across the NEM
-- Daily energy generation data for the past 365 days
-- Facility information and regional groupings
-- Real-time capacity factor calculations
-
-## Project Structure
+There is a strict separation of concerns: the server holds the API key and talks to OpenElectricity; the client only ever talks to our own `/api/capacity-factors` route.
 
 ```
 src/
-├── app/
-│   ├── page.tsx          # Main visualisation component
-│   ├── opennem.css       # OpenElectricity design system styles
-│   └── globals.css       # Global styles
-├── hooks/
-│   └── useCoalStripes.ts # Data fetching hook
-├── lib/
-│   ├── coal-data-service.ts # API service and data processing
-│   └── types.ts          # TypeScript type definitions
-└── pages/
-    └── api/              # API routes for data processing
+├── app/                  # Next.js App Router
+│   ├── page.tsx          # Main visualisation page
+│   └── api/
+│       ├── capacity-factors/  # The one data route the client uses
+│       └── cron/              # Vercel Cron cache-warming endpoints
+├── server/               # Server-only: OpenElectricity client, data service,
+│                         #   cache warming, request logging
+├── client/               # Client-only: year data vendor, pre-rendered
+│                         #   canvas tiles
+├── components/           # React components (stripes, labels, tooltip, axis)
+├── hooks/                # Gesture/keyboard navigation, tooltip behaviour
+└── shared/               # Framework-free logic used by both sides: config,
+                          #   date utils, request queue, LRU cache, physics
 ```
 
-## Visualisation Details
+Data flows through three layers of caching so users (almost) never wait on OpenElectricity:
 
-- **Capacity Factor**: Calculated as daily energy generation divided by theoretical maximum (unit capacity × 24 hours)
-- **Color Mapping**: Linear mapping from light grey (0.5%) to black (100%) across 256 shades
-- **Regional Grouping**: Units organised by Australian states and grouped by facility
-- **Time Range**: Last 365 days from current date
-- **Data Points**: Approximately 18,250 data points (52 units × 365 days)
+1. **Server**: each calendar year is cached via Next's data cache (`unstable_cache`) — the current year revalidates hourly, past years are treated as immutable — plus CDN `Cache-Control` headers with stale-while-revalidate.
+2. **Cron warming**: Vercel Cron (see `vercel.json`) periodically re-warms the current year, recent years, and the archive via `src/server/cache-warmer.ts`.
+3. **Client**: years are pre-rendered into canvas tiles and held in an LRU (`src/client/year-data-vendor.ts`), with adjacent years prefetched in the background.
 
-## Development Tools
+Dates use `@internationalized/date` (not the built-in `Date`) throughout, with helpers in `src/shared/date-utils.ts` handling the NEM (AEST) and WEM (AWST) network timezones.
 
-The project includes several utility scripts:
+## Visualisation details
 
-- `capture-screenshot.js` — Automated screenshot capture using Puppeteer
-- `test/` directory — Various API testing and data analysis scripts
-- Built-in error handling for API rate limits and data availability
+- **Capacity factor**: daily energy generation divided by the unit's theoretical maximum (registered capacity × 24 h), as a percentage.
+- **Colour mapping** (`src/shared/capacity-factor-color-map.ts`): below 25% → red; 25–100% → linear light-grey-to-black ramp; no data → pale blue.
+- **Rendering**: each year is painted once into an offscreen canvas (one pixel per unit-day); scrolling just re-slices those tiles, so navigation stays smooth.
+- **Navigation**: drag or trackpad-scroll the stripes; arrow keys move by month (Shift = 6 months, Cmd/Ctrl = year boundaries); `T`/Home jumps to the present, `S` to the start of data; click a month label to jump there.
 
-## Feature Flags System
+## Environment variables
 
-The application includes a dynamic feature flags system for controlling features and debugging tools without code changes.
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `OPENELECTRICITY_API_KEY` | Your OpenElectricity API key | Yes |
+| `CRON_SECRET` | Shared secret authorising the `/api/cron/warm-*` endpoints; Vercel Cron sends it automatically once set in the project's env vars | For deployed cron |
+| `ENABLE_FILE_LOGGING` | Write request logs to `logs/` (default: on in development, off in production; keep off on serverless) | No |
+| `DEBUG_OE` | Set to `1` for verbose server logging of fetches and cache hits | No |
 
-### Architecture
+## Testing
 
-The feature flags system consists of:
-
-- **FeatureFlagsStore** (`src/shared/feature-flags.ts`): Singleton store that manages all feature flags
-  - Automatically persists flags to localStorage
-  - Creates flags on first access with default value of `false`
-  - Provides subscription mechanism for React components
-  - Accessible globally via `featureFlags` export
-
-- **React Hooks** (`src/hooks/useFeatureFlag.ts`):
-  - `useFeatureFlag(flag: string)`: Hook for consuming a single flag in components
-  - `useAllFeatureFlags()`: Hook for getting all flags (useful for admin UI)
-  - Automatically re-renders components when flags change
-
-### Usage in Console
-
-You can control feature flags directly from the browser console:
-
-```javascript
-// Import the feature flags store (already available as global in development)
-featureFlags.set('gestureLogging', true)   // Enable gesture logging
-featureFlags.set('gestureLogging', false)  // Disable gesture logging
-featureFlags.get('gestureLogging')         // Check current state
-featureFlags.toggle('gestureLogging')      // Toggle the flag
-featureFlags.getAll()                      // See all flags
-featureFlags.getAllFlags()                 // List all flag names
+```bash
+npm test                  # unit tests (offline, fast)
+npm run test:integration  # hits the real OpenElectricity API — requires
+                          #   OPENELECTRICITY_API_KEY in .env.local
+npm run test:e2e          # Playwright browser tests of the gesture navigation
+                          #   (starts the dev server; also needs the API key)
 ```
-
-### Current Feature Flags
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `gestureLogging` | Enables logging for drag, wheel, and paint events in the console | `false` |
-
-### Using Feature Flags in Code
-
-```typescript
-// In a React component
-import { useFeatureFlag } from '@/hooks/useFeatureFlag';
-
-function MyComponent() {
-  const showDebugInfo = useFeatureFlag('debugInfo');
-  
-  if (showDebugInfo) {
-    // Show debug information
-  }
-}
-
-// In non-React code
-import { featureFlags } from '@/shared/feature-flags';
-
-if (featureFlags.get('gestureLogging')) {
-  console.log('🎨 PAINT: ', { range, ts: Date.now() });
-}
-```
-
-### Benefits
-
-- **No code changes needed**: Toggle features without modifying code
-- **Persistent across sessions**: Flags are saved in localStorage
-- **Real-time updates**: Components automatically re-render when flags change
-- **Developer friendly**: Easy console access for debugging
-- **Type-safe**: TypeScript support throughout
 
 ## Deployment
 
-### Environment Variables
-
-The application uses the following environment variables:
-
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `OPENELECTRICITY_API_KEY` | Your OpenElectricity API key | - | Yes |
-| `OPENELECTRICITY_API_URL` | OpenElectricity API endpoint | `https://api.openelectricity.org.au` | Yes |
-| `NODE_ENV` | Environment mode | `development` | No |
-| `ENABLE_FILE_LOGGING` | Enable request logging to files | `true` in development, `false` in production | No |
-
-### Vercel Deployment
-
-When deploying to Vercel or other serverless platforms:
-
-1. Set `ENABLE_FILE_LOGGING=false` in your environment variables
-2. Add your `OPENELECTRICITY_API_KEY` to the platform's environment variables
-3. The application will automatically disable file system operations in serverless environments
-
-### Local Development
-
-For local development, file logging is enabled by default to help with debugging API requests. Logs are stored in the `logs/` directory and automatically cleaned up after 30 days.
+The app deploys to Vercel as-is (`vercel.json` configures the cron schedules and function timeouts). Set `OPENELECTRICITY_API_KEY` and `CRON_SECRET` in the project's environment variables, and leave `ENABLE_FILE_LOGGING` unset or `false`.
 
 ## Contributing
 
 This is a demonstration project showing integration with OpenElectricity's API and design patterns. Feel free to fork and adapt for your own visualisations.
 
 ## Author
- 
+
 Created by Simon Holmes à Court [@simonhac](https://github.com/simonhac)
 
 ## License
 
-MIT License — feel free to use and modify as needed.
+MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 

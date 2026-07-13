@@ -1,5 +1,5 @@
 /**
- * Central configuration for the coal stripes visualization
+ * Central configuration for the coal stripes visualisation
  */
 
 import { CalendarDate } from '@internationalized/date';
@@ -61,11 +61,6 @@ export const UI_CONFIG = {
 } as const;
 
 
-// API Configuration
-export const API_CONFIG = {
-  BASE_URL: '/api/coal-stripes',    // Base URL for API calls
-} as const;
-
 // Date boundaries
 export const DATE_BOUNDARIES = {
   // number of days displayed in the tile
@@ -103,8 +98,8 @@ export const SERVER_REQUEST_QUEUE_CONFIG = {
 
 // Client request queue configuration (for year data vendor)
 export const CLIENT_REQUEST_QUEUE_CONFIG = {
-  maxConcurrent: 4,                 // Allow 2 concurrent year fetches
-  minInterval: 50,                 // 100ms between requests
+  maxConcurrent: 4,                 // Allow 4 concurrent year fetches
+  minInterval: 50,                  // Minimum 50ms between requests
   maxRetries: 3,                    // Maximum retry attempts
   retryDelayBase: 1000,             // Base retry delay (1s)
   retryDelayMax: 30000,             // Maximum retry delay (30s)

@@ -1,24 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { LogEntry } from '@/shared/request-queue-logger';
 
-export interface LogEntry {
-  timestamp: Date;
-  eventType: 'QUEUED' | 'STARTED' | 'COMPLETED' | 'FAILED' | 'RETRY' | 'CIRCUIT_OPEN' | 'CIRCUIT_CLOSED';
-  requestId?: string;
-  method?: string;
-  path?: string;
-  priority?: number;
-  attempt?: number;
-  maxAttempts?: number;
-  status?: number;
-  duration?: number;
-  size?: string;
-  error?: string;
-  delay?: number;
-  threshold?: number;
-  failures?: number;
-  resetIn?: number;
-}
+export type { LogEntry };
 
 export class RequestLogger {
   private logDir: string;
@@ -207,7 +191,7 @@ export class RequestLogger {
       const files = fs.readdirSync(this.logDir);
       
       files.forEach(file => {
-        if (file.endsWith('.log') && file.includes('capfac-')) {
+        if (file.endsWith('.log') && file.includes('_capfac_')) {
           const filePath = path.join(this.logDir, file);
           const stats = fs.statSync(filePath);
           

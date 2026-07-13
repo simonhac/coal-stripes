@@ -41,6 +41,21 @@ const debug = (...args: unknown[]): void => {
   if (process.env.DEBUG_OE) console.log(...args);
 };
 
+/**
+ * The heart of the OpenElectricity integration. For a given calendar year this
+ * service:
+ *
+ *   1. fetches all operating coal units from the facilities endpoint (once,
+ *      cached for the life of the instance),
+ *   2. fetches each network's daily energy data for the year, and
+ *   3. converts energy (MWh/day) into capacity factors (% of what the unit
+ *      could have generated at its registered capacity), preserving the
+ *      null-vs-zero distinction: 0 = the unit generated nothing, null = no
+ *      data (future dates, or gaps in the collection infrastructure).
+ *
+ * Results are cached as JSON strings in an LRU keyed by year; the current year
+ * expires hourly (a new day of data arrives daily), past years are immutable.
+ */
 export class CapFacDataService {
   private client: OEClientQueued;
   private facilitiesCache: Facility[] | null = null;
@@ -134,20 +149,6 @@ export class CapFacDataService {
   }
 
   /**
-   * Get queue statistics for monitoring
-   */
-  public getQueueStats() {
-    return this.client.getQueueStats();
-  }
-
-  /**
-   * Get cache statistics
-   */
-  public getCacheStats() {
-    return this.yearDataCache.getStats();
-  }
-
-  /**
    * Get all coal facilities from OpenElectricity API
    */
   private async getAllCoalFacilities(): Promise<Facility[]> {
@@ -165,6 +166,10 @@ export class CapFacDataService {
     this.facilitiesFetchPromise = (async () => {
       try {
         debug('🏭 Fetching coal facilities...');
+        // The key OpenElectricity facilities query: filter the /facilities
+        // endpoint down to operating coal units. Other filters (e.g. gas,
+        // wind, retired plants) work the same way — see the fueltech and
+        // status ids in the OpenElectricity docs.
         const { table } = await this.client.getFacilities({
           status_id: ['operating'],
           fueltech_id: ['coal_black', 'coal_brown']
@@ -235,6 +240,10 @@ export class CapFacDataService {
     const responses = await Promise.all(
       Array.from(facilitiesByNetwork, ([network, facilityCodes]) => {
         debug(`   Fetching ${network} network: ${facilityCodes.length} facilities`);
+        // The key OpenElectricity time-series query: daily ('1d') energy in
+        // MWh for every listed facility, one request per network. Dates are
+        // interpreted in the network's local time (AEST for NEM, AWST for
+        // WEM); see networkDayFromInterval for how rows map back to days.
         return this.client
           .getFacilityData(network as NetworkCode, facilityCodes, ['energy'], {
             interval: '1d',

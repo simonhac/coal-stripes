@@ -82,7 +82,7 @@ describe('Capacity Factors API HTTP Integration Tests', () => {
     }
   });
 
-  describe('Caching Behavior', () => {
+  describe('Caching Behaviour', () => {
     test('should cache current year requests for 1 hour', async () => {
       const currentYear = getTodayAEST().year;
       

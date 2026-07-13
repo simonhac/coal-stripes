@@ -63,10 +63,6 @@ class FeatureFlagsStore {
     return result;
   }
 
-  getAllFlags(): string[] {
-    return Array.from(this.flags.keys()).sort();
-  }
-
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

@@ -1,8 +1,17 @@
 /**
- * Shared module for capacity factor color mapping
+ * Maps a daily capacity factor (0–100%, or null for "no data") to the colour
+ * of one stripe-day.
+ *
+ * Encoding: below 25% the unit is effectively offline or barely running, so
+ * it reads as a red warning stripe. From 25% up, the value maps linearly onto
+ * a grey ramp — 25% is light grey, 100% is black — so a unit running flat out
+ * appears as solid dark stripes and partial output as lighter shading. Null
+ * (unknown) days are pale blue, deliberately distinct from both.
+ *
+ * All 101 colours are pre-computed once, in two forms: CSS hex strings for
+ * DOM use, and 32-bit ABGR integers for writing directly into a canvas
+ * ImageData buffer (little-endian RGBA bytes read as one ABGR uint32).
  */
-
-// Pre-compute colors for all capacity factors (0-100)
 class CapacityFactorColorMap {
   private static instance: CapacityFactorColorMap;
   private hexColors: string[] = new Array(101);
@@ -61,7 +70,7 @@ class CapacityFactorColorMap {
   }
 
   getIntColor(capacityFactor: number | null): number {
-    // Light blue for missing data (0xFFFFF3E6 in ABGR format)
+    // Light blue for missing data — #e6f3ff (as in getHexColor) in ABGR form
     if (capacityFactor === null || capacityFactor === undefined) return 0xFFFFF3E6;
     
     // Round and clamp to valid range
@@ -73,11 +82,7 @@ class CapacityFactorColorMap {
 // Export singleton instance
 export const capacityFactorColorMap = CapacityFactorColorMap.getInstance();
 
-// Export convenience functions
+// Export convenience function
 export function getProportionColorHex(capacityFactor: number | null): string {
   return capacityFactorColorMap.getHexColor(capacityFactor);
-}
-
-export function getProportionColorInt(capacityFactor: number | null): number {
-  return capacityFactorColorMap.getIntColor(capacityFactor);
 }

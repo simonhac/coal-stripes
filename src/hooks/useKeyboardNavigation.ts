@@ -3,6 +3,14 @@ import { CalendarDate } from '@internationalized/date';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { DATE_BOUNDARIES } from '@/shared/config';
 
+// Clamp an end date to the valid data range [earliestDataEndDay, latestDataDay].
+function clampEndDate(endDate: CalendarDate): CalendarDate {
+  const boundaries = getDateBoundaries();
+  if (endDate.compare(boundaries.latestDataDay) > 0) return boundaries.latestDataDay;
+  if (endDate.compare(boundaries.earliestDataEndDay) < 0) return boundaries.earliestDataEndDay;
+  return endDate;
+}
+
 interface UseKeyboardNavigationOptions {
   currentEndDate: CalendarDate | null;
   /** Animate to an absolute end date (drives the shared gesture spring). */
@@ -25,59 +33,25 @@ export function useKeyboardNavigation({
   // Navigate by months
   const navigateByMonths = useCallback((months: number) => {
     if (!currentEndDate) return;
-    
-    const newEndDate = currentEndDate.add({ months });
-    const boundaries = getDateBoundaries();
-    
-    // Clamp to data boundaries
-    let targetDate = newEndDate;
-    if (newEndDate.compare(boundaries.latestDataDay) > 0) {
-      targetDate = boundaries.latestDataDay;
-    } else if (newEndDate.compare(boundaries.earliestDataEndDay) < 0) {
-      targetDate = boundaries.earliestDataEndDay;
-    }
-    
-    navigateToDate(targetDate);
+    navigateToDate(clampEndDate(currentEndDate.add({ months })));
   }, [currentEndDate, navigateToDate]);
 
-  // Navigate to a specific month
+  // Navigate so the given month is the first month displayed
   const navigateToMonth = useCallback((year: number, month: number) => {
     const firstOfMonth = new CalendarDate(year, month, 1);
-    const newEndDate = firstOfMonth.add({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
-    const boundaries = getDateBoundaries();
-    
-    // Clamp to data boundaries
-    let targetDate = newEndDate;
-    if (newEndDate.compare(boundaries.latestDataDay) > 0) {
-      targetDate = boundaries.latestDataDay;
-    } else if (newEndDate.compare(boundaries.earliestDataEndDay) < 0) {
-      targetDate = boundaries.earliestDataEndDay;
-    }
-    
-    navigateToDate(targetDate);
+    navigateToDate(clampEndDate(firstOfMonth.add({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 })));
   }, [navigateToDate]);
 
-  // Navigate to today (yesterday actually)
+  // Navigate to the most recent data (yesterday — today's data is incomplete)
   const navigateToToday = useCallback(() => {
     const boundaries = getDateBoundaries();
     navigateToDate(boundaries.latestDataDay);
   }, [navigateToDate]);
 
-  // Navigate to January 1 of a given year
+  // Navigate so January 1 of the given year is the first day displayed
   const navigateToYearStart = useCallback((targetYear: number) => {
     const jan1 = new CalendarDate(targetYear, 1, 1);
-    const newEndDate = jan1.add({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
-    const boundaries = getDateBoundaries();
-    
-    // Clamp to data boundaries
-    let targetDate = newEndDate;
-    if (newEndDate.compare(boundaries.latestDataDay) > 0) {
-      targetDate = boundaries.latestDataDay;
-    } else if (newEndDate.compare(boundaries.earliestDataEndDay) < 0) {
-      targetDate = boundaries.earliestDataEndDay;
-    }
-    
-    navigateToDate(targetDate);
+    navigateToDate(clampEndDate(jan1.add({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 })));
   }, [navigateToDate]);
 
   // Navigate to start (earliest data end day)
@@ -146,10 +120,5 @@ export function useKeyboardNavigation({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentEndDate, navigateByMonths, navigateToToday, navigateToYearStart, navigateToStart, isDragging, disabled]);
 
-  return {
-    navigateByMonths,
-    navigateToMonth,
-    navigateToToday,
-    navigateToStart,
-  };
+  return { navigateToMonth };
 }

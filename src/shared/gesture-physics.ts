@@ -10,20 +10,12 @@
  *
  * Unit convention: everything here is in DAY-OFFSETS (offset 0 = earliest valid
  * end date, `max` = latest). Velocity is in DAYS PER MILLISECOND (signed;
- * negative = toward earlier dates). The hook converts pixels/px-per-ms at the
- * boundary via pxToDays / (vx / pixelsPerDay).
+ * negative = toward earlier dates). The hook converts pixels and px-per-ms at
+ * the boundary by dividing by its pixels-per-day scale.
  */
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
-}
-
-export function pxToDays(px: number, pixelsPerDay: number): number {
-  return pixelsPerDay > 0 ? px / pixelsPerDay : 0;
-}
-
-export function daysToPx(days: number, pixelsPerDay: number): number {
-  return days * pixelsPerDay;
 }
 
 /** Momentum / fling tuning (day-offset space). */
@@ -113,17 +105,4 @@ export function resolveDragRelease(params: {
     return { kind: 'momentum', target: projectMomentum(releaseDays, velocity, min, max) };
   }
   return { kind: 'settle', target: clamp(releaseDays, min, max) };
-}
-
-/**
- * End of a wheel/trackpad burst: settle the position into bounds. If the burst
- * (incl. the OS inertial tail) rubber-banded past a bound, snap back to it.
- */
-export function resolveWheelSettle(
-  offsetDays: number,
-  min: number,
-  max: number,
-): { target: number; snapped: boolean } {
-  const target = clamp(offsetDays, min, max);
-  return { target, snapped: target !== offsetDays };
 }
