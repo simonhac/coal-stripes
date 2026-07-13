@@ -116,7 +116,7 @@ describe('Capacity Factors API HTTP Integration Tests', () => {
       expect(time2).toBeLessThan(time1 / 2);
     }, 30000);
 
-    test('should cache previous years as immutable (historical data never changes)', async () => {
+    test('should cache recent past years for a day (NEM data is subject to revision)', async () => {
       const previousYear = getTodayAEST().year - 1;
 
       // First request
@@ -127,7 +127,7 @@ describe('Capacity Factors API HTTP Integration Tests', () => {
 
       expect(response1.status).toBe(200);
       expect(response1.headers.get('Cache-Control')).toBe(
-        'public, max-age=31536000, s-maxage=31536000, stale-while-revalidate=31536000, immutable'
+        'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
       );
       
       console.log(`Previous year first request: ${time1}ms`);

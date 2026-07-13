@@ -6,8 +6,13 @@ module.exports = {
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    // allowJs so the ESM-only packages below (p-queue, p-retry and their
+    // dependencies) are compiled to CJS for Jest.
+    '^.+\\.[tj]s$': ['ts-jest', { tsconfig: { allowJs: true } }],
   },
+  transformIgnorePatterns: [
+    '/node_modules/(?!(p-queue|p-timeout|p-retry|is-network-error|eventemitter3)/)',
+  ],
   moduleFileExtensions: ['ts', 'js', 'json'],
   testTimeout: 60000, // 60 seconds for API calls
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],

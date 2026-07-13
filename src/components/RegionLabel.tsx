@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
-import { yearDataVendor, calculateAverageCapacityFactor, getRegionNames } from '@/client/year-data-vendor';
+import { calculateRegionStats, calculateAverageCapacityFactor, getRegionNames } from '@/client/cap-fac-stats';
 import { usePinnableTooltip } from '@/hooks/usePinnableTooltip';
 
 interface RegionLabelProps {
@@ -20,6 +21,7 @@ export function RegionLabel({
   dateRange,
   isMobile
 }: RegionLabelProps) {
+  const queryClient = useQueryClient();
   const regionNames = getRegionNames(regionCode);
 
   const matches = useCallback(
@@ -29,7 +31,7 @@ export function RegionLabel({
   );
 
   const sendTooltipData = (pinned: boolean) => {
-    const stats = yearDataVendor.calculateRegionStats(regionCode, dateRange);
+    const stats = calculateRegionStats(queryClient, regionCode, dateRange);
     if (!stats) {
       // No data available for this date range - clear tooltip
       window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'));

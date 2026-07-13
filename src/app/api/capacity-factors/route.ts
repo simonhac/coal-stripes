@@ -3,7 +3,11 @@ import { unstable_cache } from "next/cache";
 import { CapFacDataService } from "@/server/cap-fac-data-service";
 import { initializeRequestLogger } from "@/server/request-logger";
 import { getTodayAEST } from "@/shared/date-utils";
-import { CACHE_CONFIG } from "@/shared/config";
+import {
+	yearCachePolicy,
+	YEAR_CACHE_TIERS,
+	type YearCacheTier,
+} from "@/shared/config";
 
 // Opt-in verbose logging: set DEBUG_OE=1 to trace requests/cache misses locally.
 const debug = (...args: unknown[]): void => {
@@ -40,37 +44,30 @@ function getService(): CapFacDataService {
 	return serviceInstance;
 }
 
-// Create cached versions for different revalidation periods
-const getCachedCapacityFactorsCurrentYear = unstable_cache(
-	async (year: number) => {
-		debug(`🔄 Cache miss - fetching data for current year ${year}`);
-		const service = getService();
-		return await service.getCapacityFactors(year);
-	},
-	["capacity-factors", "current-year"],
-	{
-		revalidate: CACHE_CONFIG.CURRENT_YEAR_REVALIDATE_SECONDS, // 1 hour
-		// Tags are kept so the current year can be busted on demand via
-		// revalidateTag("current-year") if we ever need instant propagation.
-		tags: ["capacity-factors", "current-year"],
-	},
-);
+async function fetchCapacityFactors(year: number) {
+	debug(`🔄 Cache miss - fetching data for year ${year}`);
+	const service = getService();
+	return await service.getCapacityFactors(year);
+}
 
-const getCachedCapacityFactorsPreviousYears = unstable_cache(
-	async (year: number) => {
-		debug(`🔄 Cache miss - fetching data for previous year ${year}`);
-		const service = getService();
-		return await service.getCapacityFactors(year);
-	},
-	["capacity-factors", "previous-years"],
-	{
-		// Historical years are effectively immutable, so refresh only rarely.
-		// Never-cold is still guaranteed by stale-while-revalidate, not by this
-		// window — see CACHE_CONFIG.
-		revalidate: CACHE_CONFIG.PAST_YEAR_REVALIDATE_SECONDS, // 1 year
-		tags: ["capacity-factors", "previous-years"],
-	},
-);
+// One unstable_cache wrapper per freshness tier (revalidate is static per
+// wrapper, so the tiers can't share one). Freshness windows live in
+// yearCachePolicy — see @/shared/config. A year crossing a tier boundary
+// (current→recent at New Year, recent→archive at N-6) changes wrapper and
+// hence Data Cache key, costing one cache miss that the next cron warmer run
+// absorbs.
+//
+// Tags are kept so a tier can be busted on demand via revalidateTag() if we
+// ever need instant propagation.
+const tierCaches = Object.fromEntries(
+	(Object.keys(YEAR_CACHE_TIERS) as YearCacheTier[]).map((tier) => [
+		tier,
+		unstable_cache(fetchCapacityFactors, ["capacity-factors", tier], {
+			revalidate: YEAR_CACHE_TIERS[tier].revalidateSeconds,
+			tags: ["capacity-factors", tier],
+		}),
+	]),
+) as Record<YearCacheTier, typeof fetchCapacityFactors>;
 
 export async function GET(request: Request) {
 	try {
@@ -95,33 +92,25 @@ export async function GET(request: Request) {
 
 		debug(`🌐 API: Fetching capacity factors for year ${year}`);
 
-		// Use the appropriate cached version based on the year
+		// Pick the freshness tier for this year. NEM data is subject to revision
+		// (January can revise the December just past), so no tier is immutable.
 		const currentYear = getTodayAEST().year;
-		const data =
-			year === currentYear
-				? await getCachedCapacityFactorsCurrentYear(year)
-				: await getCachedCapacityFactorsPreviousYears(year);
+		const policy = yearCachePolicy(year, currentYear);
+		const data = await tierCaches[policy.tier](year);
 
 		debug(`🌐 API: Returning data for year ${year}`);
 
 		// Prepare response with cache headers
 		const response = NextResponse.json(data);
 
-		if (year === currentYear) {
-			// Current year: refresh hourly, serve stale for up to a day meanwhile.
-			response.headers.set(
-				"Cache-Control",
-				`public, max-age=${CACHE_CONFIG.CURRENT_YEAR_REVALIDATE_SECONDS}, s-maxage=${CACHE_CONFIG.CURRENT_YEAR_REVALIDATE_SECONDS}, stale-while-revalidate=${CACHE_CONFIG.CURRENT_YEAR_SWR_SECONDS}`,
-			);
-		} else if (year < currentYear) {
-			// Previous years are historical and effectively immutable — cache hard.
-			response.headers.set(
-				"Cache-Control",
-				`public, max-age=${CACHE_CONFIG.PAST_YEAR_REVALIDATE_SECONDS}, s-maxage=${CACHE_CONFIG.PAST_YEAR_REVALIDATE_SECONDS}, stale-while-revalidate=${CACHE_CONFIG.PAST_YEAR_SWR_SECONDS}, immutable`,
-			);
-		} else {
+		if (year > currentYear) {
 			// Future years: never cache (data does not exist yet).
 			response.headers.set("Cache-Control", "no-store");
+		} else {
+			response.headers.set(
+				"Cache-Control",
+				`public, max-age=${policy.revalidateSeconds}, s-maxage=${policy.revalidateSeconds}, stale-while-revalidate=${policy.swrSeconds}`,
+			);
 		}
 
 		response.headers.set("Vary", "Accept-Encoding");

@@ -1,13 +1,14 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { CompositeTile } from './CompositeTile';
 import { CapFacTooltip, TooltipData } from './CapFacTooltip';
 import { CapFacXAxis } from './CapFacXAxis';
 import { FacilityLabel } from './FacilityLabel';
 import { RegionLabel } from './RegionLabel';
-import { yearDataVendor, calculateAverageCapacityFactor, getRegionNames } from '@/client/year-data-vendor';
+import { calculateRegionStats, calculateAverageCapacityFactor, getRegionNames } from '@/client/cap-fac-stats';
 
 interface RegionSectionProps {
   regionCode: string;
@@ -26,6 +27,7 @@ export function RegionSection({
   onMonthClick,
   isMobile
 }: RegionSectionProps) {
+  const queryClient = useQueryClient();
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
   
   // Get region names
@@ -68,7 +70,7 @@ export function RegionSection({
           }
           
           // Calculate capacity factor for our region
-          const stats = yearDataVendor.calculateRegionStats(regionCode, dateRange);
+          const stats = calculateRegionStats(queryClient, regionCode, dateRange);
           const avgCapacityFactor = calculateAverageCapacityFactor(stats);
           
           const myTooltipData: TooltipData = {
@@ -101,7 +103,7 @@ export function RegionSection({
       window.removeEventListener('tooltip-data-hover', handleTooltipHover);
       window.removeEventListener('tooltip-data-hover-end', handleTooltipHoverEnd);
     };
-  }, [regionCode, tooltipRegionName]);
+  }, [regionCode, tooltipRegionName, queryClient]);
   
   if (!animatedDateRange) {
     return null;

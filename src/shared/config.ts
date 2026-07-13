@@ -84,43 +84,33 @@ export const TILE_CONFIG = {
 } as const;
 
 
-// Server request queue configuration
-export const SERVER_REQUEST_QUEUE_CONFIG = {
-  maxConcurrent: 10,                // Max parallel requests
-  minInterval: 100,                 // Minimum 100ms between requests
-  maxRetries: 4,                    // Maximum retry attempts
-  retryDelayBase: 1000,             // Base retry delay (1s)
-  retryDelayMax: 30000,             // Maximum retry delay (30s)
-  timeout: 20000,                   // 20 second timeout per request
-  circuitBreakerThreshold: 5,       // Open circuit after 5 consecutive failures
-  circuitBreakerResetTime: 60000    // Reset circuit after 1 minute
+// Cache freshness policy, shared by the server route (unstable_cache
+// revalidate + Cache-Control headers) and the client (TanStack Query
+// staleTime).
+//
+// NEM data is subject to revision — in January we can easily see revisions to
+// data from the December just past — so no tier treats past years as
+// immutable. The tiers mirror the cron warmer cadence (warm-current: hourly,
+// warm-recent: daily over the last 5 past years, warm-archive: weekly), which
+// keeps every tier permanently warm; stale-while-revalidate means a warmed
+// entry is served stale instantly while it refreshes in the background, so
+// users never feel a cold fetch regardless of these windows.
+export type YearCacheTier = 'current' | 'recent' | 'archive';
+
+export interface YearCachePolicy {
+  tier: YearCacheTier;
+  revalidateSeconds: number;
+  swrSeconds: number;
+}
+
+export const YEAR_CACHE_TIERS: Record<YearCacheTier, Omit<YearCachePolicy, 'tier'>> = {
+  current: { revalidateSeconds: 60 * 60, swrSeconds: 60 * 60 * 24 },            // gains a new day daily
+  recent: { revalidateSeconds: 60 * 60 * 24, swrSeconds: 60 * 60 * 24 * 7 },    // catches revisions within a day
+  archive: { revalidateSeconds: 60 * 60 * 24 * 7, swrSeconds: 60 * 60 * 24 * 30 }, // deep revisions are rare
 } as const;
 
-// Client request queue configuration (for year data vendor)
-export const CLIENT_REQUEST_QUEUE_CONFIG = {
-  maxConcurrent: 4,                 // Allow 4 concurrent year fetches
-  minInterval: 50,                  // Minimum 50ms between requests
-  maxRetries: 3,                    // Maximum retry attempts
-  retryDelayBase: 1000,             // Base retry delay (1s)
-  retryDelayMax: 30000,             // Maximum retry delay (30s)
-  timeout: 60000,                   // 60 second timeout for year data
-  circuitBreakerThreshold: 5,       // Open circuit after 5 consecutive failures
-  circuitBreakerResetTime: 60000    // Reset circuit after 1 minute
-} as const;
-
-// Cache configuration
-export const CACHE_CONFIG = {
-  CLIENT_MAX_YEARS: 30,             // Maximum years to cache in client (browser memory)
-  SERVER_MAX_YEARS: 30,             // Maximum years to cache in server
-
-  // Revalidation windows (seconds) for the /api/capacity-factors route.
-  //
-  // NOTE: "never hit a cold cache" is guaranteed by stale-while-revalidate — a
-  // warmed entry is served *stale instantly* while it refreshes in the
-  // background, so it is never cold regardless of these values. The window only
-  // controls how often that background refresh calls OpenElectricity.
-  CURRENT_YEAR_REVALIDATE_SECONDS: 60 * 60,          // 1 hour — the current year gains a new day daily
-  CURRENT_YEAR_SWR_SECONDS: 60 * 60 * 24,            // serve stale up to 1 day while revalidating
-  PAST_YEAR_REVALIDATE_SECONDS: 60 * 60 * 24 * 365,  // 1 year — historical data is effectively immutable
-  PAST_YEAR_SWR_SECONDS: 60 * 60 * 24 * 365,
-} as const;
+export function yearCachePolicy(year: number, currentYear: number): YearCachePolicy {
+  const tier: YearCacheTier =
+    year >= currentYear ? 'current' : year >= currentYear - 5 ? 'recent' : 'archive';
+  return { tier, ...YEAR_CACHE_TIERS[tier] };
+}

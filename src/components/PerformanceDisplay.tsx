@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { perfMonitor } from '@/shared/performance-monitor';
-import { yearDataVendor } from '@/client/year-data-vendor';
-import type { CacheStats } from '@/shared/lru-cache';
-import type { QueueStats } from '@/shared/request-queue';
+import { getYearCacheStats, type YearCacheStats } from '@/client/query-cache-stats';
 import { featureFlags } from '@/shared/feature-flags';
 import { useAllFeatureFlags } from '@/hooks/useFeatureFlag';
 import { tileMonitor } from '@/shared/tile-monitor';
@@ -77,10 +76,11 @@ const loadPerformanceMonitorState = (): PerformanceMonitorState => {
 };
 
 export const PerformanceDisplay: React.FC = () => {
+  const queryClient = useQueryClient();
   const [fps, setFps] = useState(0);
   const [memory, setMemory] = useState<{ heapUsed: number; heapTotal: number } | null>(null);
   const [metrics, setMetrics] = useState<Record<string, { count: number; avgDuration: number; totalDuration: number }>>({});
-  const [cacheStats, setCacheStats] = useState<(CacheStats & QueueStats) | null>(null);
+  const [cacheStats, setCacheStats] = useState<YearCacheStats | null>(null);
   const [tileState, setTileState] = useState<TileState>(tileMonitor.getState());
   
   // Load all persisted state at once
@@ -105,12 +105,12 @@ export const PerformanceDisplay: React.FC = () => {
       
       // Update cache stats if in cache mode
       if (displayMode === 'caches') {
-        setCacheStats(yearDataVendor.getCacheStats());
+        setCacheStats(getYearCacheStats(queryClient));
       }
     }, 500); // Update twice per second
 
     return () => clearInterval(interval);
-  }, [displayMode]);
+  }, [displayMode, queryClient]);
 
   // Subscribe to tile state changes in a separate effect that doesn't re-run
   useEffect(() => {
@@ -459,42 +459,6 @@ export const PerformanceDisplay: React.FC = () => {
                   )}
                 </div>
               </div>
-              <div style={{ marginTop: '5px' }}>
-                <div style={{ fontSize: '10px', color: '#ff0', marginBottom: '3px' }}>Queued:</div>
-                <div style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: '4px',
-                  minHeight: '20px',
-                  marginLeft: '10px'
-                }}>
-                  {cacheStats.queuedLabels && cacheStats.queuedLabels.length > 0 ? (
-                    cacheStats.queuedLabels.map((label: string) => (
-                      <span
-                        key={label}
-                        style={{
-                          display: 'inline-block',
-                          padding: '2px 6px',
-                          backgroundColor: '#554400',
-                          color: '#ff0',
-                          borderRadius: '10px',
-                          fontSize: '9px',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        {label}
-                      </span>
-                    ))
-                  ) : (
-                    <span style={{ fontSize: '9px', color: '#666' }}>None</span>
-                  )}
-                </div>
-              </div>
-              {cacheStats.circuitOpen && (
-                <div style={{ marginLeft: '10px', marginTop: '5px', color: '#f00', fontSize: '10px' }}>
-                  ⚠️ Circuit Breaker Open
-                </div>
-              )}
             </div>
           ) : (
             <div style={{ color: '#888', fontSize: '10px' }}>No cache data available</div>
@@ -506,8 +470,8 @@ export const PerformanceDisplay: React.FC = () => {
           }}>
             <button
               onClick={() => {
-                yearDataVendor.clearCache();
-                setCacheStats(yearDataVendor.getCacheStats());
+                queryClient.clear();
+                setCacheStats(getYearCacheStats(queryClient));
               }}
               style={redButtonStyle}
             >

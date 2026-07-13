@@ -9,12 +9,16 @@ import { PerformanceDisplay } from '../components/PerformanceDisplay';
 import { OpenElectricityHeader } from '../components/OpenElectricityHeader';
 import { RegionSection } from '../components/RegionSection';
 import { DateRange } from '../components/DateRange';
-import { yearDataVendor, getRegionNames } from '@/client/year-data-vendor';
+import { useQueryClient } from '@tanstack/react-query';
+import { yearQueryOptions } from '@/client/year-queries';
+import { getRegionNames } from '@/client/cap-fac-stats';
 import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
 import { useGestureSpring } from '@/hooks/useGestureSpring';
+import { usePrefetchAdjacentYears } from '@/hooks/usePrefetchAdjacentYears';
 import './opennem.css';
 
 export default function Home() {
+  const queryClient = useQueryClient();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [endDate, setEndDate] = useState<CalendarDate | null>(null);
@@ -74,6 +78,14 @@ export default function Home() {
     start: endDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
     end: endDate
   } : null;
+
+  // Prefetch the years around the settled navigation target so scrolling the
+  // timeline rarely waits on the network.
+  usePrefetchAdjacentYears(
+    targetDateRange?.start.year ?? null,
+    targetDateRange?.end.year ?? null
+  );
+
   // Initial load
   useEffect(() => {
     async function initialLoad() {
@@ -88,9 +100,11 @@ export default function Home() {
         const endYear = calculatedEndDate.year;
         const years = startYear === endYear ? [startYear] : [startYear, endYear];
 
-        // Load all required years
-        const yearPromises = years.map(year => yearDataVendor.requestYear(year));
-        const yearResults = await Promise.all(yearPromises);
+        // Load all required years (fetchQuery dedupes with any fetch the
+        // tiles kick off for the same year)
+        const yearResults = await Promise.all(
+          years.map(year => queryClient.fetchQuery(yearQueryOptions(year)))
+        );
 
         // Extract facilities by region from the loaded data
         const regionFacilityMaps = new Map<string, Map<string, string>>();
@@ -139,7 +153,7 @@ export default function Home() {
     }
 
     initialLoad();
-  }, []);
+  }, [queryClient]);
 
 
   // Ensure the page has focus on mount for keyboard navigation

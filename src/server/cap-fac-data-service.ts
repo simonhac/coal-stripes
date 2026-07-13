@@ -5,8 +5,6 @@ import {
 } from '@/shared/types';
 import { CalendarDate, parseDate } from '@internationalized/date';
 import { getAESTDateTimeString, networkDayFromInterval, getTodayAEST } from '@/shared/date-utils';
-import { LRUCache } from '@/shared/lru-cache';
-import { CACHE_CONFIG } from '@/shared/config';
 import type { NetworkCode } from 'openelectricity';
 
 // A single coal generating unit as returned by the facilities endpoint.
@@ -53,18 +51,22 @@ const debug = (...args: unknown[]): void => {
  *      null-vs-zero distinction: 0 = the unit generated nothing, null = no
  *      data (future dates, or gaps in the collection infrastructure).
  *
- * Results are cached as JSON strings in an LRU keyed by year; the current year
- * expires hourly (a new day of data arrives daily), past years are immutable.
+ * Year results are NOT cached here — the route's unstable_cache (Vercel Data
+ * Cache) owns that, with revision-aware freshness tiers (see yearCachePolicy
+ * in @/shared/config). An in-process copy would silently defeat revalidation
+ * on a warm instance. Only the facilities list is memoised, with a TTL so new
+ * or retired units appear within a day.
  */
+const FACILITIES_TTL_MS = 24 * 60 * 60 * 1000;
+
 export class CapFacDataService {
   private client: OEClientQueued;
   private facilitiesCache: Facility[] | null = null;
+  private facilitiesFetchedAt = 0;
   private facilitiesFetchPromise: Promise<Facility[]> | null = null;
-  private yearDataCache: LRUCache<string>;
 
   constructor(apiKey: string) {
     this.client = new OEClientQueued(apiKey);
-    this.yearDataCache = new LRUCache<string>(CACHE_CONFIG.SERVER_MAX_YEARS);
   }
 
   /**
@@ -83,7 +85,6 @@ export class CapFacDataService {
     // Clear caches and any pending requests
     this.facilitiesCache = null;
     this.facilitiesFetchPromise = null;
-    this.yearDataCache.clear();
     this.client.clearQueue();
   }
 
@@ -92,15 +93,6 @@ export class CapFacDataService {
    * Always returns data for the full year with today and future dates nulled out.
    */
   async getCapacityFactors(year: number): Promise<GeneratingUnitCapFacHistoryDTO> {
-    const cacheKey = year.toString();
-
-    // Check cache first
-    const cachedJson = this.yearDataCache.get(cacheKey);
-    if (cachedJson) {
-      debug(`📦 Cache hit: ${year}`);
-      return JSON.parse(cachedJson);
-    }
-
     const startTime = performance.now();
 
     // Always work with full years - no partial years allowed.
@@ -124,26 +116,8 @@ export class CapFacDataService {
       endDate
     );
 
-    // Convert to JSON and cache
-    const jsonString = JSON.stringify(coalStripesData);
-    const sizeInBytes = jsonString.length;
-
-    // The current year gains a new day daily, so it expires after an hour.
-    // Past years are historical/immutable — keep them for the life of the warm
-    // instance (the LRU's SERVER_MAX_YEARS bound handles eviction).
-    const currentYear = getTodayAEST().year;
-    const expiresAt =
-      year === currentYear
-        ? new Date(Date.now() + CACHE_CONFIG.CURRENT_YEAR_REVALIDATE_SECONDS * 1000)
-        : undefined;
-
-    this.yearDataCache.set(cacheKey, jsonString, sizeInBytes, `Year ${year}`, expiresAt);
-
     const elapsed = Math.round(performance.now() - startTime);
-    const expiryInfo = year === currentYear ? ' (expires in 1 hour)' : ' (kept until evicted)';
-    debug(
-      `✅ API response: ${year} | ${elapsed}ms | Cached (${Math.round(sizeInBytes / 1024)}KB)${expiryInfo}`
-    );
+    debug(`✅ API response: ${year} | ${elapsed}ms`);
 
     return coalStripesData;
   }
@@ -152,8 +126,9 @@ export class CapFacDataService {
    * Get all coal facilities from OpenElectricity API
    */
   private async getAllCoalFacilities(): Promise<Facility[]> {
-    // Return cached facilities if available
-    if (this.facilitiesCache) {
+    // Return cached facilities while fresh; the TTL lets new or retired units
+    // appear within a day on a long-lived warm instance.
+    if (this.facilitiesCache && Date.now() - this.facilitiesFetchedAt < FACILITIES_TTL_MS) {
       return this.facilitiesCache;
     }
 
@@ -200,6 +175,7 @@ export class CapFacDataService {
         );
 
         this.facilitiesCache = facilities;
+        this.facilitiesFetchedAt = Date.now();
         debug(`🏭 Found ${facilities.length} coal facilities with ${units.length} units`);
 
         return facilities;
