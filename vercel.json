@@ -1,11 +1,17 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "installCommand": "npm install",
   "functions": {
-    "src/pages/api/**/*.ts": {
+    "src/app/api/**/*.ts": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    { "path": "/api/cron/warm-current", "schedule": "0 * * * *" },
+    { "path": "/api/cron/warm-recent", "schedule": "30 14 * * *" },
+    { "path": "/api/cron/warm-archive", "schedule": "30 14 * * 0" }
+  ]
 }

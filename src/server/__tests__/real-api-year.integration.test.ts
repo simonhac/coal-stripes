@@ -2,7 +2,6 @@ import { CapFacDataService } from '@/server/cap-fac-data-service';
 import { isLeapYear, getDayIndex, getTodayAEST } from '@/shared/date-utils';
 import { setupTestLogger } from '../test-helpers';
 import { cleanupRequestLogger } from '@/server/request-logger';
-import { CalendarDate } from '@internationalized/date';
 
 describe('Real API Year-based Tests', () => {
   let coalDataService: CapFacDataService;
@@ -52,7 +51,7 @@ describe('Real API Year-based Tests', () => {
     console.log('✅ Full year 2023 fetched successfully!');
   }, 15000); // 15 second timeout
 
-  test('should fetch leap year 2024 with 6-month splitting from real API', async () => {
+  test('should fetch leap year 2024 in a single request from real API', async () => {
     console.log('\n🌐 Testing leap year 2024 with REAL API...');
     
     const result = await coalDataService.getCapacityFactors(2024);
@@ -69,8 +68,8 @@ describe('Real API Year-based Tests', () => {
     // Verify leap day data exists (Feb 29 at index 59)
     expect(result.data[0].history.data[59]).toBeDefined(); // Feb 29
     
-    console.log('✅ Leap year 2024 fetched and merged successfully!');
-  }, 15000); // 15 second timeout // Longer timeout for two API requests (leap year splits)
+    console.log('✅ Leap year 2024 fetched successfully!');
+  }, 15000); // 15 second timeout
 
   test('should fetch current year (partial) from real API', async () => {
     const currentYear = getTodayAEST().year;
@@ -121,59 +120,15 @@ describe('Real API Year-based Tests', () => {
       console.log(`\n✅ First NEM unit (${firstNemUnit.duid}) has ${nullDays} null days out of ${firstNemUnit.history.data.length}`);
       expect(nullDays).toBe(firstNemUnit.history.data.length);
     } else {
-      // Normal case: should have data up to yesterday
-      const expectedDaysWithData = getDayIndex(yesterdayAEST) + 1; // Days from Jan 1 to yesterday inclusive
-      console.log(`📅 Expected days with data: ${expectedDaysWithData}`);
-      
-      // Check the first NEM unit
+      // Normal case: every past day up to yesterday (AEST) should have data.
+      // (The old "missing day in the first week of April" API bug no longer
+      // occurs — verified against the live API, 2026-07.)
+      const expectedDaysWithData = getDayIndex(yesterdayAEST) + 1; // Jan 1 → yesterday inclusive
       const firstNemUnit = nemUnits[0];
       const nonNullDays = firstNemUnit.history.data.filter(val => val !== null).length;
-      
-      console.log(`\n✅ First NEM unit (${firstNemUnit.duid}) has ${nonNullDays} days of non-null data`);
-      
-      // Known bug: missing day in first week of April
-      // Check if we're past April 7 and if we have exactly one missing day
-      const april7 = new CalendarDate(currentYear, 4, 7);
-      const isAfterApril7 = yesterdayAEST.compare(april7) >= 0;
-      const missingDays = expectedDaysWithData - nonNullDays;
-      
-      if (isAfterApril7 && missingDays === 1) {
-        // Check if the missing day is in the first week of April (April 1-7)
-        // Find which day is missing
-        let missingDayIndex = -1;
-        for (let i = 0; i < expectedDaysWithData; i++) {
-          if (firstNemUnit.history.data[i] === null && i < expectedDaysWithData - 1) {
-            // Found a null that should have data (not a future date)
-            missingDayIndex = i;
-            break;
-          }
-        }
-        
-        if (missingDayIndex >= 0) {
-          // Convert index to date
-          const jan1 = new CalendarDate(currentYear, 1, 1);
-          const missingDate = jan1.add({ days: missingDayIndex });
-          const isInFirstWeekOfApril = missingDate.month === 4 && missingDate.day >= 1 && missingDate.day <= 7;
-          
-          console.log(`📅 Missing day at index ${missingDayIndex}: ${missingDate.toString()}`);
-          console.log(`📅 Is in first week of April: ${isInFirstWeekOfApril}`);
-          
-          if (isInFirstWeekOfApril) {
-            console.log('📅 Known bug: allowing one missing day in first week of April');
-            expect(nonNullDays).toBe(expectedDaysWithData - 1);
-          } else {
-            // Missing day is not in first week of April - this is unexpected
-            expect(nonNullDays).toBe(expectedDaysWithData);
-          }
-        } else {
-          // Couldn't find the missing day - fail the test
-          expect(nonNullDays).toBe(expectedDaysWithData);
-        }
-      } else {
-        // Either we're before April 7, or there's not exactly 1 missing day
-        // In either case, we expect all days to have data
-        expect(nonNullDays).toBe(expectedDaysWithData);
-      }
+
+      console.log(`✅ First NEM unit (${firstNemUnit.duid}): ${nonNullDays}/${expectedDaysWithData} expected days with data`);
+      expect(nonNullDays).toBe(expectedDaysWithData);
     }
     
     console.log(`✅ Current year ${currentYear} fetched successfully!`);

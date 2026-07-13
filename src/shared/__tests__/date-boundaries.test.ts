@@ -13,6 +13,7 @@ jest.mock('../config', () => {
   return {
     DATE_BOUNDARIES: {
       EARLIEST_START_DATE: new CalendarDate(2006, 1, 1),
+      TILE_WIDTH: 365,
       DISPLAY_SLOP_MONTHS: 6
     }
   };

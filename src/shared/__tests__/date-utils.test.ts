@@ -1,4 +1,4 @@
-import { getAESTDateTimeString, getDaysBetween, getDayIndex, getDateFromIndex, isLeapYear, parseAESTDateString, getTodayAEST } from '@/shared/date-utils';
+import { getAESTDateTimeString, getDaysBetween, getDayIndex, getDateFromIndex, isLeapYear, networkDayFromInterval, getTodayAEST } from '@/shared/date-utils';
 import { CalendarDate, today } from '@internationalized/date';
 
 describe('Date Utilities', () => {
@@ -231,90 +231,52 @@ describe('Date Utilities', () => {
     });
   });
 
-  describe('parseAESTDateString', () => {
-    test('should parse plain date format YYYY-MM-DD', () => {
-      const date = parseAESTDateString('2025-07-21');
+  describe('networkDayFromInterval', () => {
+    // The OpenElectricity client returns each daily bucket as the instant of
+    // network-local midnight: NEM = 00:00 AEST (UTC+10) → 14:00Z the prior day;
+    // WEM = 00:00 AWST (UTC+8) → 16:00Z the prior day.
+
+    test('maps a NEM winter interval to its AEST day', () => {
+      const date = networkDayFromInterval(new Date('2024-05-31T14:00:00.000Z'), 'NEM');
+      expect(date.year).toBe(2024);
+      expect(date.month).toBe(6);
+      expect(date.day).toBe(1);
+    });
+
+    test('NEM is fixed UTC+10 year-round (no daylight saving)', () => {
+      // Summer (would-be AEDT season) still anchors at 14:00Z, not 13:00Z.
+      const date = networkDayFromInterval(new Date('2023-12-31T14:00:00.000Z'), 'NEM');
+      expect(date.year).toBe(2024);
+      expect(date.month).toBe(1);
+      expect(date.day).toBe(1);
+    });
+
+    test('maps a WEM interval to its AWST (UTC+8) day', () => {
+      const date = networkDayFromInterval(new Date('2023-12-31T16:00:00.000Z'), 'WEM');
+      expect(date.year).toBe(2024);
+      expect(date.month).toBe(1);
+      expect(date.day).toBe(1);
+    });
+
+    test('handles the year boundary', () => {
+      const date = networkDayFromInterval(new Date('2024-12-31T14:00:00.000Z'), 'NEM');
       expect(date.year).toBe(2025);
-      expect(date.month).toBe(7);
-      expect(date.day).toBe(21);
+      expect(date.month).toBe(1);
+      expect(date.day).toBe(1);
     });
 
-    test('should parse AEST datetime format with +10:00 offset', () => {
-      const date = parseAESTDateString('2025-07-21T00:00:00+10:00');
-      expect(date.year).toBe(2025);
-      expect(date.month).toBe(7);
-      expect(date.day).toBe(21);
+    test('handles the leap day', () => {
+      const date = networkDayFromInterval(new Date('2024-02-28T14:00:00.000Z'), 'NEM');
+      expect(date.year).toBe(2024);
+      expect(date.month).toBe(2);
+      expect(date.day).toBe(29);
     });
 
-    test('should extract date part from datetime string', () => {
-      const date = parseAESTDateString('2025-12-31T23:59:59+10:00');
-      expect(date.year).toBe(2025);
-      expect(date.month).toBe(12);
-      expect(date.day).toBe(31);
-    });
-
-    test('should handle UTC timestamps by converting to Brisbane time', () => {
-      // UTC 23:00 on July 22 is July 23 in Brisbane
-      const date = parseAESTDateString('2025-07-22T23:00:00.000Z');
-      expect(date.year).toBe(2025);
-      expect(date.month).toBe(7);
-      expect(date.day).toBe(23);
-      
-      // UTC 00:00 on July 23 is July 23 in Brisbane (10:00)
-      const date2 = parseAESTDateString('2025-07-23T00:00:00.000Z');
-      expect(date2.year).toBe(2025);
-      expect(date2.month).toBe(7);
-      expect(date2.day).toBe(23);
-      
-      // UTC 14:00 on July 22 is July 23 in Brisbane (00:00)
-      const date3 = parseAESTDateString('2025-07-22T14:00:00.000Z');
-      expect(date3.year).toBe(2025);
-      expect(date3.month).toBe(7);
-      expect(date3.day).toBe(23);
-      
-      // UTC 13:59 on July 22 is still July 22 in Brisbane (23:59)
-      const date4 = parseAESTDateString('2025-07-22T13:59:00.000Z');
-      expect(date4.year).toBe(2025);
-      expect(date4.month).toBe(7);
-      expect(date4.day).toBe(22);
-      
-      // Test year boundary
-      const date5 = parseAESTDateString('2025-12-31T23:00:00.000Z');
-      expect(date5.year).toBe(2026);
-      expect(date5.month).toBe(1);
-      expect(date5.day).toBe(1);
-    });
-
-    test('should throw error for invalid formats', () => {
-      // Wrong offset
-      expect(() => parseAESTDateString('2025-07-21T00:00:00+11:00'))
-        .toThrow('Invalid date format: "2025-07-21T00:00:00+11:00". Expected either "YYYY-MM-DD", "YYYY-MM-DDTHH:mm:ss+10:00", or "YYYY-MM-DDTHH:mm:ss[.sss]Z"');
-      
-      // Missing time
-      expect(() => parseAESTDateString('2025-07-21T'))
-        .toThrow('Invalid date format: "2025-07-21T". Expected either "YYYY-MM-DD", "YYYY-MM-DDTHH:mm:ss+10:00", or "YYYY-MM-DDTHH:mm:ss[.sss]Z"');
-      
-      // Wrong separator
-      expect(() => parseAESTDateString('2025/07/21'))
-        .toThrow('Invalid date format: "2025/07/21". Expected either "YYYY-MM-DD", "YYYY-MM-DDTHH:mm:ss+10:00", or "YYYY-MM-DDTHH:mm:ss[.sss]Z"');
-      
-      // Extra characters
-      expect(() => parseAESTDateString('2025-07-21 extra'))
-        .toThrow('Invalid date format: "2025-07-21 extra". Expected either "YYYY-MM-DD", "YYYY-MM-DDTHH:mm:ss+10:00", or "YYYY-MM-DDTHH:mm:ss[.sss]Z"');
-    });
-
-    test('should handle edge cases correctly', () => {
-      // Leap year date
-      const leapDate = parseAESTDateString('2024-02-29');
-      expect(leapDate.year).toBe(2024);
-      expect(leapDate.month).toBe(2);
-      expect(leapDate.day).toBe(29);
-      
-      // Year boundaries
-      const newYear = parseAESTDateString('2025-01-01T00:00:00+10:00');
-      expect(newYear.year).toBe(2025);
-      expect(newYear.month).toBe(1);
-      expect(newYear.day).toBe(1);
+    test('unknown networks fall back to NEM (Brisbane) time', () => {
+      const date = networkDayFromInterval(new Date('2024-05-31T14:00:00.000Z'), 'ZZZ');
+      expect(date.year).toBe(2024);
+      expect(date.month).toBe(6);
+      expect(date.day).toBe(1);
     });
   });
 

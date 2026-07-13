@@ -3,6 +3,21 @@ import { unstable_cache } from "next/cache";
 import { CapFacDataService } from "@/server/cap-fac-data-service";
 import { initializeRequestLogger } from "@/server/request-logger";
 import { getTodayAEST } from "@/shared/date-utils";
+import { CACHE_CONFIG } from "@/shared/config";
+
+// Opt-in verbose logging: set DEBUG_OE=1 to trace requests/cache misses locally.
+const debug = (...args: unknown[]): void => {
+	if (process.env.DEBUG_OE) console.log(...args);
+};
+
+// The error payload we return, enriched with OpenElectricity details when present.
+interface ApiErrorResponse {
+	error: string;
+	originalURL?: string;
+	originalResponseCode?: number;
+	originalError?: unknown;
+	requestDetails?: unknown;
+}
 
 // Force dynamic mode to ensure our cache headers are respected
 export const dynamic = "force-dynamic";
@@ -28,26 +43,31 @@ function getService(): CapFacDataService {
 // Create cached versions for different revalidation periods
 const getCachedCapacityFactorsCurrentYear = unstable_cache(
 	async (year: number) => {
-		console.log(`🔄 Cache miss - fetching data for current year ${year}`);
+		debug(`🔄 Cache miss - fetching data for current year ${year}`);
 		const service = getService();
 		return await service.getCapacityFactors(year);
 	},
 	["capacity-factors", "current-year"],
 	{
-		revalidate: 3600, // 1 hour
+		revalidate: CACHE_CONFIG.CURRENT_YEAR_REVALIDATE_SECONDS, // 1 hour
+		// Tags are kept so the current year can be busted on demand via
+		// revalidateTag("current-year") if we ever need instant propagation.
 		tags: ["capacity-factors", "current-year"],
 	},
 );
 
 const getCachedCapacityFactorsPreviousYears = unstable_cache(
 	async (year: number) => {
-		console.log(`🔄 Cache miss - fetching data for previous year ${year}`);
+		debug(`🔄 Cache miss - fetching data for previous year ${year}`);
 		const service = getService();
 		return await service.getCapacityFactors(year);
 	},
 	["capacity-factors", "previous-years"],
 	{
-		revalidate: 604800, // 1 week
+		// Historical years are effectively immutable, so refresh only rarely.
+		// Never-cold is still guaranteed by stale-while-revalidate, not by this
+		// window — see CACHE_CONFIG.
+		revalidate: CACHE_CONFIG.PAST_YEAR_REVALIDATE_SECONDS, // 1 year
 		tags: ["capacity-factors", "previous-years"],
 	},
 );
@@ -73,7 +93,7 @@ export async function GET(request: Request) {
 			);
 		}
 
-		console.log(`🌐 API: Fetching capacity factors for year ${year}`);
+		debug(`🌐 API: Fetching capacity factors for year ${year}`);
 
 		// Use the appropriate cached version based on the year
 		const currentYear = getTodayAEST().year;
@@ -82,25 +102,25 @@ export async function GET(request: Request) {
 				? await getCachedCapacityFactorsCurrentYear(year)
 				: await getCachedCapacityFactorsPreviousYears(year);
 
-		console.log(`🌐 API: Returning data for year ${year}`);
+		debug(`🌐 API: Returning data for year ${year}`);
 
 		// Prepare response with cache headers
 		const response = NextResponse.json(data);
 
 		if (year === currentYear) {
-			// Current year: cache for 1 hour
+			// Current year: refresh hourly, serve stale for up to a day meanwhile.
 			response.headers.set(
 				"Cache-Control",
-				"public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400",
+				`public, max-age=${CACHE_CONFIG.CURRENT_YEAR_REVALIDATE_SECONDS}, s-maxage=${CACHE_CONFIG.CURRENT_YEAR_REVALIDATE_SECONDS}, stale-while-revalidate=${CACHE_CONFIG.CURRENT_YEAR_SWR_SECONDS}`,
 			);
 		} else if (year < currentYear) {
-			// Previous years: cache for 1 week
+			// Previous years are historical and effectively immutable — cache hard.
 			response.headers.set(
 				"Cache-Control",
-				"public, max-age=604800, s-maxage=604800, stale-while-revalidate=2592000",
+				`public, max-age=${CACHE_CONFIG.PAST_YEAR_REVALIDATE_SECONDS}, s-maxage=${CACHE_CONFIG.PAST_YEAR_REVALIDATE_SECONDS}, stale-while-revalidate=${CACHE_CONFIG.PAST_YEAR_SWR_SECONDS}, immutable`,
 			);
 		} else {
-			// Future years: no cache
+			// Future years: never cache (data does not exist yet).
 			response.headers.set("Cache-Control", "no-store");
 		}
 
@@ -109,46 +129,43 @@ export async function GET(request: Request) {
 		return response;
 	} catch (error) {
 		console.error("API Error:", error);
-		
-		// Check if this is an OpenElectricity API error
-		const errorResponse: any = {
+
+		const errorResponse: ApiErrorResponse = {
 			error: error instanceof Error ? error.message : "Internal server error",
 		};
-		
-		// If the error has response details from OpenElectricity, include them
-		if (error && typeof error === 'object' && 'response' in error) {
-			const apiError = error as any;
-			if (apiError.response) {
-				errorResponse.originalURL = apiError.response.url || apiError.config?.url;
-				errorResponse.originalResponseCode = apiError.response.status;
-				
-				// If there's additional error data from the API response
-				if (apiError.response.data) {
-					errorResponse.originalError = apiError.response.data;
-				}
+
+		const isRecord = (v: unknown): v is Record<string, unknown> =>
+			typeof v === "object" && v !== null;
+
+		// If the error carries an OpenElectricity response, include its details.
+		if (isRecord(error) && isRecord(error.response)) {
+			const response = error.response;
+			const config = isRecord(error.config) ? error.config : undefined;
+			errorResponse.originalURL =
+				(response.url as string) ?? (config?.url as string | undefined);
+			errorResponse.originalResponseCode = response.status as number | undefined;
+			if (response.data !== undefined) {
+				errorResponse.originalError = response.data;
 			}
 		}
-		
-		// Also check if error has a cause that might contain API details
-		if (error instanceof Error && error.cause) {
-			const cause = error.cause as any;
-			if (cause.url) {
-				errorResponse.originalURL = cause.url;
-			}
-			if (cause.status) {
-				errorResponse.originalResponseCode = cause.status;
+
+		// A thrown Error may also carry API details on its `cause`.
+		if (error instanceof Error && isRecord(error.cause)) {
+			if (error.cause.url) errorResponse.originalURL = error.cause.url as string;
+			if (error.cause.status) {
+				errorResponse.originalResponseCode = error.cause.status as number;
 			}
 		}
-		
-		// Check for request details added by OEClientQueued
-		if (error && typeof error === 'object' && 'requestDetails' in error) {
-			const details = (error as any).requestDetails;
+
+		// Request details attached by OEClientQueued.
+		if (isRecord(error) && isRecord(error.requestDetails)) {
+			const details = error.requestDetails;
 			if (details.url && !errorResponse.originalURL) {
-				errorResponse.originalURL = details.url;
+				errorResponse.originalURL = details.url as string;
 			}
 			errorResponse.requestDetails = details;
 		}
-		
+
 		return NextResponse.json(errorResponse, { status: 500 });
 	}
 }

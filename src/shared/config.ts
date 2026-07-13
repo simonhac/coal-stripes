@@ -116,5 +116,16 @@ export const CLIENT_REQUEST_QUEUE_CONFIG = {
 // Cache configuration
 export const CACHE_CONFIG = {
   CLIENT_MAX_YEARS: 30,             // Maximum years to cache in client (browser memory)
-  SERVER_MAX_YEARS: 30,            // Maximum years to cache in server
+  SERVER_MAX_YEARS: 30,             // Maximum years to cache in server
+
+  // Revalidation windows (seconds) for the /api/capacity-factors route.
+  //
+  // NOTE: "never hit a cold cache" is guaranteed by stale-while-revalidate — a
+  // warmed entry is served *stale instantly* while it refreshes in the
+  // background, so it is never cold regardless of these values. The window only
+  // controls how often that background refresh calls OpenElectricity.
+  CURRENT_YEAR_REVALIDATE_SECONDS: 60 * 60,          // 1 hour — the current year gains a new day daily
+  CURRENT_YEAR_SWR_SECONDS: 60 * 60 * 24,            // serve stale up to 1 day while revalidating
+  PAST_YEAR_REVALIDATE_SECONDS: 60 * 60 * 24 * 365,  // 1 year — historical data is effectively immutable
+  PAST_YEAR_SWR_SECONDS: 60 * 60 * 24 * 365,
 } as const;

@@ -40,29 +40,28 @@ jest.mock('openelectricity', () => ({
         ]
       }
     }),
-    getFacilityData: jest.fn().mockImplementation((network: any, facilityCodes: string[], metrics: any, options: any) => {
-      // Generate mock data for the requested date range
+    getFacilityData: jest.fn().mockImplementation((_network: any, facilityCodes: string[], _metrics: any, options: any) => {
+      // Generate mock daily rows for the requested (exclusive-end) range.
       const startDate = parseDate(options.dateStart);
       const endDate = parseDate(options.dateEnd).subtract({ days: 1 }); // API end date is exclusive
       const rows: any[] = [];
-      
+
       let currentDate = startDate;
       while (currentDate.compare(endDate) <= 0) {
         facilityCodes.forEach((facilityCode: string) => {
           const unit_code = facilityCode === 'ERARING' ? 'ER01' : 'BW01';
           rows.push({
-            interval: `${currentDate.toString()}T00:00:00+10:00`,
-            facility_code: facilityCode,
-            unit_code: unit_code,
+            // The client returns each day as the instant of NEM-local
+            // (AEST, UTC+10) midnight — as a Date, not a string.
+            interval: new Date(`${currentDate.toString()}T00:00:00+10:00`),
+            unit_code,
             energy: 15000 + Math.random() * 1000
           });
         });
         currentDate = currentDate.add({ days: 1 });
       }
-      
-      return Promise.resolve({
-        datatable: { rows }
-      });
+
+      return Promise.resolve({ datatable: { getRows: () => rows } });
     })
   }))
 }));
@@ -120,6 +119,15 @@ describe('CapFacDataService - Year-based Fetching', () => {
       // Check that data contains numbers or nulls
       const sampleValue = firstUnit.history.data[0];
       expect(typeof sampleValue === 'number' || sampleValue === null).toBe(true);
+    });
+
+    test('returns a full leap year (366 days) from a single fetch', async () => {
+      const result = await service.getCapacityFactors(2024);
+      expect(result.data[0].history.data.length).toBe(366);
+      expect(result.data[0].history.start).toBe('2024-01-01');
+      expect(result.data[0].history.last).toBe('2024-12-31');
+      // Feb 29 is at index 59 and must carry a value (this is a past leap year).
+      expect(result.data[0].history.data[59]).not.toBeNull();
     });
   });
 });

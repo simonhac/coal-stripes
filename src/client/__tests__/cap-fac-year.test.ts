@@ -1,9 +1,22 @@
 import { createCapFacYear } from '../cap-fac-year';
 import { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 import { MockCanvas } from './helpers/mock-canvas';
+import { CalendarDate, endOfMonth } from '@internationalized/date';
 
 // Mock OffscreenCanvas
 global.OffscreenCanvas = MockCanvas as any;
+
+// The real DTO carries one capacity factor per day. These tests express intent
+// as 12 monthly values, so expand them into a daily array aligned to the year's
+// actual month lengths (so month boundaries match getDayIndex()).
+function monthlyToDaily(year: number, monthly: (number | null)[]): (number | null)[] {
+  const daily: (number | null)[] = [];
+  for (let m = 0; m < 12; m++) {
+    const daysInMonth = endOfMonth(new CalendarDate(year, m + 1, 1)).day;
+    for (let d = 0; d < daysInMonth; d++) daily.push(monthly[m]);
+  }
+  return daily;
+}
 
 describe('cap-fac-year', () => {
   describe('createCapFacYear', () => {
@@ -120,7 +133,7 @@ describe('cap-fac-year', () => {
               start: '2024-01-01',
               last: '2024-12-31',
               interval: 'month',
-              data: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+              data: monthlyToDaily(2024, [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
             }
           }
         ]
@@ -158,7 +171,7 @@ describe('cap-fac-year', () => {
               start: '2024-01-01',
               last: '2024-12-31',
               interval: 'month',
-              data: [0.8, null, 0.6, null, null, null, 0.2, 0.1, null, 0.1, 0.2, 0.3]
+              data: monthlyToDaily(2024, [0.8, null, 0.6, null, null, null, 0.2, 0.1, null, 0.1, 0.2, 0.3])
             }
           },
           {
@@ -175,7 +188,7 @@ describe('cap-fac-year', () => {
               start: '2024-01-01',
               last: '2024-12-31',
               interval: 'month',
-              data: [null, 0.8, 0.7, null, 0.5, null, null, 0.2, null, null, 0.3, null]
+              data: monthlyToDaily(2024, [null, 0.8, 0.7, null, 0.5, null, null, 0.2, null, null, 0.3, null])
             }
           }
         ]
@@ -187,10 +200,10 @@ describe('cap-fac-year', () => {
       expect(qld1Factors).toHaveLength(12);
       
       // Month 0: only unit 1 has data (0.8)
-      expect(qld1Factors![0]).toBe(0.8);
-      
+      expect(qld1Factors![0]).toBeCloseTo(0.8, 10);
+
       // Month 1: only unit 2 has data (0.8)
-      expect(qld1Factors![1]).toBe(0.8);
+      expect(qld1Factors![1]).toBeCloseTo(0.8, 10);
       
       // Month 2: both units have data, weighted average: (0.6*100 + 0.7*200)/(100+200) = 0.667
       expect(qld1Factors![2]).toBeCloseTo(0.667, 3);
@@ -222,7 +235,7 @@ describe('cap-fac-year', () => {
               start: '2024-01-01',
               last: '2024-12-31',
               interval: 'month',
-              data: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+              data: monthlyToDaily(2024, [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
             }
           }
         ]
@@ -255,7 +268,7 @@ describe('cap-fac-year', () => {
               start: '2024-01-01',
               last: '2024-12-31',
               interval: 'month',
-              data: [0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
+              data: monthlyToDaily(2024, [0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8])
             }
           },
           {
@@ -272,7 +285,7 @@ describe('cap-fac-year', () => {
               start: '2024-01-01',
               last: '2024-12-31',
               interval: 'month',
-              data: [0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6]
+              data: monthlyToDaily(2024, [0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6])
             }
           },
           {
@@ -288,7 +301,7 @@ describe('cap-fac-year', () => {
               start: '2024-01-01',
               last: '2024-12-31',
               interval: 'month',
-              data: [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4]
+              data: monthlyToDaily(2024, [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
             }
           }
         ]
@@ -303,9 +316,9 @@ describe('cap-fac-year', () => {
       expect(result.regionCapacityFactors.has('WEM')).toBe(true);
 
       // Check values
-      expect(result.regionCapacityFactors.get('NSW1')![0]).toBe(0.8);
-      expect(result.regionCapacityFactors.get('VIC1')![0]).toBe(0.6);
-      expect(result.regionCapacityFactors.get('WEM')![0]).toBe(0.4);
+      expect(result.regionCapacityFactors.get('NSW1')![0]).toBeCloseTo(0.8, 10);
+      expect(result.regionCapacityFactors.get('VIC1')![0]).toBeCloseTo(0.6, 10);
+      expect(result.regionCapacityFactors.get('WEM')![0]).toBeCloseTo(0.4, 10);
     });
 
     it('should handle zero capacity correctly', () => {
@@ -328,7 +341,7 @@ describe('cap-fac-year', () => {
               start: '2024-01-01',
               last: '2024-12-31',
               interval: 'month',
-              data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+              data: monthlyToDaily(2024, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             }
           }
         ]

@@ -15,11 +15,15 @@ jest.mock('@/shared/date-utils', () => ({
   getTodayAEST: jest.fn()
 }));
 
-// Mock the config to ensure CalendarDate is properly constructed
+// Keep the real config (CACHE_CONFIG, CLIENT_REQUEST_QUEUE_CONFIG, …) and only
+// override the DATE_BOUNDARIES this suite pins for deterministic assertions.
 jest.mock('@/shared/config', () => {
+  const actual = jest.requireActual('@/shared/config');
   const { CalendarDate } = jest.requireActual('@internationalized/date');
   return {
+    ...actual,
     DATE_BOUNDARIES: {
+      ...actual.DATE_BOUNDARIES,
       EARLIEST_START_DATE: new CalendarDate(2006, 1, 1),
       DISPLAY_SLOP_MONTHS: 6
     }

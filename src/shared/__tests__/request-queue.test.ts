@@ -126,8 +126,20 @@ describe('RequestQueue', () => {
   describe('Retry logic', () => {
     it('should retry failed requests', async () => {
       let attempts = 0;
-      
-      const result = await queue.add({
+
+      // The shared queue has maxRetries: 0, so use a queue that retries.
+      const retryQueue = new RequestQueue({
+        maxConcurrent: 2,
+        minInterval: 10,
+        maxRetries: 3,
+        retryDelayBase: 50,
+        retryDelayMax: 200,
+        timeout: 1000,
+        circuitBreakerThreshold: 5,
+        circuitBreakerResetTime: 1000
+      }, new NoOpRequestQueueLogger());
+
+      const result = await retryQueue.add({
         execute: async () => {
           attempts++;
           if (attempts < 3) {
