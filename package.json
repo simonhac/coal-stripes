@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
+    "build:local": "NEXT_DIST_DIR=.next-build next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
