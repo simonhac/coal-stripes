@@ -10,8 +10,6 @@ export async function register() {
     
     // Get the port from environment or use Next.js default
     const port = parseInt(process.env.PORT || '3000', 10);
-    
-    console.log(`Initializing request logger on port ${port}`);
     initializeRequestLogger(port);
   }
 }

@@ -41,8 +41,15 @@ export function getRegionNames(regionCode: string): { long: string; short: strin
 }
 
 /**
- * Vendor for year-based capacity factor data with pre-rendered tiles
- * Always returns a promise - resolved immediately for cached data
+ * The client's single source of capacity-factor data, one calendar year at a
+ * time. Note the separation of concerns: the browser NEVER talks to
+ * OpenElectricity directly — this vendor fetches from our own
+ * /api/capacity-factors route (which holds the API key and does the heavy
+ * lifting), then pre-renders each year into canvas tiles (CapFacYear).
+ *
+ * Years are cached in an LRU; fetches run through a RequestQueue for retry,
+ * rate limiting, and dedup; adjacent years are prefetched in the background
+ * so scrolling the timeline rarely waits on the network.
  */
 export class YearDataVendor {
   private cache: LRUCache<CapFacYear>;
@@ -170,22 +177,15 @@ export class YearDataVendor {
       return;
     }
 
-    // Add to queue with low priority
-    console.log(`🔮 Prefetching year ${year}`);
-    
+    // Add to queue with low priority; prefetch failures are ignored — the
+    // year will be fetched properly (with error reporting) when needed.
     this.requestQueue.add({
       execute: () => this.fetchYear(year),
       priority: 0, // Low priority for prefetch
       method: 'GET',
       url: `/api/capacity-factors?year=${year}`,
-      label: year.toString(),
-      onError: () => {
-        // Silently ignore prefetch errors
-        console.log(`🔄 Prefetch of year ${year} failed (will retry when needed)`);
-      }
-    }, { addToFront: false }).then(() => {
-      console.log(`✅ Prefetched year ${year}`);
-    }).catch(() => {
+      label: year.toString()
+    }, { addToFront: false }).catch(() => {
       // Ignore prefetch failures
     });
   }
@@ -222,27 +222,20 @@ export class YearDataVendor {
    * Fetch year data from server and create tiles
    */
   private async fetchYear(year: number): Promise<CapFacYear> {
-    console.log(`📡 Fetching year ${year} from server...`);
-    const fetchStartTime = performance.now();
-    
     const response = await fetch(`/api/capacity-factors?year=${year}`);
-    
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-    
+
     const data: GeneratingUnitCapFacHistoryDTO = await response.json();
-    
+
     // Create CapFacYear with pre-rendered tiles
-    // const startTime = performance.now();
     const capFacYear = createCapFacYear(year, data);
-    
+
     // Cache the result with the total size (JSON + canvas memory)
     this.cache.set(year.toString(), capFacYear, capFacYear.totalSizeBytes, year.toString());
-    
-    const totalTime = (performance.now() - fetchStartTime) / 1000;
-    console.log(`✅ Successfully fetched year ${year} (${(capFacYear.totalSizeBytes / 1024 / 1024).toFixed(2)}MB) in ${totalTime.toFixed(1)}s`);
-    
+
     return capFacYear;
   }
 

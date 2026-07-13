@@ -3,7 +3,6 @@ import type {
   NetworkCode,
   DataMetric,
   IFacilityTimeSeriesParams,
-  INetworkTimeSeriesParams,
   ITimeSeriesResponse,
 } from 'openelectricity';
 import { RequestQueue } from '@/shared/request-queue';
@@ -33,12 +32,20 @@ function attachRequestDetails(error: unknown, details: OERequestDetails): void {
 }
 
 /**
- * Wrapper around OpenElectricityClient that adds request queuing,
- * rate limiting, and retry logic.
+ * Wrapper around the official OpenElectricity SDK client that adds request
+ * queuing, rate limiting, retry with backoff, and a circuit breaker (all
+ * provided by RequestQueue — see @/shared/request-queue).
+ *
+ * The SDK (`openelectricity` on npm) talks to https://api.openelectricity.org.au
+ * and needs only an API key. This wrapper exists because the app fans out one
+ * request per network (NEM, WEM) per year of data, and a burst of those must
+ * not trip the API's rate limits — the queue spaces and retries them.
  */
 export class OEClientQueued {
   private client: OpenElectricityClient;
-  private requestQueue: RequestQueue;
+  // One queue shared by both endpoints, so their requests are rate-limited
+  // together; each method casts add()'s result back to its execute() type.
+  private requestQueue: RequestQueue<FacilityResponse | ITimeSeriesResponse>;
 
   constructor(apiKey: string) {
     this.client = new OpenElectricityClient({ apiKey });
@@ -49,7 +56,14 @@ export class OEClientQueued {
   }
 
   /**
-   * Get facilities with queuing and rate limiting
+   * Fetch facility/unit metadata from the OpenElectricity `/facilities`
+   * endpoint. `params` filters the result — this app passes
+   * `status_id: ['operating']` and `fueltech_id: ['coal_black', 'coal_brown']`
+   * to get just the operating coal units (see CapFacDataService).
+   *
+   * The response's `table.getRecords()` yields one record per generating unit,
+   * each carrying its facility's code/name/network/region alongside the unit's
+   * code, fueltech and registered capacity.
    */
   async getFacilities(params: IFacilityParams): Promise<FacilityResponse> {
     const url = '/facilities';
@@ -59,11 +73,17 @@ export class OEClientQueued {
       method: 'GET',
       url,
       onError: (error) => attachRequestDetails(error, { url, method: 'GET' }),
-    });
+    }) as Promise<FacilityResponse>;
   }
 
   /**
-   * Get facility data with queuing and rate limiting
+   * Fetch time-series data for a set of facilities from the OpenElectricity
+   * `/data/facilities/{network}` endpoint. This app requests the `energy`
+   * metric at a `1d` interval for every coal facility in a network, one
+   * calendar year at a time (`dateEnd` is exclusive — see CapFacDataService).
+   *
+   * The returned `ITimeSeriesResponse.datatable` has one row per unit per
+   * interval; a null metric value means "no data", which is distinct from 0.
    */
   async getFacilityData(
     networkCode: NetworkCode,
@@ -101,33 +121,7 @@ export class OEClientQueued {
       url,
       onError: (error) =>
         attachRequestDetails(error, { url, method: 'GET', networkCode, facilityCodes: facilityList }),
-    });
-  }
-
-  /**
-   * Get network data with queuing and rate limiting
-   */
-  async getNetworkData(
-    networkCode: NetworkCode,
-    metrics: DataMetric[],
-    params: INetworkTimeSeriesParams
-  ): Promise<ITimeSeriesResponse> {
-    const url = `/data/network/${networkCode}`;
-    return this.requestQueue.add({
-      execute: () => this.client.getNetworkData(networkCode, metrics, params),
-      priority: 0, // High priority for data requests
-      method: 'GET',
-      url,
-      onError: (error) =>
-        attachRequestDetails(error, { url, method: 'GET', networkCode, metrics, params }),
-    });
-  }
-
-  /**
-   * Get queue statistics
-   */
-  getQueueStats() {
-    return this.requestQueue.getStats();
+    }) as Promise<ITimeSeriesResponse>;
   }
 
   /**

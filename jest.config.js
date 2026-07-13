@@ -1,3 +1,5 @@
+// Shared Jest base config. Not run directly — extended by jest.config.unit.js
+// (npm test) and jest.config.integration.js (npm run test:integration).
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',

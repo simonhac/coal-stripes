@@ -38,7 +38,21 @@ export interface QueueStats {
   activeRequestsWithRetries: Array<{ label: string; retryCount: number }>;
 }
 
-export class RequestQueue<T = any> {
+/**
+ * A general-purpose async request queue used on both sides of the app: the
+ * server wraps its OpenElectricity SDK calls in one (see OEClientQueued), and
+ * the client wraps its fetches to our own /api/capacity-factors route in
+ * another (see YearDataVendor). It provides:
+ *
+ *  - concurrency capping and minimum spacing between requests (rate limiting)
+ *  - deduplication: concurrent adds with the same `label` share one promise
+ *  - retry with exponential backoff, up to `maxRetries`
+ *  - a circuit breaker that fails fast after repeated failures, then resets
+ *  - per-request timeouts and structured lifecycle logging
+ *
+ * Requests are executed in priority order (lower number = higher priority).
+ */
+export class RequestQueue<T = unknown> {
   private queue: QueuedRequest<T>[] = [];
   private active: Map<string, Promise<T>> = new Map();
   private activeRequests: Map<string, QueuedRequest<T>> = new Map();
@@ -225,14 +239,14 @@ export class RequestQueue<T = any> {
 
       const duration = Date.now() - startTime;
 
-      // Log completion
+      // Log completion. No HTTP status here — execute() returns parsed data,
+      // not a response object, so success is all we know.
       this.logger.log({
         timestamp: new Date(),
         eventType: 'COMPLETED',
         requestId: request.id,
         method: request.method || 'GET',
         path: request.url || 'unknown',
-        status: 200, // We don't have actual status without response object
         duration
       });
 
@@ -348,27 +362,6 @@ export class RequestQueue<T = any> {
       queuedLabels,
       activeRequestsWithRetries
     };
-  }
-
-  // Get queued items in order (first item is next to be serviced)
-  public getQueuedItems(): Array<{ id: string; label?: string; priority: number }> {
-    return this.queue.map(item => ({
-      id: item.id,
-      label: item.label,
-      priority: item.priority
-    }));
-  }
-
-  // Get active items
-  public getActiveItems(): Array<{ id: string; label?: string }> {
-    const activeItems: Array<{ id: string; label?: string }> = [];
-    for (const [id, request] of this.activeRequests) {
-      activeItems.push({
-        id,
-        label: request.label
-      });
-    }
-    return activeItems;
   }
 
   // Check if a request with the given URL is in queue or active

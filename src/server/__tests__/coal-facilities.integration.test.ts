@@ -42,7 +42,7 @@ describe('CapFacDataService - Facility Filtering', () => {
     expect(coalFacilities.length).toBeGreaterThan(10); // Should have many facilities
   });
 
-  test('should analyze facility data', async () => {
+  test('should analyse facility data', async () => {
     const coalFacilities = await (service as any).getAllCoalFacilities();
     
     // Group by region

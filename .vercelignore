@@ -1,4 +1,3 @@
-test/
 output/
 *.log
 .env.local

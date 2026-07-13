@@ -8,7 +8,6 @@ module.exports = {
     // Integration tests hit the live server / real API — they run via
     // jest.config.integration.js, not in the fast parallel unit suite.
     '\\.integration\\.test\\.ts$',
-    '\\.performance\\.test\\.ts$',
     '/helpers/'
   ],
   testTimeout: 5000 // 5 seconds for unit tests

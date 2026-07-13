@@ -226,7 +226,7 @@ export default function Home() {
           <DateRange dateRange={targetDateRange} />
         </div>
 
-        {/* Main Stripes Visualization */}
+        {/* Main Stripes Visualisation */}
         <div
           ref={(el) => {
             containerRef.current = el;

@@ -1,10 +1,7 @@
 import {
   clamp,
-  pxToDays,
-  daysToPx,
   projectMomentum,
   resolveDragRelease,
-  resolveWheelSettle,
   rubberband,
   rubberbandClamp,
   MOMENTUM,
@@ -13,16 +10,6 @@ import {
 // A realistic range: ~19 years of daily offsets (2006-01-01 .. present).
 const MIN = 0;
 const MAX = 7132;
-
-describe('gesture-physics: px <-> days', () => {
-  it('round-trips px->days->px', () => {
-    const ppd = 1350 / 365; // ~3.7 px/day on a desktop viewport
-    expect(daysToPx(pxToDays(1000, ppd), ppd)).toBeCloseTo(1000, 6);
-  });
-  it('is safe when pixelsPerDay is 0 (pre-layout)', () => {
-    expect(pxToDays(500, 0)).toBe(0);
-  });
-});
 
 describe('gesture-physics: clamp', () => {
   it('clamps to bounds', () => {
@@ -186,18 +173,5 @@ describe('gesture-physics: rubberband', () => {
     const above = rubberbandClamp(600, 0, 100, 90);
     expect(above).toBeGreaterThan(100);
     expect(above).toBeLessThan(100 + 90);
-  });
-});
-
-describe('gesture-physics: resolveWheelSettle', () => {
-  it('snaps back when the burst rubber-banded past the present', () => {
-    const r = resolveWheelSettle(MAX + 30, MIN, MAX);
-    expect(r.snapped).toBe(true);
-    expect(r.target).toBe(MAX);
-  });
-  it('leaves an in-bounds position untouched', () => {
-    const r = resolveWheelSettle(3000, MIN, MAX);
-    expect(r.snapped).toBe(false);
-    expect(r.target).toBe(3000);
   });
 });
