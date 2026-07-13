@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { useQueries } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { getDaysBetween, getMonthName } from '@/shared/date-utils';
 import { getProportionColorHex } from '@/shared/capacity-factor-color-map';
 import { CapFacYear } from '@/client/cap-fac-year';
-import { yearDataVendor, getRegionNames, YearDataVendor } from '@/client/year-data-vendor';
+import { yearQueryOptions, isValidYear } from '@/client/year-queries';
+import { getRegionNames } from '@/client/cap-fac-stats';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
 
 interface CapFacXAxisProps {
@@ -21,72 +23,33 @@ export function CapFacXAxis({
 }: CapFacXAxisProps) {
   const regionNames = getRegionNames(regionCode);
   const tooltipRegionName = isMobile ? regionNames.short : regionNames.long;
-  const [yearDataMap, setYearDataMap] = useState<Map<number, CapFacYear>>(new Map());
   const [useShortLabels, setUseShortLabels] = useState(false);
   const [hoveredMonth, setHoveredMonth] = useState<{ year: number; month: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const monthRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  useEffect(() => {
-    const startYear = dateRange.start.year;
-    const endYear = dateRange.end.year;
-    
-    // Skip if years are invalid
-    if (!YearDataVendor.isValidYear(startYear) || !YearDataVendor.isValidYear(endYear)) {
-      return;
-    }
-    
-    const years = startYear === endYear ? [startYear] : [startYear, endYear];
-    
-    // Track current request years to ignore stale responses
-    const currentYears = new Set(years);
-    
-    // Clear data for years we no longer need
-    setYearDataMap(prevMap => {
-      const newMap = new Map();
-      for (const [year, data] of prevMap) {
-        if (currentYears.has(year)) {
-          newMap.set(year, data);
-        }
-      }
-      return newMap;
-    });
-    
-    // Fetch year data without waiting
-    years.forEach(year => {
-      try {
-        yearDataVendor.requestYear(year)
-          .then(yearData => {
-            // Ignore if we've moved to different years
-            if (!currentYears.has(year)) {
-              return;
-            }
-            
-            setYearDataMap(prevMap => {
-              const newMap = new Map(prevMap);
-              newMap.set(yearData.year, yearData);
-              return newMap;
-            });
-          })
-          .catch(err => {
-            // Ignore if we've moved to different years
-            if (!currentYears.has(year)) {
-              return;
-            }
-            
-            console.error(`CapFacXAxis: Failed to load year ${year}:`, err);
-          });
-      } catch (error) {
-        // Handle synchronous validation errors
-        console.error(`CapFacXAxis: Invalid year ${year}:`, error);
-      }
-    });
-    
-    // Cleanup function to mark requests as stale
-    return () => {
-      currentYears.clear();
-    };
-  }, [dateRange]);
+  // Subscribe to the year(s) the visible range spans; months without loaded
+  // data render in the "no data" colour until the query resolves.
+  const startYear = dateRange.start.year;
+  const endYear = dateRange.end.year;
+  const [leftResult, rightResult] = useQueries({
+    queries: [
+      {
+        ...yearQueryOptions(startYear),
+        enabled: isValidYear(startYear),
+        notifyOnChangeProps: ['data', 'status'] as const,
+      },
+      {
+        ...yearQueryOptions(endYear),
+        enabled: startYear !== endYear && isValidYear(endYear),
+        notifyOnChangeProps: ['data', 'status'] as const,
+      },
+    ],
+  });
+
+  const yearDataMap = new Map<number, CapFacYear>();
+  if (leftResult.data) yearDataMap.set(startYear, leftResult.data);
+  if (rightResult.data) yearDataMap.set(endYear, rightResult.data);
 
   // Monitor container width to determine label format
   useEffect(() => {

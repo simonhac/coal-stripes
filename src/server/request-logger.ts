@@ -1,8 +1,33 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { LogEntry } from '@/shared/request-queue-logger';
 
-export type { LogEntry };
+export type LogEventType =
+  | 'QUEUED'
+  | 'STARTED'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'RETRY'
+  | 'CIRCUIT_OPEN'
+  | 'CIRCUIT_CLOSED';
+
+export interface LogEntry {
+  timestamp: Date;
+  eventType: LogEventType;
+  requestId?: string;
+  method?: string;
+  path?: string;
+  priority?: number;
+  attempt?: number;
+  maxAttempts?: number;
+  status?: number;
+  duration?: number;
+  size?: string;
+  error?: string;
+  delay?: number;
+  threshold?: number;
+  failures?: number;
+  resetIn?: number;
+}
 
 export class RequestLogger {
   private logDir: string;

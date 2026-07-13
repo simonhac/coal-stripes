@@ -5,14 +5,21 @@ import type {
   IFacilityTimeSeriesParams,
   ITimeSeriesResponse,
 } from 'openelectricity';
-import { RequestQueue } from '@/shared/request-queue';
-import { SERVER_REQUEST_QUEUE_CONFIG } from '@/shared/config';
-import { FileRequestQueueLogger } from './file-request-queue-logger';
+import PQueue from 'p-queue';
+import pRetry from 'p-retry';
+import { getRequestLogger } from './request-logger';
 
 // Types the package declares but does not re-export from its root — derive them
 // structurally from the client so they stay in sync with the installed version.
 type FacilityResponse = Awaited<ReturnType<OpenElectricityClient['getFacilities']>>;
 type IFacilityParams = NonNullable<Parameters<OpenElectricityClient['getFacilities']>[0]>;
+
+// OpenElectricity rate-limit protection: at most 10 requests in flight, no two
+// request starts within 100ms of each other.
+const QUEUE_OPTIONS = { concurrency: 10, interval: 100, intervalCap: 1 } as const;
+
+// 4 retries with exponential backoff: 1s, 2s, 4s, 8s (capped at 30s).
+const RETRY_OPTIONS = { retries: 4, minTimeout: 1_000, maxTimeout: 30_000 } as const;
 
 /** Details we attach to a thrown error so the API route can surface them. */
 export interface OERequestDetails {
@@ -33,8 +40,8 @@ function attachRequestDetails(error: unknown, details: OERequestDetails): void {
 
 /**
  * Wrapper around the official OpenElectricity SDK client that adds request
- * queuing, rate limiting, retry with backoff, and a circuit breaker (all
- * provided by RequestQueue — see @/shared/request-queue).
+ * queuing with rate limiting (p-queue) and retry with exponential backoff
+ * (p-retry).
  *
  * The SDK (`openelectricity` on npm) talks to https://api.openelectricity.org.au
  * and needs only an API key. This wrapper exists because the app fans out one
@@ -44,14 +51,63 @@ function attachRequestDetails(error: unknown, details: OERequestDetails): void {
 export class OEClientQueued {
   private client: OpenElectricityClient;
   // One queue shared by both endpoints, so their requests are rate-limited
-  // together; each method casts add()'s result back to its execute() type.
-  private requestQueue: RequestQueue<FacilityResponse | ITimeSeriesResponse>;
+  // together.
+  private queue = new PQueue(QUEUE_OPTIONS);
 
   constructor(apiKey: string) {
     this.client = new OpenElectricityClient({ apiKey });
-    this.requestQueue = new RequestQueue(
-      SERVER_REQUEST_QUEUE_CONFIG,
-      new FileRequestQueueLogger()
+  }
+
+  /**
+   * Run a request through the queue with retries. Each retry attempt re-enters
+   * the queue, so backoff waits don't hold a concurrency slot and retries are
+   * rate-limited like any other request.
+   */
+  private run<T>(details: OERequestDetails, execute: () => Promise<T>): Promise<T> {
+    const logger = getRequestLogger();
+    const requestId = logger.getNextRequestId();
+    const startTime = performance.now();
+
+    return pRetry(() => this.queue.add(execute) as Promise<T>, {
+      ...RETRY_OPTIONS,
+      onFailedAttempt: ({ error, attemptNumber, retryDelay }) => {
+        logger.log({
+          timestamp: new Date(),
+          eventType: 'RETRY',
+          requestId,
+          method: details.method,
+          path: details.url,
+          attempt: attemptNumber,
+          maxAttempts: RETRY_OPTIONS.retries + 1,
+          delay: retryDelay,
+          error: error.message,
+        });
+      },
+    }).then(
+      (result) => {
+        logger.log({
+          timestamp: new Date(),
+          eventType: 'COMPLETED',
+          requestId,
+          method: details.method,
+          path: details.url,
+          duration: Math.round(performance.now() - startTime),
+        });
+        return result;
+      },
+      (error: unknown) => {
+        logger.log({
+          timestamp: new Date(),
+          eventType: 'FAILED',
+          requestId,
+          method: details.method,
+          path: details.url,
+          duration: Math.round(performance.now() - startTime),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        attachRequestDetails(error, details);
+        throw error;
+      }
     );
   }
 
@@ -66,14 +122,9 @@ export class OEClientQueued {
    * code, fueltech and registered capacity.
    */
   async getFacilities(params: IFacilityParams): Promise<FacilityResponse> {
-    const url = '/facilities';
-    return this.requestQueue.add({
-      execute: () => this.client.getFacilities(params),
-      priority: 1, // Medium priority
-      method: 'GET',
-      url,
-      onError: (error) => attachRequestDetails(error, { url, method: 'GET' }),
-    }) as Promise<FacilityResponse>;
+    return this.run({ url: '/facilities', method: 'GET' }, () =>
+      this.client.getFacilities(params)
+    );
   }
 
   /**
@@ -114,20 +165,15 @@ export class OEClientQueued {
 
     const url = `/data/facilities/${networkCode}?${queryParams.toString()}`;
 
-    return this.requestQueue.add({
-      execute: () => this.client.getFacilityData(networkCode, facilityCodes, metrics, params),
-      priority: 0, // High priority for data requests
-      method: 'GET',
-      url,
-      onError: (error) =>
-        attachRequestDetails(error, { url, method: 'GET', networkCode, facilityCodes: facilityList }),
-    }) as Promise<ITimeSeriesResponse>;
+    return this.run({ url, method: 'GET', networkCode, facilityCodes: facilityList }, () =>
+      this.client.getFacilityData(networkCode, facilityCodes, metrics, params)
+    );
   }
 
   /**
-   * Clear all pending requests
+   * Drop any queued (not yet started) requests.
    */
   clearQueue() {
-    this.requestQueue.clear();
+    this.queue.clear();
   }
 }

@@ -16,11 +16,12 @@
  * shimmer; a year outside the available range renders as the pale blue
  * "no data" colour.
  */
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useCallback, useMemo } from 'react';
+import { useQueries } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { FacilityYearTile } from '@/client/facility-year-tile';
 import { getDayIndex, isLeapYear, getDaysBetween } from '@/shared/date-utils';
-import { yearDataVendor } from '@/client/year-data-vendor';
+import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { perfMonitor } from '@/shared/performance-monitor';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
 import { featureFlags } from '@/shared/feature-flags';
@@ -44,8 +45,8 @@ function getDaysInYear(year: number): number {
   return isLeapYear(year) ? 366 : 365;
 }
 
-const CompositeTileComponent = ({ 
-  endDate, 
+const CompositeTileComponent = ({
+  endDate,
   facilityCode,
   facilityName,
   regionCode: _regionCode,
@@ -53,19 +54,6 @@ const CompositeTileComponent = ({
   minCanvasHeight = 20
 }: CompositeTileProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  
-  // Store both tiles in a single state to ensure atomic updates
-  const [tiles, setTiles] = useState<{
-    left: FacilityYearTile | null;
-    right: FacilityYearTile | null;
-    leftState: TileState;
-    rightState: TileState;
-  }>({
-    left: null,
-    right: null,
-    leftState: 'idle',
-    rightState: 'idle'
-  });
   const lastKnownHeightRef = useRef<number>(12); // Default height
   const animationFrameRef = useRef<number | null>(null);
   const lastRenderedRangeRef = useRef<string>('');
@@ -89,86 +77,64 @@ const CompositeTileComponent = ({
   // Calculate which tiles we need synchronously
   const startYear = dateRange.start.year;
   const endYear = dateRange.end.year;
-  
-  // Determine what tiles we need based on current date range
-  const neededTiles = {
-    leftYear: startYear,
-    rightYear: startYear !== endYear ? endYear : null
-  };
-  
-  // Get tiles from cache synchronously
-  const getTilesForDateRange = () => {
-    const newTiles = { ...tiles };
-    let needsUpdate = false;
-    
-    // Check left tile
-    if (!tiles.left || tiles.left.getYear() !== neededTiles.leftYear) {
-      try {
-        const cachedLeftYear = yearDataVendor.getYearSync(neededTiles.leftYear);
-        if (cachedLeftYear) {
-          // If year is cached, tile MUST exist - use non-null assertion
-          const cachedLeftTile = cachedLeftYear.facilityTiles.get(facilityCode)!;
-          newTiles.left = cachedLeftTile;
-          newTiles.leftState = 'hasData';
-          needsUpdate = true;
-        } else {
-          // Year not in cache yet
-          newTiles.left = null;
-          newTiles.leftState = 'pendingData';
-          needsUpdate = true;
-        }
-      } catch {
-        // Year is out of bounds - no data available
-        newTiles.left = null;
-        newTiles.leftState = 'error';
-        needsUpdate = true;
-      }
-    }
-    
-    // Check right tile
-    if (neededTiles.rightYear) {
-      if (!tiles.right || tiles.right.getYear() !== neededTiles.rightYear) {
-        try {
-          const cachedRightYear = yearDataVendor.getYearSync(neededTiles.rightYear);
-          if (cachedRightYear) {
-            // If year is cached, tile MUST exist - use non-null assertion
-            const cachedRightTile = cachedRightYear.facilityTiles.get(facilityCode)!;
-            newTiles.right = cachedRightTile;
-            newTiles.rightState = 'hasData';
-            needsUpdate = true;
-          } else {
-            // Year not in cache yet
-            newTiles.right = null;
-            newTiles.rightState = 'pendingData';
-            needsUpdate = true;
-          }
-        } catch {
-          // Year is out of bounds - no data available
-          newTiles.right = null;
-          newTiles.rightState = 'error';
-          needsUpdate = true;
-        }
-      } else if (tiles.right && tiles.rightState !== 'hasData') {
-        // We already have the correct right tile but state is wrong
-        newTiles.rightState = 'hasData';
-        needsUpdate = true;
-      }
-    } else {
-      // Single year - no right tile needed
-      if (tiles.rightState !== 'idle') {
-        newTiles.rightState = 'idle';
-        needsUpdate = true;
-      }
-    }
-    
-    return { newTiles, needsUpdate };
-  };
-  
-  // Update tiles if needed
-  const { newTiles, needsUpdate } = getTilesForDateRange();
-  if (needsUpdate && JSON.stringify(newTiles) !== JSON.stringify(tiles)) {
-    setTiles(newTiles);
-  }
+  const rightNeeded = startYear !== endYear;
+  const leftValid = isValidYear(startYear);
+  const rightValid = isValidYear(endYear);
+
+  // Subscribe to the year queries. A cached year resolves synchronously on
+  // render (so the tile appears on the first frame it's needed); an uncached
+  // year triggers a fetch and reports isPending, which drives the shimmer.
+  // notifyOnChangeProps keeps background refetch bookkeeping (fetchStatus)
+  // from re-rendering every facility row.
+  const [leftResult, rightResult] = useQueries({
+    queries: [
+      {
+        ...yearQueryOptions(startYear),
+        enabled: leftValid,
+        notifyOnChangeProps: ['data', 'status'] as const,
+      },
+      {
+        ...yearQueryOptions(endYear),
+        enabled: rightNeeded && rightValid,
+        notifyOnChangeProps: ['data', 'status'] as const,
+      },
+    ],
+  });
+
+  // Map query results onto the tile states the render logic consumes:
+  // out-of-bounds years and fetch failures render as 'error' (pale blue),
+  // in-flight years as 'pendingData' (shimmer). Memoised on the stable
+  // data/isError fields — useQueries returns fresh result objects each
+  // render, and this component re-renders every frame during gestures.
+  const leftData = leftResult.data;
+  const leftIsError = leftResult.isError;
+  const rightData = rightResult.data;
+  const rightIsError = rightResult.isError;
+
+  const tiles = useMemo(() => {
+    const resolve = (
+      valid: boolean,
+      data: { facilityTiles: Map<string, FacilityYearTile> } | undefined,
+      isError: boolean
+    ): { tile: FacilityYearTile | null; state: TileState } => {
+      if (!valid || isError) return { tile: null, state: 'error' };
+      if (!data) return { tile: null, state: 'pendingData' };
+      const tile = data.facilityTiles.get(facilityCode);
+      return tile ? { tile, state: 'hasData' } : { tile: null, state: 'error' };
+    };
+
+    const left = resolve(leftValid, leftData, leftIsError);
+    const right = rightNeeded
+      ? resolve(rightValid, rightData, rightIsError)
+      : { tile: null, state: 'idle' as TileState };
+
+    return {
+      left: left.tile,
+      right: right.tile,
+      leftState: left.state,
+      rightState: right.state,
+    };
+  }, [facilityCode, leftValid, rightValid, rightNeeded, leftData, leftIsError, rightData, rightIsError]);
 
   const drawErrorState = (ctx: CanvasRenderingContext2D, left: number, width: number, height: number) => {
     // Use light blue color to indicate unavailable data
@@ -275,101 +241,6 @@ const CompositeTileComponent = ({
       console.error(`Error in CompositeTile updateTooltip for ${facilityCode}:`, error);
     }
   }, [dateRange, tiles, facilityName, facilityCode]);
-
-  // Handle async loading of tiles that aren't in cache
-  useEffect(() => {
-    const startYear = dateRange.start.year;
-    const endYear = dateRange.end.year;
-    
-    // Track current request years to ignore stale responses
-    let currentStartYear = startYear;
-    let currentEndYear = endYear;
-    
-    // Check if we need to load any data asynchronously
-    const needsAsyncLeftLoad = tiles.leftState === 'pendingData' && startYear === neededTiles.leftYear;
-    const needsAsyncRightLoad = tiles.rightState === 'pendingData' && neededTiles.rightYear && endYear === neededTiles.rightYear;
-    
-    // Load left tile only if not found in cache
-    if (needsAsyncLeftLoad) {
-      try {
-        yearDataVendor.requestYear(startYear)
-          .then(leftYearData => {
-          // Ignore if we've moved to a different year
-          if (currentStartYear !== startYear) {
-            return;
-          }
-          
-          const leftFacilityTile = leftYearData.facilityTiles.get(facilityCode);
-          if (leftFacilityTile) {
-            setTiles(prev => ({
-              ...prev,
-              left: leftFacilityTile,
-              leftState: 'hasData'
-            }));
-          } else {
-            setTiles(prev => ({ ...prev, leftState: 'error' }));
-          }
-        })
-        .catch(error => {
-          // Ignore if we've moved to a different year
-          if (currentStartYear !== startYear) {
-            return;
-          }
-          
-          console.error(`Failed to load year ${startYear}:`, error);
-          setTiles(prev => ({ ...prev, leftState: 'error' }));
-        });
-      } catch (error) {
-        // Handle synchronous validation errors
-        console.error(`Invalid year ${startYear}:`, error);
-        setTiles(prev => ({ ...prev, leftState: 'error' }));
-      }
-    }
-
-    // Load right tile only if not found in cache and we're spanning two years
-    if (needsAsyncRightLoad) {
-      try {
-        yearDataVendor.requestYear(endYear)
-          .then(rightYearData => {
-          // Ignore if we've moved to different years
-          if (currentStartYear !== startYear || currentEndYear !== endYear) {
-            return;
-          }
-          
-          const rightFacilityTile = rightYearData.facilityTiles.get(facilityCode);
-          if (rightFacilityTile) {
-            setTiles(prev => ({
-              ...prev,
-              right: rightFacilityTile,
-              rightState: 'hasData'
-            }));
-          } else {
-            setTiles(prev => ({ ...prev, rightState: 'error' }));
-          }
-        })
-        .catch(error => {
-          // Ignore if we've moved to different years
-          if (currentStartYear !== startYear || currentEndYear !== endYear) {
-            return;
-          }
-          
-          console.error(`Failed to load year ${endYear}:`, error);
-          setTiles(prev => ({ ...prev, rightState: 'error' }));
-        });
-      } catch (error) {
-        // Handle synchronous validation errors
-        console.error(`Invalid year ${endYear}:`, error);
-        setTiles(prev => ({ ...prev, rightState: 'error' }));
-      }
-    }
-    
-    // Cleanup function to mark requests as stale
-    return () => {
-      currentStartYear = -1;
-      currentEndYear = -1;
-    };
-    // Only reload tiles when pending states change
-  }, [facilityCode, dateRange.start.year, dateRange.end.year, tiles.leftState, tiles.rightState, tiles.left, neededTiles.leftYear, neededTiles.rightYear]);
 
   useEffect(() => {
     const rangeKey = `${dateRange.start.toString()}-${dateRange.end.toString()}`;
