@@ -101,17 +101,15 @@ export class LRUCache<T> {
    * Get cache statistics
    */
   getStats(): CacheStats {
+    // Labels in access order: oldest (least recently used) first, newest last.
     const labels: string[] = [];
-    
-    // Collect labels in reverse access order (most recent first)
-    for (let i = this.accessOrder.length - 1; i >= 0; i--) {
-      const key = this.accessOrder[i];
+    for (const key of this.accessOrder) {
       const item = this.cache.get(key);
       if (item) {
         labels.push(item.label);
       }
     }
-    
+
     return {
       numItems: this.cache.size,
       totalKB: this.totalBytes / 1024,

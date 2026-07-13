@@ -161,7 +161,12 @@ export class RequestQueue<T = any> {
         await this.sleep(waitTime);
       }
 
-      const request = this.queue.shift()!;
+      // The queue may have been drained (e.g. by clear()) while we awaited the
+      // rate-limit delay above, so shift() can legitimately return undefined.
+      const request = this.queue.shift();
+      if (!request) {
+        break;
+      }
       this.processRequest(request);
       this.lastRequestTime = Date.now();
     }

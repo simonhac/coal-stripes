@@ -1,4 +1,4 @@
-import { fromDate, toZoned, CalendarDate, parseDate, today } from '@internationalized/date';
+import { fromDate, toZoned, toCalendarDate, CalendarDate, parseDate, today } from '@internationalized/date';
 
 /**
  * Calculate the number of days between two CalendarDate objects
@@ -103,44 +103,36 @@ export function isLeapYear(year: number): boolean {
 }
 
 /**
- * Parse a date string from AEST time format
- * Accepts three formats:
- * 1. "YYYY-MM-DD" - plain date format
- * 2. "YYYY-MM-DDTHH:mm:ss+10:00" - full AEST datetime format
- * 3. "YYYY-MM-DDTHH:mm:ss.sssZ" or "YYYY-MM-DDTHH:mm:ssZ" - UTC format (converts to Brisbane time)
- * 
- * @param dateStr The date string to parse
- * @returns CalendarDate object
- * @throws Error if the string doesn't match one of the expected formats
+ * IANA timezone for each electricity network's local "market" time. Both zones
+ * are deliberately daylight-saving-free: the NEM settles in AEST (UTC+10) all
+ * year, and the WEM in AWST (UTC+8). Using Brisbane / Perth (rather than a raw
+ * offset) keeps this expressed in the same @internationalized/date vocabulary
+ * as the rest of the codebase — see getTodayAEST().
  */
-export function parseAESTDateString(dateStr: string): CalendarDate {
-  // Check for plain date format: YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-    return parseDate(dateStr);
-  }
-  
-  // Check for AEST datetime format: YYYY-MM-DDTHH:mm:ss+10:00
-  const aestMatch = dateStr.match(/^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}\+10:00$/);
-  if (aestMatch) {
-    return parseDate(aestMatch[1]);
-  }
-  
-  // Check for UTC format: YYYY-MM-DDTHH:mm:ss.sssZ or YYYY-MM-DDTHH:mm:ssZ
-  const utcMatch = dateStr.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):\d{2}(?:\.\d{3})?Z$/);
-  if (utcMatch) {
-    const datePart = utcMatch[1];
-    const hour = parseInt(utcMatch[2], 10);
-    
-    // UTC times from 14:00 onwards are the next day in Brisbane (UTC+10)
-    // 14:00 UTC = 00:00 Brisbane next day
-    const date = parseDate(datePart);
-    return hour >= 14 ? date.add({ days: 1 }) : date;
-  }
-  
-  // None of the formats matched
-  throw new Error(
-    `Invalid date format: "${dateStr}". Expected either "YYYY-MM-DD", "YYYY-MM-DDTHH:mm:ss+10:00", or "YYYY-MM-DDTHH:mm:ss[.sss]Z"`
-  );
+const NETWORK_TIME_ZONE: Record<string, string> = {
+  NEM: 'Australia/Brisbane', // UTC+10, no daylight saving
+  WEM: 'Australia/Perth', // UTC+08, no daylight saving
+  AU: 'Australia/Brisbane',
+};
+
+/**
+ * Resolve an OpenElectricity daily-interval instant to the calendar day it
+ * represents in its network's local time.
+ *
+ * The API labels each daily bucket with the instant of network-local midnight
+ * (e.g. NEM 2024-06-01 arrives as 2024-05-31T14:00:00Z — i.e. 00:00 AEST). We
+ * convert that instant back into the network's own timezone and take the date,
+ * so NEM and WEM are each bucketed against their own local day with no offset
+ * guesswork. The OpenElectricity client returns these instants in a
+ * machine-timezone-independent way, so this is stable wherever it runs.
+ *
+ * @param interval The interval timestamp returned by the API (a Date)
+ * @param network  The network the data belongs to ("NEM", "WEM", …)
+ * @returns The network-local calendar day
+ */
+export function networkDayFromInterval(interval: Date, network: string): CalendarDate {
+  const zone = NETWORK_TIME_ZONE[network] ?? NETWORK_TIME_ZONE.NEM;
+  return toCalendarDate(fromDate(interval, zone));
 }
 
 /**

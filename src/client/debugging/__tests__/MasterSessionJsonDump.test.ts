@@ -3,6 +3,7 @@
  */
 
 import { SessionManager } from '../SessionManager';
+import { MasterSession } from '../MasterSession';
 import { SessionType } from '../types';
 
 describe('MasterSession JSON Dump', () => {
@@ -15,31 +16,16 @@ describe('MasterSession JSON Dump', () => {
     (SessionManager as any).instance = undefined;
     manager = SessionManager.getInstance();
     jest.useFakeTimers();
-    
-    // Spy on console.log to capture the JSON dump
-    consoleSpy = jest.spyOn(console, 'log').mockImplementation((message: string, ...args: any[]) => {
-      // Capture JSON dump when it's logged
-      if (message.includes('MasterSession') && message.includes('Data Dump')) {
-        // The next console.log call should be the JSON
-        const nextCall = consoleSpy.mock.calls[consoleSpy.mock.calls.length];
-        if (nextCall && typeof nextCall[0] === 'string') {
-          try {
-            jsonDump = JSON.parse(nextCall[0]);
-          } catch (e) {
-            // Not JSON, keep looking
-          }
-        }
-      } else if (consoleSpy.mock.calls.length > 0) {
-        // Check if this is the JSON dump
-        try {
-          const parsed = JSON.parse(message);
-          if (parsed.masterSessionId !== undefined) {
-            jsonDump = parsed;
-          }
-        } catch (e) {
-          // Not JSON
-        }
-      }
+    jsonDump = undefined;
+
+    // Silence the debug logging.
+    consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    // In production the dump is POSTed to the dashboard, but that path is gated
+    // on a browser environment + feature flag and doesn't run under the node
+    // test env. Capture the dump structure directly when the MasterSession ends.
+    jest.spyOn(MasterSession.prototype, 'end').mockImplementation(function (this: MasterSession) {
+      jsonDump = this.toJSON();
     });
   });
 
@@ -53,7 +39,7 @@ describe('MasterSession JSON Dump', () => {
     }
     jest.clearAllTimers();
     jest.useRealTimers();
-    consoleSpy.mockRestore();
+    jest.restoreAllMocks();
   });
 
   describe('JSON structure', () => {

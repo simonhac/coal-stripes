@@ -116,18 +116,18 @@ describe('Capacity Factors API HTTP Integration Tests', () => {
       expect(time2).toBeLessThan(time1 / 2);
     }, 30000);
 
-    test('should cache previous year requests for 1 week', async () => {
+    test('should cache previous years as immutable (historical data never changes)', async () => {
       const previousYear = getTodayAEST().year - 1;
-      
+
       // First request
       const start1 = Date.now();
       const response1 = await fetch(`${BASE_URL}?year=${previousYear}`);
       const time1 = Date.now() - start1;
       const data1 = await response1.json();
-      
+
       expect(response1.status).toBe(200);
       expect(response1.headers.get('Cache-Control')).toBe(
-        'public, max-age=604800, s-maxage=604800, stale-while-revalidate=2592000'
+        'public, max-age=31536000, s-maxage=31536000, stale-while-revalidate=31536000, immutable'
       );
       
       console.log(`Previous year first request: ${time1}ms`);

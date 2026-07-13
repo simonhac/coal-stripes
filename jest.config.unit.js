@@ -5,10 +5,9 @@ module.exports = {
   displayName: 'Unit Tests',
   testPathIgnorePatterns: [
     '/node_modules/',
-    'coal-facilities\\.test\\.ts$',
-    'real-api-year\\.integration\\.test\\.ts$',
-    'future-dates-null\\.integration\\.test\\.ts$',
-    'unit-sorting\\.integration\\.test\\.ts$',
+    // Integration tests hit the live server / real API — they run via
+    // jest.config.integration.js, not in the fast parallel unit suite.
+    '\\.integration\\.test\\.ts$',
     '\\.performance\\.test\\.ts$',
     '/helpers/'
   ],
