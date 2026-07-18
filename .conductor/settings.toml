@@ -1,6 +1,7 @@
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 
-# Local Conductor config for coal-stripes (Next.js + npm).
+# Shared Conductor config for coal-stripes (Next.js + npm), applied to every
+# workspace once merged to the default branch.
 # Setup and run are thin wrappers around env/setup.ts and env/run.ts (run via tsx).
 
 [scripts]
