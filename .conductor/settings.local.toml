@@ -4,8 +4,9 @@
 # Setup and run are thin wrappers around env/setup.ts and env/run.ts (run via tsx).
 
 [scripts]
-# Runs once when a workspace is created: npm install + Vercel link + pull the
-# development env (OPENELECTRICITY_API_KEY) into .env.local so the app can load data.
+# Runs once when a workspace is created: npm install + Vercel link (deploys only)
+# + `op inject` .env.local from .env.tpl (1Password coal-stripes-dev vault, via
+# the Keychain SA token op-sa-coal-stripes-dev).
 setup = "npx tsx env/setup.ts"
 
 # Each workspace gets its own CONDUCTOR_PORT, so multiple can run at once.
