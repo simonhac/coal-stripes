@@ -38,6 +38,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# conductor: shared config is .conductor/settings.toml (committed);
+# per-machine overrides stay local
+.conductor/settings.local.toml
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

@@ -250,7 +250,6 @@ export default function Home() {
           data-offset={Math.round(currentOffset)}
           data-max-offset={maxOffset}
           className="opennem-stripes-viz"
-          style={{ touchAction: 'none' }}
           {...bind()}
         >
           {/* Create a section for each region */}
