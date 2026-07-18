@@ -10,6 +10,10 @@ import { test, expect, Page } from '@playwright/test';
 const VIZ = '[data-testid="stripes-viz"]';
 
 async function loadApp(page: Page) {
+  // The welcome dialog auto-opens on a first visit as a full-viewport blocking
+  // scrim that would intercept the pointer/wheel gestures under test. Mark it
+  // seen before the app mounts so the viz stays interactable.
+  await page.addInitScript(() => localStorage.setItem('welcome-dialog-seen', '1'));
   await page.goto('/');
   await page.locator(VIZ).waitFor({ state: 'visible', timeout: 60_000 });
   await page.locator('canvas').first().waitFor({ timeout: 60_000 });

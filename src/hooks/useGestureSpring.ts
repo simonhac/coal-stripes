@@ -57,6 +57,8 @@ export function useGestureSpring({
   const lastEmittedRef = useRef<number | null>(null);
   const lastDraggingRef = useRef(false);
   const settleTargetPxRef = useRef<number | null>(null); // exact final px for a settling animation
+  const pendingWheelRef = useRef<{ p: number; dragging: boolean } | null>(null); // latest wheel emit awaiting its frame
+  const wheelRafRef = useRef<number | null>(null); // rAF id coalescing the active wheel emits
 
   const getPixelsPerDay = useCallback(() => {
     const el = elementRef.current;
@@ -73,6 +75,35 @@ export function useGestureSpring({
     lastEmittedRef.current = days;
     lastDraggingRef.current = dragging;
     onOffsetChangeRef.current(days, dragging);
+  }, []);
+
+  // Coalesce the high-frequency active-wheel emits to at most one parent update
+  // per animation frame. The OS inertial wheel tail fires events faster than
+  // React can commit; emitting synchronously on each re-renders the whole tree
+  // per event and trips React's max-update-depth guard, freezing the tab.
+  // Stashing the latest value and flushing once per rAF caps re-renders at ~60/s
+  // while keeping the pan visually smooth. (Drag stays synchronous — pointer
+  // moves are already coalesced to ~1/frame by the browser.)
+  const scheduleEmit = useCallback((p: number, dragging: boolean) => {
+    pendingWheelRef.current = { p, dragging };
+    if (wheelRafRef.current !== null) return; // a frame is already queued
+    wheelRafRef.current = requestAnimationFrame(() => {
+      wheelRafRef.current = null;
+      const pending = pendingWheelRef.current;
+      if (!pending) return;
+      pendingWheelRef.current = null;
+      emit(pending.p, pending.dragging);
+    });
+  }, [emit]);
+
+  // Drop any queued frame without flushing — call at every phase boundary so a
+  // stale wheel value can never land after the gesture/animation has moved on.
+  const cancelScheduledEmit = useCallback(() => {
+    if (wheelRafRef.current !== null) {
+      cancelAnimationFrame(wheelRafRef.current);
+      wheelRafRef.current = null;
+    }
+    pendingWheelRef.current = null;
   }, []);
 
   // ── One persistent spring holding p (pixels) ────────────────────────────────
@@ -122,6 +153,7 @@ export function useGestureSpring({
       if (first) {
         phaseRef.current = 'drag';
         api.stop(); // cancel any running decay/spring/navigate before we take over
+        cancelScheduledEmit(); // drop any coalesced wheel frame so it can't land mid-drag
       }
 
       if (active) {
@@ -133,6 +165,11 @@ export function useGestureSpring({
       // ── Release ──
       if (tap) {
         // A tap (e.g. clicking a month label) — don't move; let the click through.
+        // Still land isDragging=false: the pointer-down active emit set it true,
+        // and without this a tap strands isDragging=true and disables keyboard
+        // nav until the next gesture. The day-quantised dedupe makes it a no-op
+        // when no true was emitted (same day, dragging already false).
+        emit(lastActivePRef.current, false);
         phaseRef.current = 'idle';
         return;
       }
@@ -189,6 +226,7 @@ export function useGestureSpring({
       if (first) {
         phaseRef.current = 'wheel';
         api.stop();
+        cancelScheduledEmit(); // drop any coalesced frame left by a prior gesture
         ppdRef.current = getPixelsPerDay();
         wheelRawPxRef.current = currentOffsetRef.current * ppdRef.current;
       }
@@ -202,17 +240,25 @@ export function useGestureSpring({
       // Elastic resistance past the ends (into the display slop), snapping back on rest.
       const displayPx = rubberbandClamp(wheelRawPxRef.current, 0, maxP, WHEEL_STRETCH_DAYS * ppd);
       lastActivePRef.current = displayPx;
-      emit(displayPx, false);
 
-      if (last) {
-        if (wheelRawPxRef.current < 0 || wheelRawPxRef.current > maxP) {
-          phaseRef.current = 'spring';
-          const target = wheelRawPxRef.current < 0 ? 0 : maxP;
-          settleTargetPxRef.current = target;
-          api.start({ from: { x: displayPx }, to: { x: target }, config: SPRING_BACK });
-        } else {
-          phaseRef.current = 'idle';
-        }
+      if (!last) {
+        // Active pan: coalesce to ≤1 parent update per frame (the freeze fix).
+        scheduleEmit(displayPx, false);
+        return;
+      }
+
+      // ── End of the wheel burst ── drop the queued frame and land the final
+      // resting position (and isDragging=false) synchronously, so keyboard nav
+      // re-enables and the window never settles a frame short.
+      cancelScheduledEmit();
+      emit(displayPx, false);
+      if (wheelRawPxRef.current < 0 || wheelRawPxRef.current > maxP) {
+        phaseRef.current = 'spring';
+        const target = wheelRawPxRef.current < 0 ? 0 : maxP;
+        settleTargetPxRef.current = target;
+        api.start({ from: { x: displayPx }, to: { x: target }, config: SPRING_BACK });
+      } else {
+        phaseRef.current = 'idle';
       }
     },
     { axis: 'x' }
@@ -226,6 +272,7 @@ export function useGestureSpring({
   const navigateToOffset = useCallback(
     (target: number) => {
       api.stop();
+      cancelScheduledEmit(); // a queued wheel frame must not clobber the nav target
       ppdRef.current = getPixelsPerDay();
       const ppd = ppdRef.current;
       const clamped = Math.max(0, Math.min(maxOffsetRef.current, target));
@@ -242,7 +289,7 @@ export function useGestureSpring({
         config: NAV_SPRING,
       });
     },
-    [api, getPixelsPerDay]
+    [api, getPixelsPerDay, cancelScheduledEmit]
   );
 
   // Block the browser's back/forward history-swipe on horizontal trackpad/wheel over
@@ -261,6 +308,9 @@ export function useGestureSpring({
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
   }, []);
+
+  // Cancel any queued wheel-emit frame on unmount.
+  useEffect(() => cancelScheduledEmit, [cancelScheduledEmit]);
 
   return { bind, elementRef, navigateToOffset };
 }
