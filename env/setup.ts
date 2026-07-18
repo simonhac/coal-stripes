@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S npx tsx
 /**
  * Conductor workspace SETUP — runs once when a workspace is created
  * (wired in .conductor/settings.local.toml as `npx tsx env/setup.ts`).

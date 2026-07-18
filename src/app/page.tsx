@@ -15,6 +15,10 @@ import { getRegionNames } from '@/client/cap-fac-stats';
 import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
 import { useGestureSpring } from '@/hooks/useGestureSpring';
 import { usePrefetchAdjacentYears } from '@/hooks/usePrefetchAdjacentYears';
+import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities';
+import { hasSeenWelcome, markWelcomeSeen } from '@/shared/welcome-state';
+import { WelcomeDialog } from '../components/WelcomeDialog';
+import { ShortcutsDialog } from '../components/ShortcutsDialog';
 import './opennem.css';
 
 export default function Home() {
@@ -27,6 +31,20 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Onboarding / help dialogs
+  const capabilities = useDeviceCapabilities();
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Mutually exclusive: opening one closes the other, so at most one is open.
+  const openWelcome = useCallback(() => {
+    setShortcutsOpen(false);
+    setWelcomeOpen(true);
+  }, []);
+  const openShortcuts = useCallback(() => {
+    setWelcomeOpen(false);
+    setShortcutsOpen(true);
+  }, []);
 
   // Calculate animated date range from animatedEndDate
   const animatedDateRange = animatedEndDate ? {
@@ -66,10 +84,13 @@ export default function Home() {
   }, [boundaries, navigateToOffset]);
 
   // Keyboard navigation drives the same spring via navigateToDate.
+  // Disabled while a dialog is open so arrows/Home/t/s don't scrub the timeline
+  // behind the modal.
   const { navigateToMonth } = useKeyboardNavigation({
     currentEndDate: endDate,
     navigateToDate,
     isDragging,
+    disabled: welcomeOpen || shortcutsOpen,
   });
   const handleMonthClick = navigateToMonth;
 
@@ -202,6 +223,40 @@ export default function Home() {
     };
   }, []);
 
+  // Show the welcome dialog on a visitor's first arrival (once, via localStorage).
+  useEffect(() => {
+    if (!hasSeenWelcome()) {
+      setWelcomeOpen(true);
+      markWelcomeSeen(); // record on open so a mid-dialog reload won't re-nag
+    }
+  }, []);
+
+  // Global hotkeys: 'a' toggles the welcome dialog, '?' toggles shortcuts.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle if user is typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      // Ignore chords so we don't clobber ⌘A / Ctrl+A etc.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        if (welcomeOpen) setWelcomeOpen(false);
+        else openWelcome();
+      } else if (e.key === '?' && capabilities.hasKeyboard) {
+        // '?' is typically Shift+/, so match the produced character.
+        e.preventDefault();
+        if (shortcutsOpen) setShortcutsOpen(false);
+        else openShortcuts();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [welcomeOpen, shortcutsOpen, capabilities.hasKeyboard, openWelcome, openShortcuts]);
+
 
   if (loading) {
     return (
@@ -232,7 +287,7 @@ export default function Home() {
       <PerformanceDisplay />
 
       {/* Header */}
-      <OpenElectricityHeader />
+      <OpenElectricityHeader onOpenHelp={openWelcome} />
 
       {/* Date Range Header */}
       <div className="opennem-stripes-container">
@@ -271,6 +326,19 @@ export default function Home() {
           <div style={{ height: '50px', clear: 'both' }} />
         </div>
       </div>
+
+      {/* Onboarding / help dialogs */}
+      <WelcomeDialog
+        isOpen={welcomeOpen}
+        onClose={() => setWelcomeOpen(false)}
+        capabilities={capabilities}
+        onOpenShortcuts={openShortcuts}
+      />
+      <ShortcutsDialog
+        isOpen={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+        capabilities={capabilities}
+      />
     </>
   );
 }

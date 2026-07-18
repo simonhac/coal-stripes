@@ -26,6 +26,9 @@
   /* Other */
   --header-hover-radius: 4px;
   --border-style: 1px dotted #cdcdcd;
+
+  /* Layering — above the fixed header (z-50) and the perf panel (10000) */
+  --z-modal: 11000;
 }
 
 /* Base styles */
@@ -612,6 +615,18 @@ header a {
   flex-shrink: 0;
 }
 
+/* Reserve exactly the widest single date ("28 May 2026" ≈ 67px at this font) so the
+   date area never changes width as you scrub across days. tabular-nums keeps digits
+   equal-advance; a date range (region/facility hover) exceeds this and expands rather
+   than clips. */
+.hover-date time {
+  display: inline-block;
+  min-width: 68px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
 .hover-values {
   display: inline-flex;
   align-items: center;
@@ -632,6 +647,11 @@ header a {
 .hover-values strong {
   font-weight: 700;
   margin-left: 4px;
+  display: inline-block;
+  min-width: 3.6em;                    /* fits "100.0%", the widest value, at 9.9px DM Sans */
+  text-align: right;                   /* % stays at a fixed right edge; label sits left of it */
+  font-variant-numeric: tabular-nums;  /* equal-advance digits — no wobble between values */
+  font-feature-settings: 'tnum' 1;
 }
 
 .tooltip-icon {
@@ -804,4 +824,263 @@ header a {
   text-align: center;
   padding: var(--app-padding);
 }
+
+/* ============================================================
+   Wordmark — "Coal ⚡ Stripes" (own brand, keeps the OE bolt motif)
+   ============================================================ */
+.opennem-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.opennem-wordmark {
+  font-family: var(--font-stack);
+  font-weight: 700;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--dark-grey);
+}
+
+.opennem-wordmark-bolt {
+  height: 20px;
+  width: auto;
+  display: block;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Header help (ⓘ) button
+   ============================================================ */
+.opennem-help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: #6a6a6a;
+  background: transparent;
+  border: none;                 /* the icon is already a circle — no outer ring */
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.opennem-help-button:hover {
+  color: var(--dark-grey);
+}
+.opennem-help-button:focus-visible {
+  outline: 2px solid var(--opennem-primary);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+/* ============================================================
+   Modal (portal dialog)
+   ============================================================ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  /* Strong scrim: the page is near-white beige (#faf9f6), so a plain card
+     would wash out. A dark translucent scrim + blur gives clear separation. */
+  background: rgba(30, 30, 30, 0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  overscroll-behavior: contain;
+  animation: modal-fade-in 0.15s ease-out;
+}
+
+.modal-card {
+  background: #ffffff;                /* white, not beige → pops against the scrim */
+  color: var(--primary);
+  border: 1px solid var(--border-colour);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+  width: 100%;
+  max-width: 460px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-stack);
+  outline: none;                      /* card is the focus target; suppress default ring */
+  animation: modal-pop-in 0.16s ease-out;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 20px 12px;
+  border-bottom: 1px solid var(--border-colour);
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--dark-grey);
+}
+
+.modal-close {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  color: #6a6a6a;
+  background: var(--buttons-background);
+  border: 1px solid var(--border-colour);
+  border-radius: var(--header-hover-radius);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.modal-close:hover { color: var(--dark-grey); background: #ececec; }
+.modal-close:focus-visible { outline: 2px solid var(--opennem-primary); outline-offset: 2px; }
+
+.modal-body {
+  padding: 16px 20px 20px;
+  overflow-y: auto;                   /* long content scrolls; header stays put */
+  font-size: var(--body-size);
+  line-height: 1.6;
+  color: #333;
+}
+
+@keyframes modal-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop, .modal-card { animation: none; }
+}
+
+/* ============================================================
+   Keycaps (Kbd + KeyCombo)
+   ============================================================ */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;                    /* square-ish for single characters */
+  height: 22px;
+  padding: 0 6px;
+  font-family: var(--font-stack);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--dark-grey);
+  background: var(--buttons-background);
+  border: 1px solid #cfcfcf;
+  border-radius: 5px;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.08), 0 1px 1px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.key-combo { display: inline-flex; align-items: center; gap: 4px; }
+.key-combo-plus { color: #9a9a9a; font-size: 11px; }
+
+/* ============================================================
+   Welcome dialog
+   ============================================================ */
+.welcome-intro { margin: 0 0 12px; color: #444; }
+
+.welcome-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.welcome-list li { color: #333; }
+
+.welcome-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin: 0 2px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+.welcome-swatch--out   { background: #d24646; }   /* red = out of service */
+.welcome-swatch--light { background: #bfbfbf; }   /* lightly loaded (25% grey ramp) */
+.welcome-swatch--full  { background: #000000; }   /* fully loaded */
+
+/* Inline keycap that also opens the shortcuts dialog */
+.welcome-kbd-button {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.welcome-kbd-button:focus-visible {
+  outline: 2px solid var(--opennem-primary);
+  outline-offset: 2px;
+  border-radius: 5px;
+}
+
+.welcome-credits {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-colour);
+  font-size: 12px;
+  color: #8a8a8a;
+}
+.welcome-credits a {
+  color: #555;
+  text-decoration: underline;
+  white-space: nowrap;   /* keep "Simon Holmes à Court" (and the API link) from breaking mid-name */
+}
+.welcome-credits a:hover { color: var(--dark-grey); }
+
+/* ============================================================
+   Shortcuts dialog
+   ============================================================ */
+.shortcuts-list { margin: 0; }
+.shortcuts-group { margin-bottom: 18px; }
+.shortcuts-group:last-child { margin-bottom: 0; }
+
+.shortcuts-group-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #8a8a8a;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: var(--border-style);   /* 1px dotted #cdcdcd, matches the app */
+}
+.shortcut-row:last-child { border-bottom: none; }
+
+.shortcut-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  flex-shrink: 0;
+}
+.shortcut-sep { color: #9a9a9a; font-size: 12px; }
+.shortcut-desc { margin: 0; color: #333; text-align: right; }
 

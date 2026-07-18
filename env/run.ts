@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S npx tsx
 /**
  * Conductor workspace RUN — starts the Next.js dev server
  * (wired in .conductor/settings.local.toml as `npx tsx env/run.ts`).
