@@ -6,6 +6,8 @@ import { featureFlags } from '@/shared/feature-flags';
 import { useAllFeatureFlags } from '@/hooks/useFeatureFlag';
 import { tileMonitor } from '@/shared/tile-monitor';
 import type { TileState } from '@/shared/tile-monitor';
+import { tileTimingRecorder } from '@/client/tile-timing-recorder';
+import type { TileTimingRecord } from '@/client/tile-timing-recorder';
 
 type DisplayMode = 'performance' | 'caches' | 'features' | 'tile';
 type DisclosureState = 'collapsed' | 'detailed';
@@ -82,6 +84,7 @@ export const PerformanceDisplay: React.FC = () => {
   const [metrics, setMetrics] = useState<Record<string, { count: number; avgDuration: number; totalDuration: number }>>({});
   const [cacheStats, setCacheStats] = useState<YearCacheStats | null>(null);
   const [tileState, setTileState] = useState<TileState>(tileMonitor.getState());
+  const [tileRenders, setTileRenders] = useState<readonly TileTimingRecord[]>([]);
   
   // Load all persisted state at once
   const initialState = loadPerformanceMonitorState();
@@ -102,7 +105,12 @@ export const PerformanceDisplay: React.FC = () => {
       setFps(perfMonitor.getCurrentFPS());
       setMemory(perfMonitor.getMemoryInfo());
       setMetrics(perfMonitor.getSummary());
-      
+
+      // Recent per-tile render times (see tile-timing-recorder).
+      if (displayMode === 'performance') {
+        setTileRenders(tileTimingRecorder.getRecords().slice());
+      }
+
       // Update cache stats if in cache mode
       if (displayMode === 'caches') {
         setCacheStats(getYearCacheStats(queryClient));
@@ -127,7 +135,9 @@ export const PerformanceDisplay: React.FC = () => {
 
   const handleClear = () => {
     perfMonitor.clear();
+    tileTimingRecorder.clear();
     setMetrics({});
+    setTileRenders([]);
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -370,12 +380,29 @@ export const PerformanceDisplay: React.FC = () => {
               </div>
             ))}
           </div>
-          <div style={{ 
+          <div style={{ borderTop: '1px solid #0f0', paddingTop: '5px', marginBottom: '10px' }}>
+            <div style={{ color: '#4af', fontSize: '10px', marginBottom: '4px' }}>
+              Recent tile renders ({tileRenders.length})
+            </div>
+            <div style={{ maxHeight: '140px', overflowY: 'auto' }}>
+              {tileRenders.length === 0 ? (
+                <div style={{ color: '#666', fontSize: '10px' }}>None yet — navigate the visualisation</div>
+              ) : (
+                tileRenders.slice(-10).reverse().map((r, i) => (
+                  <div key={`${r.at}-${i}`} style={{ fontSize: '10px', color: '#888', wordBreak: 'break-all' }}>
+                    <span style={{ color: '#0f0' }}>{r.kind}</span> {r.year}
+                    {r.facility ? ` · ${r.facility}` : ''} · {r.ms.toFixed(1)}ms
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <div style={{
             display: 'flex',
             gap: '5px',
             justifyContent: 'flex-end'
           }}>
-            <button 
+            <button
               onClick={handleLogReport}
               style={greenButtonStyle}
             >

@@ -4,6 +4,7 @@ import { CapFacYear, createCapFacYear } from './cap-fac-year';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getTodayAEST } from '@/shared/date-utils';
 import { yearCachePolicy } from '@/shared/config';
+import { tileTimingRecorder } from './tile-timing-recorder';
 
 /**
  * Get the earliest year for which data is available.
@@ -43,6 +44,9 @@ export function yearQueryOptions(year: number) {
   return queryOptions({
     queryKey: ['capFacYear', year] as const,
     queryFn: async ({ signal }): Promise<CapFacYear> => {
+      // Time the whole fetch + parse + build as `fetch-build` — the latency a
+      // user feels per tile. Network overhead ≈ fetch-build − year-build.
+      const fetchBuildStart = performance.now();
       const response = await fetch(`/api/capacity-factors?year=${year}`, { signal });
 
       if (!response.ok) {
@@ -54,7 +58,14 @@ export function yearQueryOptions(year: number) {
       // Tiles are built here, in the queryFn, so the cached value IS the
       // fully-constructed CapFacYear — shared by every observer and readable
       // synchronously via queryClient.getQueryData (see cap-fac-stats).
-      return createCapFacYear(year, data);
+      const capFacYear = createCapFacYear(year, data);
+      tileTimingRecorder.record({
+        kind: 'fetch-build',
+        year,
+        ms: performance.now() - fetchBuildStart,
+        at: Date.now(),
+      });
+      return capFacYear;
     },
     // NEM data is subject to revision (January can revise the December just
     // past), so even past years go stale — on the same tiers the server

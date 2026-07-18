@@ -3,6 +3,7 @@ import { FacilityYearTile } from './facility-year-tile';
 import { createFacilitiesFromUnits } from './facility-factory';
 import { CalendarDate, startOfMonth, endOfMonth } from '@internationalized/date';
 import { getDayIndex } from '@/shared/date-utils';
+import { tileTimingRecorder } from './tile-timing-recorder';
 
 export interface CapFacYear {
   year: number;
@@ -97,14 +98,23 @@ export function createCapFacYear(
   year: number,
   data: GeneratingUnitCapFacHistoryDTO
 ): CapFacYear {
+  // Time the whole build (all tiles + monthly roll-ups) as `year-build`, and
+  // each facility's canvas paint as `tile-build` — see tile-timing-recorder.
+  const yearBuildStart = performance.now();
+
   const facilityTiles = new Map<string, FacilityYearTile>();
-  
+
   // Create Facility objects from units
   const facilities = createFacilitiesFromUnits(data.data);
-  
-  // Create a FacilityYearTile for each facility
+
+  // Create a FacilityYearTile for each facility (the constructor paints its
+  // canvas synchronously, so timing the construction captures the full paint).
   for (const [facilityCode, facility] of facilities) {
-    const tile = new FacilityYearTile(facility, year);
+    const tile = tileTimingRecorder.time(
+      'tile-build',
+      { year, facility: facilityCode },
+      () => new FacilityYearTile(facility, year),
+    );
     facilityTiles.set(facilityCode, tile);
   }
   
@@ -127,6 +137,13 @@ export function createCapFacYear(
     ? data.data[0].history.data.length 
     : 365;
   
+  tileTimingRecorder.record({
+    kind: 'year-build',
+    year,
+    ms: performance.now() - yearBuildStart,
+    at: Date.now(),
+  });
+
   return {
     year,
     data,

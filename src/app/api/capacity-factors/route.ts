@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
 import { CapFacDataService } from "@/server/cap-fac-data-service";
 import { initializeRequestLogger } from "@/server/request-logger";
-import { getTodayAEST } from "@/shared/date-utils";
+import { getTodayAEST, getAESTDateTimeString } from "@/shared/date-utils";
 import {
 	yearCachePolicy,
 	YEAR_CACHE_TIERS,
@@ -44,10 +44,32 @@ function getService(): CapFacDataService {
 	return serviceInstance;
 }
 
+// Per-instance record of genuine cold fetches. `fetchCapacityFactors` (below)
+// is the function wrapped by unstable_cache, so it ONLY runs on a Data-Cache
+// miss — i.e. a real, rate-limited OpenElectricity fetch. We record each such
+// miss so GET can emit an `x-cf-cold` header telling the diagnostics probe
+// whether THIS request paid a cold fetch. Module-level ⇒ per-serverless-instance
+// and ephemeral: the per-request header (which travels on the same response) is
+// authoritative; the historical fields are best-effort.
+interface ColdFetchRecord {
+	lastColdFetchAt: string;
+	lastColdFetchMs: number;
+	count: number;
+}
+const coldFetches = new Map<number, ColdFetchRecord>();
+
 async function fetchCapacityFactors(year: number) {
 	debug(`🔄 Cache miss - fetching data for year ${year}`);
 	const service = getService();
-	return await service.getCapacityFactors(year);
+	const started = performance.now();
+	const result = await service.getCapacityFactors(year);
+	const prev = coldFetches.get(year);
+	coldFetches.set(year, {
+		lastColdFetchAt: getAESTDateTimeString(),
+		lastColdFetchMs: Math.round(performance.now() - started),
+		count: (prev?.count ?? 0) + 1,
+	});
+	return result;
 }
 
 // One unstable_cache wrapper per freshness tier (revalidate is static per
@@ -96,12 +118,25 @@ export async function GET(request: Request) {
 		// (January can revise the December just past), so no tier is immutable.
 		const currentYear = getTodayAEST().year;
 		const policy = yearCachePolicy(year, currentYear);
+
+		// Detect whether THIS request triggered a cold fetch, by watching the
+		// cold-fetch counter across the (possibly cached) await.
+		const coldBefore = coldFetches.get(year)?.count ?? 0;
 		const data = await tierCaches[policy.tier](year);
+		const coldAfter = coldFetches.get(year);
+		const didColdFetch = (coldAfter?.count ?? 0) > coldBefore;
 
 		debug(`🌐 API: Returning data for year ${year}`);
 
 		// Prepare response with cache headers
 		const response = NextResponse.json(data);
+
+		// Diagnostics marker: did this request pay a cold OpenElectricity fetch?
+		// Read back by probeYears() in @/server/cache-warmer.
+		response.headers.set("x-cf-cold", String(didColdFetch));
+		if (didColdFetch && coldAfter) {
+			response.headers.set("x-cf-cold-ms", String(coldAfter.lastColdFetchMs));
+		}
 
 		if (year > currentYear) {
 			// Future years: never cache (data does not exist yet).

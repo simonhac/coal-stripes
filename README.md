@@ -28,7 +28,7 @@ Suggested reading order:
 | `src/server/queued-oeclient.ts` | Wrapping the OpenElectricity SDK with rate limiting and retries |
 | `src/server/cap-fac-data-service.ts` | The two API queries, and turning energy into capacity factors |
 | `src/app/api/capacity-factors/route.ts` | Serving the data to the browser with layered caching |
-| `src/client/year-data-vendor.ts` | The client fetching from our route (never OpenElectricity directly) |
+| `src/client/year-queries.ts` | The client fetching from our route (never OpenElectricity directly) |
 | `src/shared/types.ts` | The JSON contract between our server and client |
 
 ## Getting Started
@@ -84,11 +84,13 @@ src/
                           #   date utils, request queue, LRU cache, physics
 ```
 
-Data flows through three layers of caching so users (almost) never wait on OpenElectricity:
+Data flows through three layers of caching so users (almost) never wait on OpenElectricity — see **[Caching & tile-render diagnostics](docs/caching-and-diagnostics.md)** for the full picture, including how to confirm the caches are warm:
 
-1. **Server**: each calendar year is cached via Next's data cache (`unstable_cache`) — the current year revalidates hourly, past years are treated as immutable — plus CDN `Cache-Control` headers with stale-while-revalidate.
-2. **Cron warming**: Vercel Cron (see `vercel.json`) periodically re-warms the current year, recent years, and the archive via `src/server/cache-warmer.ts`.
-3. **Client**: years are pre-rendered into canvas tiles and held in an LRU (`src/client/year-data-vendor.ts`), with adjacent years prefetched in the background.
+1. **Server**: each calendar year is cached via Next's data cache (`unstable_cache`) on a freshness tier — the current year revalidates hourly, recent years daily, the deep archive weekly (NEM data is revisable, so no year is treated as immutable) — plus CDN `Cache-Control` headers with stale-while-revalidate.
+2. **Cron warming**: Vercel Cron (see `vercel.json`) re-warms the current year (hourly), recent years (daily), and the archive (weekly) via `src/server/cache-warmer.ts`, so an evicted entry is refilled before a user hits it.
+3. **Client**: each year is cached with [TanStack Query](https://tanstack.com/query) (`src/client/year-queries.ts`) — the cached value is the fully pre-rendered set of canvas tiles — with adjacent years prefetched in the background.
+
+Cache health can be inspected at any time from the **`/diagnostics`** page or `GET /api/diagnostics/tiles` — see the [caching doc](docs/caching-and-diagnostics.md).
 
 Dates use `@internationalized/date` (not the built-in `Date`) throughout, with helpers in `src/shared/date-utils.ts` handling the NEM (AEST) and WEM (AWST) network timezones.
 
