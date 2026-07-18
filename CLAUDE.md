@@ -14,6 +14,8 @@
 
 - Environment variables are defined and stored in `.env.local`.
 
+- The production deployment is at **https://stripes.energy** (Vercel). Use it for prod checks — e.g. `curl -sS -D - https://stripes.energy/api/capacity-factors?year=2006 -o /dev/null` to inspect cache headers (`x-vercel-cache`, `age`).
+
 - When searching code, prefer ast-grep for syntax-aware and structural matching (eg. `ast-grep --lang typescript -p '<pattern>'`) instead of text-only tools like rg or grep.
 
 ## Gesture library notes (@use-gesture, react-spring)
