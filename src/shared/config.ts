@@ -78,6 +78,15 @@ export const DATE_BOUNDARIES = {
 } as const;
 
 
+// Page/body background colour (matches --beige-lighter and body background in
+// opennem.css). Used to paint the "no data" region beyond the ends of the
+// available data so the chart fades into the page rather than showing pale blue.
+export const PAGE_BACKGROUND_HEX = '#faf9f6';
+// Same colour as a little-endian ABGR uint32, for writing directly into a canvas
+// ImageData buffer (bytes R=FA, G=F9, B=F6, A=FF read as one uint32).
+export const PAGE_BACKGROUND_ABGR = 0xFFF6F9FA;
+
+
 // Tile rendering configuration
 export const TILE_CONFIG = {
   SHOW_DEBUG_OVERLAY: false,        // Show yellow border and year text on tiles

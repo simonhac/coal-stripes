@@ -6,6 +6,7 @@ networks — so a genuinely cold request can take several seconds. Several layer
 of caching keep that cost off the critical path, and a small diagnostic surface
 lets you confirm they are doing their job.
 
+- [Where the data comes from (dev and prod)](#where-the-data-comes-from-dev-and-prod)
 - [Caching layers](#caching-layers)
   - [1. Server — Next.js Data Cache + CDN](#1-server--nextjs-data-cache--cdn)
   - [2. Cron warming](#2-cron-warming)
@@ -19,6 +20,36 @@ lets you confirm they are doing their job.
 - [Known limitations](#known-limitations)
 
 ---
+
+## Where the data comes from (dev and prod)
+
+There is **no** dev/mock/staging data provider. In **every** environment the data
+is fetched live from the **production OpenElectricity API**
+(`https://api.openelectricity.org.au/v4`), authenticated with
+`OPENELECTRICITY_API_KEY` from `.env.local`. (The SDK resolves its base URL to
+`OPENELECTRICITY_API_URL` if set, else the prod URL — we do not set it.)
+
+`npm run dev` serves both the app and the API route from **one process on one
+host/port**: the client fetches `/api/capacity-factors` same-origin, and that
+route calls OE prod directly through `CapFacDataService`. So:
+
+- **Dev and prod share the same upstream data.** An anomaly you see in dev will
+  also be in prod — confirm with `curl "https://stripes.energy/api/capacity-factors?year=2010&fleet=full"`.
+- **The only dev↔prod difference is the cache.** Dev caches in the local Next
+  Data Cache (`.next/cache`); prod uses the Vercel Data Cache kept warm by the
+  cron warmer. A fresh dev instance therefore pays a cold, rate-limited OE fetch
+  on the first request for each (year, fleet), then serves it from disk.
+- **To force a re-fetch in dev** (e.g. after changing server-side data shaping),
+  `rm -rf .next/cache` and restart, or the stale cached body will keep coming
+  back. Note the client's own `fetch()` also respects the response
+  `Cache-Control: max-age=…`, so an already-open browser tab can serve a stale
+  API body for up to a day even after a hard document reload — use a fresh
+  browser context (or clear browser cache) to see server-side data changes.
+
+To inspect OE directly (bypassing our app entirely), a small script using
+`OpenElectricityClient` with the `.env.local` key can call `getFacilities` /
+`getFacilityData` — useful for telling "OE has no data" apart from "our fetch
+dropped it".
 
 ## Caching layers
 

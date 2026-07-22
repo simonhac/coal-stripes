@@ -1,9 +1,11 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
-import { getDaysBetween, getMonthName } from '@/shared/date-utils';
+import { getDaysBetween, getMonthName, getDateFromIndex } from '@/shared/date-utils';
 import { getProportionColorHex } from '@/shared/capacity-factor-color-map';
 import { CapFacYear } from '@/client/cap-fac-year';
+import { getDateBoundaries } from '@/shared/date-boundaries';
+import { DATE_BOUNDARIES, PAGE_BACKGROUND_HEX } from '@/shared/config';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { getRegionNames } from '@/client/cap-fac-stats';
@@ -226,6 +228,50 @@ export function CapFacXAxis({
     }
   });
 
+  // Page-background overlay for the "no data" ends. Positioned over the same
+  // 365-day basis as the stripe canvas above (both fill an equal-width
+  // .opennem-stripe-data), so the strip's data→background edge lands on the same
+  // vertical line as the canvas. The frontier is the last day with actual data
+  // (only the latest data year carries one; a year-end gap in an older year is
+  // an interior gap that stays blue).
+  const boundaries = useMemo(() => getDateBoundaries(), []);
+  const frontierDateForYear = (year: number): CalendarDate | null => {
+    const data = yearDataMap.get(year);
+    if (!data || year !== boundaries.latestDataYear) return null;
+    const idx = data.regionLastDataDayIndex.get(regionCode) ?? -1;
+    if (idx < 0 || idx >= data.daysInYear - 1) return null;
+    return getDateFromIndex(year, idx);
+  };
+  const frontierDate = frontierDateForYear(endYear) ?? frontierDateForYear(startYear);
+  // The region's first data day in the visible window: months before it (before
+  // the region was commissioned) fade to the page background, matching the stripe
+  // rows, rather than pale blue.
+  const leadingDateForYear = (year: number): CalendarDate | null => {
+    const data = yearDataMap.get(year);
+    if (!data) return null;
+    const idx = data.regionFirstDataDayIndex.get(regionCode) ?? -1;
+    if (idx < 0) return null;
+    return getDateFromIndex(year, idx);
+  };
+  const leadingDate = leadingDateForYear(startYear) ?? leadingDateForYear(endYear);
+  const clampPct = (v: number) => Math.max(0, Math.min(v, 1)) * 100;
+  // A region with no data anywhere in the visible window fades the whole strip to
+  // the page background (matching the stripe rows) rather than pale-blue cells.
+  // Gated on the spanned year(s) being loaded so a still-loading region isn't
+  // prematurely blanked.
+  const dataLoaded = !!leftResult.data && (startYear === endYear || !!rightResult.data);
+  const regionEmpty = dataLoaded && monthBars.every(m => m.capacityFactor === null);
+  const futurePct = regionEmpty
+    ? 0
+    : frontierDate
+      ? clampPct((getDaysBetween(dateRange.start, frontierDate) + 1) / DATE_BOUNDARIES.TILE_WIDTH)
+      : 100;
+  const pastPct = regionEmpty
+    ? 0
+    : leadingDate
+      ? clampPct(getDaysBetween(dateRange.start, leadingDate) / DATE_BOUNDARIES.TILE_WIDTH)
+      : 0;
+
   return (
     <div className="opennem-stripe-row" style={{ display: 'flex' }}>
       <div className="opennem-facility-label">
@@ -260,6 +306,40 @@ export function CapFacXAxis({
               </div>
             ))}
         </div>
+        {futurePct < 100 && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: `${futurePct}%`,
+              right: 0,
+              background: PAGE_BACKGROUND_HEX,
+              pointerEvents: 'none',
+              // Above the month cells: .opennem-month-label sets z-index:10 and,
+              // being flex items, that applies despite position:static — without
+              // this the blue no-data cells paint over the overlay.
+              zIndex: 11,
+            }}
+          />
+        )}
+        {pastPct > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: 0,
+              width: `${pastPct}%`,
+              background: PAGE_BACKGROUND_HEX,
+              pointerEvents: 'none',
+              // Above the month cells: .opennem-month-label sets z-index:10 and,
+              // being flex items, that applies despite position:static — without
+              // this the blue no-data cells paint over the overlay.
+              zIndex: 11,
+            }}
+          />
+        )}
       </div>
     </div>
   );

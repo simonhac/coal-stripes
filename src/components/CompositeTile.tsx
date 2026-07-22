@@ -20,7 +20,7 @@ import React, { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { FacilityYearTile } from '@/client/facility-year-tile';
-import { getDayIndex, isLeapYear, getDaysBetween } from '@/shared/date-utils';
+import { getDayIndex, isLeapYear, getDaysBetween, getDateFromIndex } from '@/shared/date-utils';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { perfMonitor } from '@/shared/performance-monitor';
@@ -28,7 +28,7 @@ import { useTouchAsHover } from '@/hooks/useTouchAsHover';
 import { featureFlags } from '@/shared/feature-flags';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { tileMonitor } from '@/shared/tile-monitor';
-import { DATE_BOUNDARIES } from '@/shared/config';
+import { DATE_BOUNDARIES, PAGE_BACKGROUND_HEX } from '@/shared/config';
 
 interface CompositeTileProps {
   endDate: CalendarDate;
@@ -50,7 +50,7 @@ const CompositeTileComponent = ({
   endDate,
   facilityCode,
   facilityName,
-  regionCode: _regionCode,
+  regionCode,
   animatedDateRange,
   minCanvasHeight = 20
 }: CompositeTileProps) => {
@@ -137,13 +137,38 @@ const CompositeTileComponent = ({
       ? resolve(rightValid, rightData, rightIsError)
       : { tile: null, state: 'idle' as TileState };
 
+    // The "no data" frontier: the last day with actual data. Trailing days
+    // after it (reporting lag + future) are painted the page background in
+    // render(). Only the latest data year carries a real frontier — a year-end
+    // collection gap in an older year is an interior gap (data resumes next
+    // year), not the end of the chart, so it stays blue.
+    const boundaries = getDateBoundaries();
+    const frontierDateFor = (year: number, data: typeof leftData): CalendarDate | null => {
+      if (!data || year !== boundaries.latestDataYear) return null;
+      const idx = data.regionLastDataDayIndex.get(regionCode) ?? -1;
+      if (idx < 0 || idx >= getDaysInYear(year) - 1) return null;
+      return getDateFromIndex(year, idx);
+    };
+
+    // This region's first/last data day per year, so render() can tell whether
+    // the region has any data at all in the visible window (→ fade the whole row
+    // to the page background) vs an interior gap (→ pale blue).
+    const boundsFor = (data: typeof leftData) => ({
+      first: data?.regionFirstDataDayIndex.get(regionCode) ?? -1,
+      last: data?.regionLastDataDayIndex.get(regionCode) ?? -1,
+    });
+
     return {
       left: left.tile,
       right: right.tile,
       leftState: left.state,
       rightState: right.state,
+      leftFrontierDate: frontierDateFor(startYear, leftData),
+      rightFrontierDate: rightNeeded ? frontierDateFor(endYear, rightData) : null,
+      leftBounds: boundsFor(leftData),
+      rightBounds: boundsFor(rightData),
     };
-  }, [facilityCode, leftValid, rightValid, rightNeeded, leftData, leftIsError, rightData, rightIsError]);
+  }, [facilityCode, regionCode, startYear, endYear, leftValid, rightValid, rightNeeded, leftData, leftIsError, rightData, rightIsError]);
 
   const drawErrorState = (ctx: CanvasRenderingContext2D, left: number, width: number, height: number) => {
     // Use light blue color to indicate unavailable data
@@ -496,10 +521,62 @@ const CompositeTileComponent = ({
           ctx.globalCompositeOperation = 'source-over';
           ctx.fillRect(shimmerX, 0, shimmerWidth, canvas.height);
           ctx.restore();
-          
+
         }
       }
-      
+
+      // Paint the page background over the parts that lie outside the available
+      // data. Drawn last, so it sits above the tile and shimmer. Interior null
+      // days are left as their baked-in pale blue "no data" colour.
+      ctx.fillStyle = PAGE_BACKGROUND_HEX;
+
+      // A region with no data anywhere in the visible window (e.g. WEM before its
+      // coal data begins) fades entirely to the page background — like the
+      // chart's empty ends — rather than a solid block of pale blue.
+      const startDayIdx = getDayIndex(dateRange.start);
+      const endDayIdx = getDayIndex(dateRange.end);
+      let regionEmpty = false;
+      if (startYear === endYear) {
+        if (tiles.leftState === 'hasData') {
+          const { first, last } = tiles.leftBounds;
+          regionEmpty = !(last >= 0 && last >= startDayIdx && first <= endDayIdx);
+        }
+      } else {
+        const startHas = tiles.leftState === 'hasData' &&
+          tiles.leftBounds.last >= 0 && tiles.leftBounds.last >= startDayIdx;
+        const endHas = tiles.rightState === 'hasData' &&
+          tiles.rightBounds.first >= 0 && tiles.rightBounds.first <= endDayIdx;
+        // Only conclude "empty" once both spanned years have loaded; while one is
+        // still pending, leave the shimmer/normal render in place.
+        if (!startHas && !endHas && tiles.leftState === 'hasData' && tiles.rightState === 'hasData') {
+          regionEmpty = true;
+        }
+      }
+
+      if (regionEmpty) {
+        ctx.fillRect(0, 0, DATE_BOUNDARIES.TILE_WIDTH, canvas.height);
+      } else {
+        // Trailing region after the data frontier (reporting lag + future)…
+        const frontierDate = tiles.rightFrontierDate ?? tiles.leftFrontierDate;
+        if (frontierDate) {
+          const startIdx = Math.max(0, Math.min(
+            getDaysBetween(dateRange.start, frontierDate) + 1,
+            DATE_BOUNDARIES.TILE_WIDTH
+          ));
+          if (startIdx < DATE_BOUNDARIES.TILE_WIDTH) {
+            ctx.fillRect(startIdx, 0, DATE_BOUNDARIES.TILE_WIDTH - startIdx, canvas.height);
+          }
+        }
+        // …and the leading region before the earliest data.
+        const preDataEndIdx = Math.max(0, Math.min(
+          getDaysBetween(dateRange.start, boundaries.earliestDataDay),
+          DATE_BOUNDARIES.TILE_WIDTH
+        ));
+        if (preDataEndIdx > 0) {
+          ctx.fillRect(0, 0, preDataEndIdx, canvas.height);
+        }
+      }
+
       // Continue shimmer animation if needed
       if (needsShimmer) {
         animationFrameRef.current = requestAnimationFrame(render);

@@ -6,6 +6,20 @@
 - The server talks to OpenElectricity using the OpenElectricityClient library.
 - The client never talks directly to OpenElectricity, only to our server.
 
+- **Where dev gets its data:** there is **no** dev/mock/staging data source. In
+  every environment the data comes from the **production OpenElectricity API**
+  (`https://api.openelectricity.org.au/v4`, keyed by `OPENELECTRICITY_API_KEY` in
+  `.env.local`; the SDK falls back to prod unless `OPENELECTRICITY_API_URL` is
+  set, which it is not). `npm run dev` runs the Next route `/api/capacity-factors`
+  **in-process, same host/port** as the app, and that route calls OE prod
+  directly via `CapFacDataService`. The only dev-vs-prod difference is caching:
+  dev uses the local Next Data Cache (`.next/cache`); prod uses the Vercel Data
+  Cache kept warm by the cron warmer. So a fresh dev instance pays a cold,
+  rate-limited OE fetch on first request, then serves from `.next/cache` —
+  **`rm -rf .next/cache` to force a re-fetch** (e.g. after a server-side data
+  change). Because dev and prod share the same upstream, a data anomaly seen in
+  dev will match prod (see `curl https://stripes.energy/api/capacity-factors?...`).
+
 - When a generating unit is inoperable (due to maintenance or outages) its capacity factor will be zero, not null/undefined.
 - When a capacity factor is unknown — either because the associated date is in the future or, for dates in the past, the data collection infrastructure is faulty — this is always represented as null.
 - Never interpret null as zero or vice versa. Null means "no data"; zero is a zero quantity. These are distinct concepts and must never be swapped.

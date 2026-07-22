@@ -21,7 +21,10 @@ export function getYearCacheStats(queryClient: QueryClient): YearCacheStats {
   let totalBytes = 0;
 
   for (const query of queries) {
-    const label = String(query.queryKey[1]);
+    // Key is ['capFacYear', mode, year] — join the (mode, year) tail so each
+    // cached entry gets a unique label (queryKey[1] alone is just the fleet
+    // mode, which collapses every year to the same 'full'/'current' string).
+    const label = query.queryKey.slice(1).join(':');
     const data = query.state.data as CapFacYear | undefined;
 
     if (data) {
