@@ -23,7 +23,8 @@ lets you confirm they are doing their job.
 ## Caching layers
 
 Data is fetched, cached, and rendered one **calendar year per request** — a
-year is the unit everything is keyed on. The earliest year is 2006.
+year is the unit everything is keyed on (together with the fleet mode: `full`
+or `current`). The earliest year is 1999 (the start of facility-level NEM data).
 
 ### 1. Server — Next.js Data Cache + CDN
 
@@ -58,7 +59,7 @@ on a frequent schedule via `src/server/cache-warmer.ts` (`warmYears`):
 
 | Cron | Schedule | Warms |
 |------|----------|-------|
-| `warm-all` | every 10 min | every year, back to 2006 |
+| `warm-all` | every 10 min | every year back to 1999, for both fleet modes |
 
 `warm-all` sweeps the whole span every 10 minutes so **no year — in any tier —
 stays cold for longer than the cron interval**, whether it went cold from
@@ -94,13 +95,13 @@ both.
 
 ### `GET /api/diagnostics/tiles`
 
-Probes each year in a range (default 2006→current) and reports, per year, how it
+Probes each year in a range (default 1999→current) and reports, per year, how it
 was served. Implemented as a read-only sibling of the cache warmer
 (`probeYears` in `src/server/cache-warmer.ts`).
 
 Parameters:
 
-- `?years=2006-2026` — inclusive range (max 30 years).
+- `?years=1999-2026` — inclusive range (max 30 years).
 - `?year=2024` — a single year.
 - no params — the full span.
 
@@ -219,7 +220,7 @@ it, which is exactly what the crons maintain.
   a year in that window pays one cold fetch (now ~3–4 s after the shortened retry
   backoff, not ~15 s). Closing this fully would need deploy-triggered warming.
 - **Start-edge prefetch**: adjacent-year prefetch tries `startYear-2..-1`, which
-  at 2006 are out of range and skipped — so a jump straight to the start year is
+  at 1999 are out of range and skipped — so a jump straight to the start year is
   always an on-demand fetch with no prefetch overlap.
 - **Per-instance history**: the `x-cf-cold` *per-request* signal is authoritative,
   but any aggregate cold-fetch counts kept in module memory are per-serverless

@@ -8,6 +8,7 @@ import {
 	YEAR_CACHE_TIERS,
 	type YearCacheTier,
 } from "@/shared/config";
+import type { FleetMode } from "@/shared/types";
 
 // Opt-in verbose logging: set DEBUG_OE=1 to trace requests/cache misses locally.
 const debug = (...args: unknown[]): void => {
@@ -56,15 +57,20 @@ interface ColdFetchRecord {
 	lastColdFetchMs: number;
 	count: number;
 }
-const coldFetches = new Map<number, ColdFetchRecord>();
+const coldFetches = new Map<string, ColdFetchRecord>();
 
-async function fetchCapacityFactors(year: number) {
-	debug(`🔄 Cache miss - fetching data for year ${year}`);
+// Diagnostics key: cold fetches are tracked per (mode, year) since the two
+// fleet modes are cached separately.
+const coldKey = (year: number, mode: FleetMode): string => `${mode}:${year}`;
+
+async function fetchCapacityFactors(year: number, mode: FleetMode) {
+	debug(`🔄 Cache miss - fetching data for year ${year} (${mode})`);
 	const service = getService();
 	const started = performance.now();
-	const result = await service.getCapacityFactors(year);
-	const prev = coldFetches.get(year);
-	coldFetches.set(year, {
+	const result = await service.getCapacityFactors(year, mode);
+	const key = coldKey(year, mode);
+	const prev = coldFetches.get(key);
+	coldFetches.set(key, {
 		lastColdFetchAt: getAESTDateTimeString(),
 		lastColdFetchMs: Math.round(performance.now() - started),
 		count: (prev?.count ?? 0) + 1,
@@ -72,24 +78,32 @@ async function fetchCapacityFactors(year: number) {
 	return result;
 }
 
-// One unstable_cache wrapper per freshness tier (revalidate is static per
-// wrapper, so the tiers can't share one). Freshness windows live in
-// yearCachePolicy — see @/shared/config. A year crossing a tier boundary
-// (current→recent at New Year, recent→archive at N-6) changes wrapper and
-// hence Data Cache key, costing one cache miss that the next cron warmer run
-// absorbs.
+const FLEET_MODES: FleetMode[] = ["full", "current"];
+
+// One unstable_cache wrapper per (freshness tier, fleet mode). Revalidate is
+// static per wrapper, so the tiers can't share one; and the mode is baked into
+// the cache key parts so the two rosters (full vs current) never share a Data
+// Cache entry. Freshness windows live in yearCachePolicy — see @/shared/config.
+// A year crossing a tier boundary (current→recent at New Year, recent→archive
+// at N-6) changes wrapper and hence Data Cache key, costing one cache miss that
+// the next cron warmer run absorbs.
 //
-// Tags are kept so a tier can be busted on demand via revalidateTag() if we
-// ever need instant propagation.
+// Tags are kept so a tier/mode can be busted on demand via revalidateTag() if
+// we ever need instant propagation.
 const tierCaches = Object.fromEntries(
 	(Object.keys(YEAR_CACHE_TIERS) as YearCacheTier[]).map((tier) => [
 		tier,
-		unstable_cache(fetchCapacityFactors, ["capacity-factors", tier], {
-			revalidate: YEAR_CACHE_TIERS[tier].revalidateSeconds,
-			tags: ["capacity-factors", tier],
-		}),
+		Object.fromEntries(
+			FLEET_MODES.map((mode) => [
+				mode,
+				unstable_cache(fetchCapacityFactors, ["capacity-factors", tier, mode], {
+					revalidate: YEAR_CACHE_TIERS[tier].revalidateSeconds,
+					tags: ["capacity-factors", tier, mode],
+				}),
+			]),
+		) as Record<FleetMode, typeof fetchCapacityFactors>,
 	]),
-) as Record<YearCacheTier, typeof fetchCapacityFactors>;
+) as Record<YearCacheTier, Record<FleetMode, typeof fetchCapacityFactors>>;
 
 export async function GET(request: Request) {
 	try {
@@ -112,7 +126,19 @@ export async function GET(request: Request) {
 			);
 		}
 
-		debug(`🌐 API: Fetching capacity factors for year ${year}`);
+		// Fleet mode selects the roster: `full` (every unit that ever operated,
+		// including retired plants) or `current` (operating units only).
+		// Defaults to `full`.
+		const fleetParam = searchParams.get("fleet");
+		if (fleetParam !== null && fleetParam !== "full" && fleetParam !== "current") {
+			return NextResponse.json(
+				{ error: "Invalid fleet parameter (expected 'full' or 'current')" },
+				{ status: 400 },
+			);
+		}
+		const mode: FleetMode = fleetParam === "current" ? "current" : "full";
+
+		debug(`🌐 API: Fetching capacity factors for year ${year} (${mode})`);
 
 		// Pick the freshness tier for this year. NEM data is subject to revision
 		// (January can revise the December just past), so no tier is immutable.
@@ -121,9 +147,10 @@ export async function GET(request: Request) {
 
 		// Detect whether THIS request triggered a cold fetch, by watching the
 		// cold-fetch counter across the (possibly cached) await.
-		const coldBefore = coldFetches.get(year)?.count ?? 0;
-		const data = await tierCaches[policy.tier](year);
-		const coldAfter = coldFetches.get(year);
+		const cKey = coldKey(year, mode);
+		const coldBefore = coldFetches.get(cKey)?.count ?? 0;
+		const data = await tierCaches[policy.tier][mode](year, mode);
+		const coldAfter = coldFetches.get(cKey);
 		const didColdFetch = (coldAfter?.count ?? 0) > coldBefore;
 
 		debug(`🌐 API: Returning data for year ${year}`);

@@ -26,7 +26,7 @@ export const MOMENTUM = {
    * Hard cap on a single flick's throw distance. This is the guardrail that
    * makes momentum robust to however @use-gesture reports velocity: no gesture,
    * however violent, can fling more than this many days — so a flick from the
-   * present can never reach the opposite end of a ~19-year range.
+   * present can never reach the opposite end of the multi-decade range.
    */
   MAX_TRAVEL_DAYS: 550,
   /** Below this |velocity| (days/ms) a release just settles — no momentum. */

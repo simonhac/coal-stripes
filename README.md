@@ -1,6 +1,6 @@
 # Coal Stripes Visualisation
 
-A reference app demonstrating the [OpenElectricity](https://openelectricity.org.au) API: a 'stripes' visualisation of the daily capacity factors of every operating coal unit in Australia, navigable day-by-day back to 2006.
+A reference app demonstrating the [OpenElectricity](https://openelectricity.org.au) API: a 'stripes' visualisation of the daily capacity factors of Australia's coal units, navigable day-by-day back to the start of facility-level NEM data in January 1999. A fleet-mode toggle switches between the full historical fleet (every unit that ever operated, including retired plants) and today's operating fleet; periods with no recorded data (e.g. WEM before 2006) render as "no data".
 
 <div align="center">
 <img src="coal-stripes-screenshot.png" alt="Coal Stripes Visualisation" width="80%">

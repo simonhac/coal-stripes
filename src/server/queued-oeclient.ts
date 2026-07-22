@@ -1,4 +1,4 @@
-import { OpenElectricityClient } from 'openelectricity';
+import { OpenElectricityClient, NoDataFound } from 'openelectricity';
 import type {
   NetworkCode,
   DataMetric,
@@ -73,6 +73,11 @@ export class OEClientQueued {
 
     return pRetry(() => this.queue.add(execute) as Promise<T>, {
       ...RETRY_OPTIONS,
+      // A 404 → NoDataFound means the range genuinely has no data (e.g. WEM
+      // before 2006, or a retired unit queried for a year it didn't run).
+      // Retrying can't conjure data, so fail fast — callers tolerate it per
+      // network (see CapFacDataService.fetchEnergyData).
+      shouldRetry: ({ error }) => !(error instanceof NoDataFound),
       onFailedAttempt: ({ error, attemptNumber, retryDelay }) => {
         logger.log({
           timestamp: new Date(),

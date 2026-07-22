@@ -22,6 +22,7 @@ import { CalendarDate } from '@internationalized/date';
 import { FacilityYearTile } from '@/client/facility-year-tile';
 import { getDayIndex, isLeapYear, getDaysBetween } from '@/shared/date-utils';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
+import { useFleetMode } from '@/client/fleet-mode-context';
 import { perfMonitor } from '@/shared/performance-monitor';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
 import { featureFlags } from '@/shared/feature-flags';
@@ -82,6 +83,7 @@ const CompositeTileComponent = ({
   }, [animatedDateRange, endDate]);
   
   // Calculate which tiles we need synchronously
+  const mode = useFleetMode();
   const startYear = dateRange.start.year;
   const endYear = dateRange.end.year;
   const rightNeeded = startYear !== endYear;
@@ -96,12 +98,12 @@ const CompositeTileComponent = ({
   const [leftResult, rightResult] = useQueries({
     queries: [
       {
-        ...yearQueryOptions(startYear),
+        ...yearQueryOptions(mode, startYear),
         enabled: leftValid,
         notifyOnChangeProps: ['data', 'status'] as const,
       },
       {
-        ...yearQueryOptions(endYear),
+        ...yearQueryOptions(mode, endYear),
         enabled: rightNeeded && rightValid,
         notifyOnChangeProps: ['data', 'status'] as const,
       },

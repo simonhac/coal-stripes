@@ -1,11 +1,12 @@
 import { OEClientQueued } from './queued-oeclient';
 import {
+  FleetMode,
   GeneratingUnitCapFacHistoryDTO,
   GeneratingUnitDTO
 } from '@/shared/types';
 import { CalendarDate, parseDate } from '@internationalized/date';
 import { getAESTDateTimeString, networkDayFromInterval, getTodayAEST } from '@/shared/date-utils';
-import type { NetworkCode } from 'openelectricity';
+import { NoDataFound, type NetworkCode } from 'openelectricity';
 
 // A single coal generating unit as returned by the facilities endpoint.
 interface UnitRecord {
@@ -15,7 +16,10 @@ interface UnitRecord {
   facility_region: string;
   unit_code: string;
   unit_fueltech: string;
-  unit_capacity: number;
+  // Registered capacity in MW. Can be null in the OpenElectricity metadata
+  // (rare for coal, but possible for some retired units), so callers must guard
+  // the capacity-factor division and row-height maths against null.
+  unit_capacity: number | null;
 }
 
 interface Facility {
@@ -39,6 +43,13 @@ const debug = (...args: unknown[]): void => {
   if (process.env.DEBUG_OE) console.log(...args);
 };
 
+// The OpenElectricity SDK throws NoDataFound (HTTP 404) when a query's date
+// range has no data at all — e.g. the WEM network before 2006, or a retired
+// unit queried for a year it didn't operate. That's an expected, tolerable
+// condition per network; every other error (auth 403, rate limit, 5xx) throws
+// OpenElectricityError and must stay fatal so the route can surface it.
+const isNoData = (err: unknown): boolean => err instanceof NoDataFound;
+
 /**
  * The heart of the OpenElectricity integration. For a given calendar year this
  * service:
@@ -61,9 +72,12 @@ const FACILITIES_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class CapFacDataService {
   private client: OEClientQueued;
-  private facilitiesCache: Facility[] | null = null;
-  private facilitiesFetchedAt = 0;
-  private facilitiesFetchPromise: Promise<Facility[]> | null = null;
+  // Facilities are memoised per fleet mode: `full` (operating + retired) and
+  // `current` (operating only) are different rosters, so they can't share a
+  // cache slot.
+  private facilitiesCache = new Map<FleetMode, Facility[]>();
+  private facilitiesFetchedAt = new Map<FleetMode, number>();
+  private facilitiesFetchPromise = new Map<FleetMode, Promise<Facility[]>>();
 
   constructor(apiKey: string) {
     this.client = new OEClientQueued(apiKey);
@@ -73,18 +87,17 @@ export class CapFacDataService {
    * Clean up resources
    */
   async cleanup(): Promise<void> {
-    // Wait for any pending facility fetch to complete
-    if (this.facilitiesFetchPromise) {
-      try {
-        await this.facilitiesFetchPromise;
-      } catch {
-        // Ignore errors during cleanup
-      }
+    // Wait for any pending facility fetches (across modes) to complete
+    try {
+      await Promise.all(this.facilitiesFetchPromise.values());
+    } catch {
+      // Ignore errors during cleanup
     }
 
     // Clear caches and any pending requests
-    this.facilitiesCache = null;
-    this.facilitiesFetchPromise = null;
+    this.facilitiesCache.clear();
+    this.facilitiesFetchedAt.clear();
+    this.facilitiesFetchPromise.clear();
     this.client.clearQueue();
   }
 
@@ -92,7 +105,7 @@ export class CapFacDataService {
    * Fetch capacity factors for coal units for a specific year.
    * Always returns data for the full year with today and future dates nulled out.
    */
-  async getCapacityFactors(year: number): Promise<GeneratingUnitCapFacHistoryDTO> {
+  async getCapacityFactors(year: number, mode: FleetMode): Promise<GeneratingUnitCapFacHistoryDTO> {
     const startTime = performance.now();
 
     // Always work with full years - no partial years allowed.
@@ -100,9 +113,9 @@ export class CapFacDataService {
     // fits in a single request (no splitting needed).
     const startDate = parseDate(`${year}-01-01`);
     const endDate = parseDate(`${year}-12-31`);
-    debug(`📡 API fetch: ${year}`);
+    debug(`📡 API fetch: ${year} (${mode})`);
 
-    const facilities = await this.getAllCoalFacilities();
+    const facilities = await this.getAllCoalFacilities(mode);
     const energyData = await this.fetchEnergyData(
       facilities,
       startDate.toString(),
@@ -113,11 +126,12 @@ export class CapFacDataService {
       energyData,
       facilities,
       startDate,
-      endDate
+      endDate,
+      mode
     );
 
     const elapsed = Math.round(performance.now() - startTime);
-    debug(`✅ API response: ${year} | ${elapsed}ms`);
+    debug(`✅ API response: ${year} (${mode}) | ${elapsed}ms`);
 
     return coalStripesData;
   }
@@ -125,28 +139,32 @@ export class CapFacDataService {
   /**
    * Get all coal facilities from OpenElectricity API
    */
-  private async getAllCoalFacilities(): Promise<Facility[]> {
+  private async getAllCoalFacilities(mode: FleetMode): Promise<Facility[]> {
     // Return cached facilities while fresh; the TTL lets new or retired units
     // appear within a day on a long-lived warm instance.
-    if (this.facilitiesCache && Date.now() - this.facilitiesFetchedAt < FACILITIES_TTL_MS) {
-      return this.facilitiesCache;
+    const cached = this.facilitiesCache.get(mode);
+    if (cached && Date.now() - (this.facilitiesFetchedAt.get(mode) ?? 0) < FACILITIES_TTL_MS) {
+      return cached;
     }
 
-    // Return existing promise if fetch is in progress
-    if (this.facilitiesFetchPromise) {
-      return this.facilitiesFetchPromise;
+    // Return existing promise if a fetch for this mode is in progress
+    const inFlight = this.facilitiesFetchPromise.get(mode);
+    if (inFlight) {
+      return inFlight;
     }
 
     // Start new fetch
-    this.facilitiesFetchPromise = (async () => {
+    const promise = (async () => {
       try {
-        debug('🏭 Fetching coal facilities...');
+        debug(`🏭 Fetching coal facilities (${mode})...`);
         // The key OpenElectricity facilities query: filter the /facilities
-        // endpoint down to operating coal units. Other filters (e.g. gas,
-        // wind, retired plants) work the same way — see the fueltech and
-        // status ids in the OpenElectricity docs.
+        // endpoint down to coal units. `full` mode also includes retired
+        // plants so history shows the fleet that actually operated then;
+        // `current` mode is operating units only. We exclude 'committed' —
+        // units that never generated. Other filters (e.g. gas, wind) work the
+        // same way — see the fueltech and status ids in the OpenElectricity docs.
         const { table } = await this.client.getFacilities({
-          status_id: ['operating'],
+          status_id: mode === 'full' ? ['operating', 'retired'] : ['operating'],
           fueltech_id: ['coal_black', 'coal_brown']
         });
 
@@ -174,17 +192,18 @@ export class CapFacDataService {
           a.facility_name.localeCompare(b.facility_name)
         );
 
-        this.facilitiesCache = facilities;
-        this.facilitiesFetchedAt = Date.now();
-        debug(`🏭 Found ${facilities.length} coal facilities with ${units.length} units`);
+        this.facilitiesCache.set(mode, facilities);
+        this.facilitiesFetchedAt.set(mode, Date.now());
+        debug(`🏭 Found ${facilities.length} coal facilities with ${units.length} units (${mode})`);
 
         return facilities;
       } finally {
-        this.facilitiesFetchPromise = null;
+        this.facilitiesFetchPromise.delete(mode);
       }
     })();
 
-    return this.facilitiesFetchPromise;
+    this.facilitiesFetchPromise.set(mode, promise);
+    return promise;
   }
 
   /**
@@ -227,6 +246,14 @@ export class CapFacDataService {
             dateEnd
           })
           .catch((err: unknown) => {
+            // A network with no data for the range (e.g. WEM before 2006, or
+            // NEM before it began in Dec 1998) is expected — tolerate it as an
+            // empty result so one dataless network doesn't fail the whole year.
+            // Every other error (auth, rate limit, 5xx) stays fatal.
+            if (isNoData(err)) {
+              debug(`   No data for ${network} in range (tolerated)`);
+              return null;
+            }
             debug(`   Failed to fetch ${network} data:`, err);
             throw err;
           });
@@ -235,6 +262,7 @@ export class CapFacDataService {
 
     const rows: EnergyRow[] = [];
     for (const response of responses) {
+      if (!response) continue; // network had no data for the range (tolerated)
       for (const row of response.datatable?.getRows() ?? []) {
         rows.push({
           interval: row.interval,
@@ -255,7 +283,8 @@ export class CapFacDataService {
     data: EnergyRow[],
     facilities: Facility[],
     requestedStartDate: CalendarDate,
-    requestedEndDate: CalendarDate
+    requestedEndDate: CalendarDate,
+    mode: FleetMode
   ): GeneratingUnitCapFacHistoryDTO {
     const startTime = performance.now();
 
@@ -279,9 +308,19 @@ export class CapFacDataService {
 
       for (const unit of sortedUnits) {
         const unitData = data.filter((row) => row.unit_code === unit.unit_code);
-        if (unitData.length === 0) {
-          continue; // Skip units with no data
+        // In `full` mode we emit a row for every roster unit even when it has
+        // no data this year (retired units, or years before it was
+        // commissioned) — the fill loop below yields an all-null history that
+        // renders as the "no data" pale blue. In `current` mode we keep the
+        // historical behaviour of dropping units with no data for the year.
+        if (unitData.length === 0 && mode !== 'full') {
+          continue;
         }
+
+        // Registered capacity in MW; can be null (rare for coal). Guard the
+        // capacity-factor division so it can't produce Infinity/NaN, and emit a
+        // finite `capacity` so the client's row-height maths stay finite.
+        const capacity = unit.unit_capacity;
 
         // Map each reading to its network-local calendar day for quick lookup.
         const dataByDay = new Map<string, EnergyRow>(
@@ -298,9 +337,9 @@ export class CapFacDataService {
           const dayData = dataByDay.get(currentDate.toString());
           if (currentDate.compare(todayBrisbane) >= 0) {
             capacityFactors.push(null);
-          } else if (dayData && dayData.energy !== null) {
+          } else if (dayData && dayData.energy !== null && capacity && capacity > 0) {
             // capacity factor = (energy_MWh / 24h) / registered_capacity * 100
-            const capacityFactor = (dayData.energy / 24) / unit.unit_capacity * 100;
+            const capacityFactor = (dayData.energy / 24) / capacity * 100;
             capacityFactors.push(Math.round(capacityFactor * 10) / 10);
           } else {
             capacityFactors.push(null);
@@ -313,7 +352,7 @@ export class CapFacDataService {
           region: facility.facility_region || undefined,
           data_type: 'energy',
           units: 'MW',
-          capacity: unit.unit_capacity,
+          capacity: capacity ?? 0,
           duid: unit.unit_code,
           facility_code: facility.facility_code,
           facility_name: facility.facility_name,

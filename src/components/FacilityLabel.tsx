@@ -4,6 +4,7 @@ import React, { useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { calculateFacilityStats, calculateAverageCapacityFactor } from '@/client/cap-fac-stats';
+import { useFleetMode } from '@/client/fleet-mode-context';
 import { usePinnableTooltip } from '@/hooks/usePinnableTooltip';
 
 interface FacilityLabelProps {
@@ -24,6 +25,7 @@ export function FacilityLabel({
   dateRange
 }: FacilityLabelProps) {
   const queryClient = useQueryClient();
+  const mode = useFleetMode();
   const matches = useCallback(
     (data: Record<string, unknown>) =>
       data.facilityCode === facilityCode && data.regionCode === regionCode,
@@ -31,7 +33,7 @@ export function FacilityLabel({
   );
 
   const sendTooltipData = (pinned: boolean) => {
-    const stats = calculateFacilityStats(queryClient, facilityCode, dateRange);
+    const stats = calculateFacilityStats(queryClient, mode, facilityCode, dateRange);
     if (!stats) {
       // No data available for this date range - clear tooltip
       window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'));

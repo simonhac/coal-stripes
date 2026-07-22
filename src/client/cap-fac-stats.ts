@@ -3,6 +3,7 @@ import { CalendarDate } from '@internationalized/date';
 import { getDayIndex } from '@/shared/date-utils';
 import { yearQueryOptions, isValidYear } from './year-queries';
 import { CapFacYear } from './cap-fac-year';
+import { FleetMode } from '@/shared/types';
 
 export interface GenerationStats {
   totalWeightedCapacityFactor: number;
@@ -41,8 +42,8 @@ export function getRegionNames(regionCode: string): { long: string; short: strin
  * Never triggers a fetch — these stats appear once the visible tiles have
  * loaded their data.
  */
-function getCachedYear(queryClient: QueryClient, year: number): CapFacYear | null {
-  return queryClient.getQueryData(yearQueryOptions(year).queryKey) ?? null;
+function getCachedYear(queryClient: QueryClient, mode: FleetMode, year: number): CapFacYear | null {
+  return queryClient.getQueryData(yearQueryOptions(mode, year).queryKey) ?? null;
 }
 
 /**
@@ -51,6 +52,7 @@ function getCachedYear(queryClient: QueryClient, year: number): CapFacYear | nul
  */
 export function getFacilityCodesInRegion(
   queryClient: QueryClient,
+  mode: FleetMode,
   regionCode: string,
   year: number
 ): string[] | null {
@@ -58,7 +60,7 @@ export function getFacilityCodesInRegion(
     return null;
   }
 
-  const yearData = getCachedYear(queryClient, year);
+  const yearData = getCachedYear(queryClient, mode, year);
   if (!yearData) {
     return null;
   }
@@ -82,6 +84,7 @@ export function getFacilityCodesInRegion(
  */
 export function calculateFacilityStats(
   queryClient: QueryClient,
+  mode: FleetMode,
   facilityCode: string,
   dateRange: { start: CalendarDate; end: CalendarDate }
 ): GenerationStats | null {
@@ -97,7 +100,7 @@ export function calculateFacilityStats(
   let totalCapacityDays = 0;
 
   // Calculate for start year
-  const leftYearData = getCachedYear(queryClient, startYear);
+  const leftYearData = getCachedYear(queryClient, mode, startYear);
   if (!leftYearData) return null;
 
   const leftTile = leftYearData.facilityTiles.get(facilityCode);
@@ -120,7 +123,7 @@ export function calculateFacilityStats(
 
   // Calculate for end year if different
   if (startYear !== endYear) {
-    const rightYearData = getCachedYear(queryClient, endYear);
+    const rightYearData = getCachedYear(queryClient, mode, endYear);
     if (!rightYearData) return null;
 
     const rightTile = rightYearData.facilityTiles.get(facilityCode);
@@ -148,6 +151,7 @@ export function calculateFacilityStats(
  */
 export function calculateRegionStats(
   queryClient: QueryClient,
+  mode: FleetMode,
   regionCode: string,
   dateRange: { start: CalendarDate; end: CalendarDate }
 ): GenerationStats | null {
@@ -157,7 +161,7 @@ export function calculateRegionStats(
   const startYear = dateRange.start.year;
 
   // Get facilities for this region
-  const facilitiesInRegion = getFacilityCodesInRegion(queryClient, regionCode, startYear);
+  const facilitiesInRegion = getFacilityCodesInRegion(queryClient, mode, regionCode, startYear);
 
   // If year data not cached, return null
   if (!facilitiesInRegion) {
@@ -166,7 +170,7 @@ export function calculateRegionStats(
 
   // Accumulate stats across all facilities in the region
   for (const facilityCode of facilitiesInRegion) {
-    const facilityStats = calculateFacilityStats(queryClient, facilityCode, dateRange);
+    const facilityStats = calculateFacilityStats(queryClient, mode, facilityCode, dateRange);
     if (facilityStats === null) {
       console.warn(`Unable to get stats for facility ${facilityCode} in region ${regionCode} - cannot calculate region average`);
       return null;
