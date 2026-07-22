@@ -5,6 +5,7 @@ import { getDaysBetween, getMonthName } from '@/shared/date-utils';
 import { getProportionColorHex } from '@/shared/capacity-factor-color-map';
 import { CapFacYear } from '@/client/cap-fac-year';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
+import { useFleetMode } from '@/client/fleet-mode-context';
 import { getRegionNames } from '@/client/cap-fac-stats';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
 
@@ -30,17 +31,18 @@ export function CapFacXAxis({
 
   // Subscribe to the year(s) the visible range spans; months without loaded
   // data render in the "no data" colour until the query resolves.
+  const mode = useFleetMode();
   const startYear = dateRange.start.year;
   const endYear = dateRange.end.year;
   const [leftResult, rightResult] = useQueries({
     queries: [
       {
-        ...yearQueryOptions(startYear),
+        ...yearQueryOptions(mode, startYear),
         enabled: isValidYear(startYear),
         notifyOnChangeProps: ['data', 'status'] as const,
       },
       {
-        ...yearQueryOptions(endYear),
+        ...yearQueryOptions(mode, endYear),
         enabled: startYear !== endYear && isValidYear(endYear),
         notifyOnChangeProps: ['data', 'status'] as const,
       },

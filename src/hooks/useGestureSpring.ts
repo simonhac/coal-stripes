@@ -197,7 +197,7 @@ export function useGestureSpring({
         // 'snap' (rubber-band back to bound) or 'momentum' (glide to a bounded,
         // clamped projected target). Start fresh from the visual release position
         // (at rest) — the projected target already encodes the throw, so the spring
-        // must not carry the flick velocity, or it overshoots to 2006.
+        // must not carry the flick velocity, or it overshoots to the start.
         phaseRef.current = 'spring';
         settleTargetPxRef.current = targetPx;
         api.start({

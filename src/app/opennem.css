@@ -877,6 +877,58 @@ header a {
 }
 
 /* ============================================================
+   Header fleet-mode toggle (Full history / Today's fleet)
+   ============================================================ */
+.opennem-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.opennem-fleet-toggle {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 2px;
+  background: #f0efe9;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+}
+.opennem-fleet-toggle-option {
+  font-family: var(--font-stack);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 6px 10px;
+  color: #6a6a6a;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.opennem-fleet-toggle-option:hover {
+  color: var(--dark-grey);
+}
+.opennem-fleet-toggle-option[aria-pressed='true'] {
+  color: var(--dark-grey);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.opennem-fleet-toggle-option:focus-visible {
+  outline: 2px solid var(--opennem-primary);
+  outline-offset: 2px;
+}
+@media (max-width: 600px) {
+  .opennem-header-actions {
+    gap: 8px;
+  }
+  .opennem-fleet-toggle-option {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+}
+
+/* ============================================================
    Modal (portal dialog)
    ============================================================ */
 .modal-backdrop {

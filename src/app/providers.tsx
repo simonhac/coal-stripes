@@ -21,8 +21,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
             // (see yearQueryOptions).
             refetchOnWindowFocus: false,
             // Unobserved queries are garbage-collected after a day. No
-            // LRU-style cap is needed: the domain tops out at ~21 years
-            // (2006 → current), a few MB of canvas each.
+            // LRU-style cap is needed: the domain tops out at ~28 years
+            // (1999 → current) × 2 fleet modes, a few MB of canvas each.
             gcTime: 24 * 60 * 60 * 1000,
           },
         },

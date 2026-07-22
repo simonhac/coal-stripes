@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
-import { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
+import { FleetMode, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 import { CapFacYear, createCapFacYear } from './cap-fac-year';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getTodayAEST } from '@/shared/date-utils';
@@ -39,15 +39,18 @@ export function isValidYear(year: number): boolean {
  * exponential backoff, and prefetch support that used to be hand-rolled.
  * Callers are responsible for gating on isValidYear (via `enabled` or an
  * explicit check) — the queryFn does not validate bounds.
+ *
+ * `mode` is the fleet roster (full vs current); it's part of the query key and
+ * the request URL so the two rosters are cached and fetched independently.
  */
-export function yearQueryOptions(year: number) {
+export function yearQueryOptions(mode: FleetMode, year: number) {
   return queryOptions({
-    queryKey: ['capFacYear', year] as const,
+    queryKey: ['capFacYear', mode, year] as const,
     queryFn: async ({ signal }): Promise<CapFacYear> => {
       // Time the whole fetch + parse + build as `fetch-build` — the latency a
       // user feels per tile. Network overhead ≈ fetch-build − year-build.
       const fetchBuildStart = performance.now();
-      const response = await fetch(`/api/capacity-factors?year=${year}`, { signal });
+      const response = await fetch(`/api/capacity-factors?year=${year}&fleet=${mode}`, { signal });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);

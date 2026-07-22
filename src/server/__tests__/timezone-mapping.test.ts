@@ -33,7 +33,8 @@ function process(mockData: unknown[], start: string, end: string) {
     mockData,
     mockFacilities,
     parseDate(start),
-    parseDate(end)
+    parseDate(end),
+    'current'
   );
 }
 

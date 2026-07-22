@@ -21,6 +21,7 @@ import {
   yearCachePolicy,
   type YearCacheTier,
 } from '@/shared/config';
+import type { FleetMode } from '@/shared/types';
 
 /**
  * Verify a request came from Vercel Cron (or another authorised caller).
@@ -47,32 +48,36 @@ function getBaseUrl(): string {
 
 export interface WarmResult {
   year: number;
+  mode: FleetMode;
   ok: boolean;
   status: number;
   ms: number;
 }
 
 /**
- * Warm the capacity-factors cache for the given years.
+ * Warm the capacity-factors cache for the given years, for one fleet mode.
  *
- * Years are warmed sequentially to respect the rate-limited upstream request
- * queue. The internal fetch deliberately carries no `Authorization` header (so
- * the CDN will cache the response) and uses `no-store` so the warmer's own
- * fetch is never short-circuited by Next's fetch cache.
+ * The two fleet modes (`full`/`current`) are cached under separate keys, so
+ * each must be warmed independently. Years are warmed sequentially to respect
+ * the rate-limited upstream request queue. The internal fetch deliberately
+ * carries no `Authorization` header (so the CDN will cache the response) and
+ * uses `no-store` so the warmer's own fetch is never short-circuited by Next's
+ * fetch cache.
  */
-export async function warmYears(years: number[]): Promise<WarmResult[]> {
+export async function warmYears(years: number[], mode: FleetMode): Promise<WarmResult[]> {
   const baseUrl = getBaseUrl();
   const results: WarmResult[] = [];
 
   for (const year of years) {
     const started = performance.now();
     try {
-      const res = await fetch(`${baseUrl}/api/capacity-factors?year=${year}`, {
+      const res = await fetch(`${baseUrl}/api/capacity-factors?year=${year}&fleet=${mode}`, {
         headers: { 'user-agent': 'coal-stripes-cache-warmer' },
         cache: 'no-store',
       });
       results.push({
         year,
+        mode,
         ok: res.ok,
         status: res.status,
         ms: Math.round(performance.now() - started),
@@ -80,6 +85,7 @@ export async function warmYears(years: number[]): Promise<WarmResult[]> {
     } catch {
       results.push({
         year,
+        mode,
         ok: false,
         status: 0,
         ms: Math.round(performance.now() - started),

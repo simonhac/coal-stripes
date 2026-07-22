@@ -66,8 +66,12 @@ export const DATE_BOUNDARIES = {
   // number of days displayed in the tile
   TILE_WIDTH: 365,
 
-  // The earliest date we have data from
-  EARLIEST_START_DATE: new CalendarDate(2006, 1, 1),
+  // The earliest date we have data from. Although the NEM commenced on 13 Dec
+  // 1998, OpenElectricity's *facility-level* (per-unit) daily energy series only
+  // begins on 1 January 1999 (a whole-year or December-1998 request returns
+  // NoDataFound — verified against the API). The WEM series only starts in 2006,
+  // so 1999–2005 render WEM as "no data" (pale blue).
+  EARLIEST_START_DATE: new CalendarDate(1999, 1, 1),
 
   // Buffer months to allow beyond data boundaries for UI flexibility
   DISPLAY_SLOP_MONTHS: 9,
@@ -91,10 +95,10 @@ export const TILE_CONFIG = {
 // NEM data is subject to revision — in January we can easily see revisions to
 // data from the December just past — so no tier treats past years as
 // immutable. These windows set how often a warmed entry revalidates; the cron
-// warmer (warm-all, every 10 minutes over every year back to 2006) keeps every
-// tier permanently warm, and stale-while-revalidate means a warmed entry is
-// served stale instantly while it refreshes in the background, so users never
-// feel a cold fetch regardless of these windows.
+// warmer (warm-all, every 10 minutes over every year back to 1999, for both
+// fleet modes) keeps every tier permanently warm, and stale-while-revalidate
+// means a warmed entry is served stale instantly while it refreshes in the
+// background, so users never feel a cold fetch regardless of these windows.
 export type YearCacheTier = 'current' | 'recent' | 'archive';
 
 export interface YearCachePolicy {

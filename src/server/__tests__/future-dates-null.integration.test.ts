@@ -40,7 +40,7 @@ describe('Null vs Zero Data Handling', () => {
     // Fetch data for current year
     console.log(`📅 Fetching ${currentYear} data...`);
     
-    const result = await service.getCapacityFactors(currentYear);
+    const result = await service.getCapacityFactors(currentYear, 'current');
     
     console.log(`✅ Fetched data with ${result.data.length} units`);
     

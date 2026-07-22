@@ -18,8 +18,8 @@ describe('year-queries', () => {
   });
 
   describe('year bounds', () => {
-    it('should return 2006 as the earliest year', () => {
-      expect(getEarliestYear()).toBe(2006);
+    it('should return 1999 as the earliest year (start of facility-level data)', () => {
+      expect(getEarliestYear()).toBe(1999);
     });
 
     it('should return the current year as the latest year', () => {
@@ -32,14 +32,15 @@ describe('year-queries', () => {
     });
 
     it('should accept valid years', () => {
-      expect(isValidYear(2006)).toBe(true);
+      expect(isValidYear(1999)).toBe(true);
+      expect(isValidYear(2005)).toBe(true);
       expect(isValidYear(2015)).toBe(true);
       expect(isValidYear(2024)).toBe(true);
     });
 
-    it('should reject years before 2006', () => {
-      expect(isValidYear(2005)).toBe(false);
-      expect(isValidYear(1999)).toBe(false);
+    it('should reject years before 1999', () => {
+      expect(isValidYear(1998)).toBe(false);
+      expect(isValidYear(1990)).toBe(false);
     });
 
     it('should reject years after the current year', () => {
@@ -67,30 +68,31 @@ describe('year-queries', () => {
   });
 
   describe('yearQueryOptions', () => {
-    it('keys queries by year', () => {
-      expect(yearQueryOptions(2023).queryKey).toEqual(['capFacYear', 2023]);
+    it('keys queries by mode and year', () => {
+      expect(yearQueryOptions('full', 2023).queryKey).toEqual(['capFacYear', 'full', 2023]);
+      expect(yearQueryOptions('current', 2023).queryKey).toEqual(['capFacYear', 'current', 2023]);
     });
 
     it('gives the current year the short (hourly) staleTime', () => {
-      expect(yearQueryOptions(2024).staleTime).toBe(
+      expect(yearQueryOptions('full', 2024).staleTime).toBe(
         YEAR_CACHE_TIERS.current.revalidateSeconds * 1000
       );
     });
 
     it('gives recent past years the daily staleTime (data is subject to revision)', () => {
-      expect(yearQueryOptions(2023).staleTime).toBe(
+      expect(yearQueryOptions('full', 2023).staleTime).toBe(
         YEAR_CACHE_TIERS.recent.revalidateSeconds * 1000
       );
     });
 
     it('gives archive years a finite weekly staleTime — never Infinity', () => {
-      expect(yearQueryOptions(2010).staleTime).toBe(
+      expect(yearQueryOptions('full', 2010).staleTime).toBe(
         YEAR_CACHE_TIERS.archive.revalidateSeconds * 1000
       );
     });
 
     it('disables structural sharing (canvas-bearing cache values)', () => {
-      expect(yearQueryOptions(2023).structuralSharing).toBe(false);
+      expect(yearQueryOptions('full', 2023).structuralSharing).toBe(false);
     });
   });
 });

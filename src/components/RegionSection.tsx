@@ -9,6 +9,7 @@ import { CapFacXAxis } from './CapFacXAxis';
 import { FacilityLabel } from './FacilityLabel';
 import { RegionLabel } from './RegionLabel';
 import { calculateRegionStats, calculateAverageCapacityFactor, getRegionNames } from '@/client/cap-fac-stats';
+import { useFleetMode } from '@/client/fleet-mode-context';
 
 interface RegionSectionProps {
   regionCode: string;
@@ -28,8 +29,9 @@ export function RegionSection({
   isMobile
 }: RegionSectionProps) {
   const queryClient = useQueryClient();
+  const mode = useFleetMode();
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
-  
+
   // Get region names
   const regionNames = getRegionNames(regionCode);
   const tooltipRegionName = isMobile ? regionNames.short : regionNames.long;
@@ -70,7 +72,7 @@ export function RegionSection({
           }
           
           // Calculate capacity factor for our region
-          const stats = calculateRegionStats(queryClient, regionCode, dateRange);
+          const stats = calculateRegionStats(queryClient, mode, regionCode, dateRange);
           const avgCapacityFactor = calculateAverageCapacityFactor(stats);
           
           const myTooltipData: TooltipData = {
@@ -103,7 +105,7 @@ export function RegionSection({
       window.removeEventListener('tooltip-data-hover', handleTooltipHover);
       window.removeEventListener('tooltip-data-hover-end', handleTooltipHoverEnd);
     };
-  }, [regionCode, tooltipRegionName, queryClient]);
+  }, [regionCode, tooltipRegionName, queryClient, mode]);
   
   if (!animatedDateRange) {
     return null;

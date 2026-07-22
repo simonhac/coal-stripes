@@ -25,6 +25,9 @@ const mockGetTodayAEST = dateUtils.getTodayAEST as jest.MockedFunction<typeof da
 
 // 2023: a non-leap year, so every unit history is 365 days.
 const YEAR = 2023;
+// The stats helpers are mode-scoped (they read the per-mode query cache); these
+// tests exercise a single mode.
+const MODE = 'full' as const;
 
 interface UnitSpec {
   duid: string;
@@ -61,7 +64,7 @@ describe('cap-fac-stats', () => {
   let queryClient: QueryClient;
 
   const seedYear = (year: number, dto: GeneratingUnitCapFacHistoryDTO) => {
-    queryClient.setQueryData(yearQueryOptions(year).queryKey, createCapFacYear(year, dto));
+    queryClient.setQueryData(yearQueryOptions(MODE, year).queryKey, createCapFacYear(year, dto));
   };
 
   beforeEach(() => {
@@ -81,7 +84,7 @@ describe('cap-fac-stats', () => {
       ]));
 
       // 10 days inclusive at CF 50 and capacity 100
-      const stats = calculateFacilityStats(queryClient, 'FACA', {
+      const stats = calculateFacilityStats(queryClient, MODE,'FACA', {
         start: new CalendarDate(YEAR, 3, 1),
         end: new CalendarDate(YEAR, 3, 10)
       });
@@ -98,7 +101,7 @@ describe('cap-fac-stats', () => {
         { duid: 'A1', facilityCode: 'FACA', region: 'NSW1', capacity: 100, capacityFactor: null }
       ]));
 
-      const stats = calculateFacilityStats(queryClient, 'FACA', {
+      const stats = calculateFacilityStats(queryClient, MODE,'FACA', {
         start: new CalendarDate(YEAR, 3, 1),
         end: new CalendarDate(YEAR, 3, 10)
       });
@@ -109,7 +112,7 @@ describe('cap-fac-stats', () => {
     });
 
     it('returns null when the year is not in the cache', () => {
-      const stats = calculateFacilityStats(queryClient, 'FACA', {
+      const stats = calculateFacilityStats(queryClient, MODE,'FACA', {
         start: new CalendarDate(YEAR, 3, 1),
         end: new CalendarDate(YEAR, 3, 10)
       });
@@ -122,7 +125,7 @@ describe('cap-fac-stats', () => {
         { duid: 'A1', facilityCode: 'FACA', region: 'NSW1', capacity: 100, capacityFactor: 50 }
       ]));
 
-      const stats = calculateFacilityStats(queryClient, 'FACA', {
+      const stats = calculateFacilityStats(queryClient, MODE,'FACA', {
         start: new CalendarDate(YEAR, 12, 25),
         end: new CalendarDate(YEAR + 1, 1, 5)
       });
@@ -138,7 +141,7 @@ describe('cap-fac-stats', () => {
       seedYear(YEAR + 1, makeDTO(spec));
 
       // 7 days of 2023 + 5 days of 2024, all at CF 40, capacity 100
-      const stats = calculateFacilityStats(queryClient, 'FACA', {
+      const stats = calculateFacilityStats(queryClient, MODE,'FACA', {
         start: new CalendarDate(YEAR, 12, 25),
         end: new CalendarDate(YEAR + 1, 1, 5)
       });
@@ -150,7 +153,7 @@ describe('cap-fac-stats', () => {
     });
 
     it('returns null for out-of-bounds years', () => {
-      const stats = calculateFacilityStats(queryClient, 'FACA', {
+      const stats = calculateFacilityStats(queryClient, MODE,'FACA', {
         start: new CalendarDate(2005, 1, 1),
         end: new CalendarDate(2005, 1, 10)
       });
@@ -172,7 +175,7 @@ describe('cap-fac-stats', () => {
         end: new CalendarDate(YEAR, 6, 10)
       };
 
-      const stats = calculateRegionStats(queryClient, 'NSW1', dateRange);
+      const stats = calculateRegionStats(queryClient, MODE,'NSW1', dateRange);
 
       // FACC (QLD1) must not contribute
       expect(stats).toEqual({
@@ -184,7 +187,7 @@ describe('cap-fac-stats', () => {
     });
 
     it('returns null when the year is not cached', () => {
-      const stats = calculateRegionStats(queryClient, 'NSW1', {
+      const stats = calculateRegionStats(queryClient, MODE,'NSW1', {
         start: new CalendarDate(YEAR, 6, 1),
         end: new CalendarDate(YEAR, 6, 10)
       });
@@ -201,12 +204,12 @@ describe('cap-fac-stats', () => {
         { duid: 'C1', facilityCode: 'FACC', region: 'QLD1', capacity: 500, capacityFactor: 90 }
       ]));
 
-      expect(getFacilityCodesInRegion(queryClient, 'NSW1', YEAR)).toEqual(['FACA']);
-      expect(getFacilityCodesInRegion(queryClient, 'QLD1', YEAR)).toEqual(['FACC']);
+      expect(getFacilityCodesInRegion(queryClient, MODE,'NSW1', YEAR)).toEqual(['FACA']);
+      expect(getFacilityCodesInRegion(queryClient, MODE,'QLD1', YEAR)).toEqual(['FACC']);
     });
 
     it('returns null when the year is not cached', () => {
-      expect(getFacilityCodesInRegion(queryClient, 'NSW1', YEAR)).toBeNull();
+      expect(getFacilityCodesInRegion(queryClient, MODE,'NSW1', YEAR)).toBeNull();
     });
   });
 

@@ -28,7 +28,7 @@ describe('Unit Sorting Integration Test', () => {
     console.log('\n🔄 Testing unit sorting with REAL API...');
     
     // Fetch a full year to get all units
-    const result = await coalDataService.getCapacityFactors(2023);
+    const result = await coalDataService.getCapacityFactors(2023, 'current');
     
     expect(result.data).toBeDefined();
     expect(result.data.length).toBeGreaterThan(40); // Should have many coal units

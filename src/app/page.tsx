@@ -12,6 +12,9 @@ import { DateRange } from '../components/DateRange';
 import { useQueryClient } from '@tanstack/react-query';
 import { yearQueryOptions } from '@/client/year-queries';
 import { getRegionNames } from '@/client/cap-fac-stats';
+import { FleetModeProvider } from '@/client/fleet-mode-context';
+import type { FleetMode } from '@/shared/types';
+import type { CapFacYear } from '@/client/cap-fac-year';
 import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
 import { useGestureSpring } from '@/hooks/useGestureSpring';
 import { usePrefetchAdjacentYears } from '@/hooks/usePrefetchAdjacentYears';
@@ -21,6 +24,45 @@ import { WelcomeDialog } from '../components/WelcomeDialog';
 import { ShortcutsDialog } from '../components/ShortcutsDialog';
 import './opennem.css';
 
+// Region display order is fixed; a region only appears if it has facilities.
+const ALL_REGION_CODES = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1', 'WEM'];
+
+// Build the region → facilities roster from one or more years of data. The
+// roster (which rows exist) is derived from the loaded DTO(s); in `full` mode
+// the current-year DTO already carries every unit that ever operated (retired
+// units appear as all-null rows), so this naturally yields the full historical
+// roster including SA1 and retired plants.
+function buildFacilitiesByRegion(
+  yearResults: CapFacYear[]
+): Map<string, { code: string; name: string }[]> {
+  const regionFacilityMaps = new Map<string, Map<string, string>>();
+  for (const yearData of yearResults) {
+    for (const unit of yearData.data.data) {
+      if (unit.region) {
+        if (!regionFacilityMaps.has(unit.region)) {
+          regionFacilityMaps.set(unit.region, new Map());
+        }
+        regionFacilityMaps.get(unit.region)!.set(unit.facility_code, unit.facility_name);
+      }
+    }
+  }
+
+  const facilitiesMap = new Map<string, { code: string; name: string }[]>();
+  const sortedRegions = [...ALL_REGION_CODES].sort((a, b) =>
+    getRegionNames(a).long.localeCompare(getRegionNames(b).long)
+  );
+  for (const regionCode of sortedRegions) {
+    const facilityMap = regionFacilityMaps.get(regionCode);
+    if (facilityMap && facilityMap.size > 0) {
+      const sortedFacilities = Array.from(facilityMap.entries())
+        .map(([code, name]) => ({ code, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      facilitiesMap.set(regionCode, sortedFacilities);
+    }
+  }
+  return facilitiesMap;
+}
+
 export default function Home() {
   const queryClient = useQueryClient();
   const [loading, setLoading] = useState(true);
@@ -28,6 +70,10 @@ export default function Home() {
   const [endDate, setEndDate] = useState<CalendarDate | null>(null);
   const [animatedEndDate, setAnimatedEndDate] = useState<CalendarDate | null>(null);
   const [facilitiesByRegion, setFacilitiesByRegion] = useState<Map<string, { code: string; name: string }[]>>(new Map());
+  // Fleet roster mode. Defaults to `full` (every unit that ever operated);
+  // initialised from ?fleet= in a mount effect (below) to avoid a hydration
+  // mismatch, and mirrored back to the URL so the view is shareable.
+  const [mode, setMode] = useState<FleetMode>('full');
   const [isDragging, setIsDragging] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -103,78 +149,70 @@ export default function Home() {
   // Prefetch the years around the settled navigation target so scrolling the
   // timeline rarely waits on the network.
   usePrefetchAdjacentYears(
+    mode,
     targetDateRange?.start.year ?? null,
     targetDateRange?.end.year ?? null
   );
 
-  // Initial load
+  // Initialise the mode from ?fleet= once on mount (client-only, so it can't
+  // cause a hydration mismatch), then mirror mode → URL on every change.
   useEffect(() => {
-    async function initialLoad() {
+    const fleet = new URLSearchParams(window.location.search).get('fleet');
+    if (fleet === 'current') setMode('current');
+  }, []);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (mode === 'full') url.searchParams.delete('fleet');
+    else url.searchParams.set('fleet', mode);
+    window.history.replaceState(null, '', url);
+  }, [mode]);
+
+  // Build the roster for the active mode. The roster (which facility rows
+  // exist) is always derived from the CURRENT year's data — independent of what
+  // year is being viewed — so panning never changes the row set, and switching
+  // mode swaps the whole roster (e.g. SA1 and retired plants appear in `full`).
+  // Runs on mount and whenever mode changes; navigation (endDate) is preserved
+  // across a mode switch.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadRoster() {
       try {
-        // Calculate end date and determine which years we need
         const boundaries = getDateBoundaries();
         const calculatedEndDate = boundaries.latestDataDay;
-        const startDate = calculatedEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }); // For determining which years to load
+        const startDate = calculatedEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
 
-        // Determine which years we need
+        // Determine which years the current window spans
         const startYear = startDate.year;
         const endYear = calculatedEndDate.year;
         const years = startYear === endYear ? [startYear] : [startYear, endYear];
 
-        // Load all required years (fetchQuery dedupes with any fetch the
-        // tiles kick off for the same year)
+        // Load the current year(s) for this mode (fetchQuery dedupes with any
+        // fetch the tiles kick off for the same year + mode).
         const yearResults = await Promise.all(
-          years.map(year => queryClient.fetchQuery(yearQueryOptions(year)))
+          years.map(year => queryClient.fetchQuery(yearQueryOptions(mode, year)))
         );
+        if (cancelled) return;
 
-        // Extract facilities by region from the loaded data
-        const regionFacilityMaps = new Map<string, Map<string, string>>();
+        setFacilitiesByRegion(buildFacilitiesByRegion(yearResults));
 
-        for (const yearData of yearResults) {
-          for (const unit of yearData.data.data) {
-            if (unit.region) {
-              if (!regionFacilityMaps.has(unit.region)) {
-                regionFacilityMaps.set(unit.region, new Map());
-              }
-              regionFacilityMaps.get(unit.region)!.set(unit.facility_code, unit.facility_name);
-            }
-          }
-        }
-
-        // Convert to sorted structure
-        const facilitiesMap = new Map<string, { code: string; name: string }[]>();
-
-        // Get all region codes and sort alphabetically by long name
-        const allRegionCodes = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1', 'WEM'];
-        const sortedRegions = allRegionCodes
-          .sort((a, b) => getRegionNames(a).long.localeCompare(getRegionNames(b).long));
-
-        // Process each region
-        for (const regionCode of sortedRegions) {
-          const facilityMap = regionFacilityMaps.get(regionCode);
-          if (facilityMap && facilityMap.size > 0) {
-            const sortedFacilities = Array.from(facilityMap.entries())
-              .map(([code, name]) => ({ code, name }))
-              .sort((a, b) => a.name.localeCompare(b.name));
-            facilitiesMap.set(regionCode, sortedFacilities);
-          }
-        }
-
-        setFacilitiesByRegion(facilitiesMap);
-
-        // Only set end date after data is loaded
-        setEndDate(calculatedEndDate);
-        setAnimatedEndDate(calculatedEndDate);
+        // On the first load, position the timeline and reveal the UI. On a
+        // later mode switch, keep the current navigation target.
+        setEndDate(prev => prev ?? calculatedEndDate);
+        setAnimatedEndDate(prev => prev ?? calculatedEndDate);
         setLoading(false);
       } catch (err) {
-        console.error('Failed to load initial data:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load initial data');
+        if (cancelled) return;
+        console.error('Failed to load data:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load data');
         setLoading(false);
       }
     }
 
-    initialLoad();
-  }, [queryClient]);
+    loadRoster();
+    return () => {
+      cancelled = true;
+    };
+  }, [queryClient, mode]);
 
 
   // Ensure the page has focus on mount for keyboard navigation
@@ -282,12 +320,16 @@ export default function Home() {
   }
 
   return (
-    <>
+    <FleetModeProvider value={mode}>
       {/* Performance Monitor */}
       <PerformanceDisplay />
 
       {/* Header */}
-      <OpenElectricityHeader onOpenHelp={openWelcome} />
+      <OpenElectricityHeader
+        onOpenHelp={openWelcome}
+        fleetMode={mode}
+        onFleetModeChange={setMode}
+      />
 
       {/* Date Range Header */}
       <div className="opennem-stripes-container">
@@ -339,6 +381,6 @@ export default function Home() {
         onClose={() => setShortcutsOpen(false)}
         capabilities={capabilities}
       />
-    </>
+    </FleetModeProvider>
   );
 }

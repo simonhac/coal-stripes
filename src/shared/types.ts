@@ -4,6 +4,14 @@
 // (/api/capacity-factors) and the client — the client never sees raw
 // OpenElectricity responses, only this shape.
 
+// Which roster of coal units the visualisation shows. `full` = every unit that
+// ever operated across recorded history (includes retired plants); `current` =
+// only units operating in the present year. The mode selects which rows exist;
+// missing cells (e.g. a unit before it was commissioned, or WEM pre-2006) still
+// render as the "no data" (null) pale blue. Threaded through the API query, the
+// data-cache key, and the client query key.
+export type FleetMode = 'full' | 'current';
+
 /** A contiguous run of daily values for one unit. */
 export interface UnitHistoryDTO {
   start: string; // first day, ISO date (inclusive)

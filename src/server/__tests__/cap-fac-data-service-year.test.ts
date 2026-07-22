@@ -63,7 +63,9 @@ jest.mock('openelectricity', () => ({
 
       return Promise.resolve({ datatable: { getRows: () => rows } });
     })
-  }))
+  })),
+  // The service imports NoDataFound to classify tolerable "no data" errors.
+  NoDataFound: class NoDataFound extends Error {}
 }));
 
 describe('CapFacDataService - Year-based Fetching', () => {
@@ -83,8 +85,8 @@ describe('CapFacDataService - Year-based Fetching', () => {
 
   describe('Data Structure', () => {
     test('should return properly structured coal stripes data', async () => {
-      const result = await service.getCapacityFactors(2023);
-      
+      const result = await service.getCapacityFactors(2023, 'full');
+
       // Check structure
       expect(result).toHaveProperty('data');
       expect(result).toHaveProperty('type');
@@ -122,7 +124,7 @@ describe('CapFacDataService - Year-based Fetching', () => {
     });
 
     test('returns a full leap year (366 days) from a single fetch', async () => {
-      const result = await service.getCapacityFactors(2024);
+      const result = await service.getCapacityFactors(2024, 'full');
       expect(result.data[0].history.data.length).toBe(366);
       expect(result.data[0].history.start).toBe('2024-01-01');
       expect(result.data[0].history.last).toBe('2024-12-31');
