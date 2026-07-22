@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, startTransition } from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getDaysBetween } from '@/shared/date-utils';
@@ -107,10 +107,20 @@ export default function Home() {
 
   // Handle date navigation — sets the target (header) and the rendered date
   // (tiles) together so header and tiles always move in lock-step.
+  //
+  // Wrapped in startTransition so these per-frame gesture updates land on a
+  // transition lane instead of the default lane. React 19's max-update-depth
+  // guard only counts sync/continuous/default commits that leave work pending;
+  // transition lanes are excluded, so a sustained pan (which fires this ~60×/s,
+  // alongside incidental per-frame re-renders from tooltips/query churn) can no
+  // longer climb the nested-update counter and freeze the tab. All three
+  // setStates share the one transition, so header and tiles stay in lock-step.
   const handleDateNavigate = useCallback((newEndDate: CalendarDate, dragging: boolean) => {
-    setEndDate(newEndDate);
-    setIsDragging(dragging);
-    setAnimatedEndDate(newEndDate);
+    startTransition(() => {
+      setEndDate(newEndDate);
+      setIsDragging(dragging);
+      setAnimatedEndDate(newEndDate);
+    });
   }, []);
 
   // Offset bounds for the gesture spring (offset 0 = earliestDataEndDay).
