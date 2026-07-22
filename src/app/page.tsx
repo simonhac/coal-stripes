@@ -92,11 +92,18 @@ export default function Home() {
     setShortcutsOpen(true);
   }, []);
 
-  // Calculate animated date range from animatedEndDate
-  const animatedDateRange = animatedEndDate ? {
-    start: animatedEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
-    end: animatedEndDate
-  } : null;
+  // Calculate animated date range from animatedEndDate. Memoised on the end
+  // date so an incidental Home re-render doesn't hand every CompositeTile a new
+  // dateRange object and re-run its per-frame paint effect for no reason.
+  const animatedDateRange = useMemo(
+    () => animatedEndDate
+      ? {
+          start: animatedEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
+          end: animatedEndDate,
+        }
+      : null,
+    [animatedEndDate]
+  );
 
   // Handle date navigation — sets the target (header) and the rendered date
   // (tiles) together so header and tiles always move in lock-step.

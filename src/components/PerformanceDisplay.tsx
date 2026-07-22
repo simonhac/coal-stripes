@@ -115,19 +115,22 @@ export const PerformanceDisplay: React.FC = () => {
       if (displayMode === 'caches') {
         setCacheStats(getYearCacheStats(queryClient));
       }
+
+      // Poll the tile monitor here rather than subscribing to it. tileMonitor
+      // fires on EVERY canvas paint (CompositeTile updates it per frame, and per
+      // shimmer rAF), and getState() returns a fresh object each time, so a live
+      // subscription re-rendered this component dozens of times per frame during
+      // a pan — even while hidden. Under a sustained inertial fling into uncached
+      // (shimmering) years that kept a React update pending on every commit,
+      // tripping React's max-update-depth guard and freezing the tab. Polling at
+      // 2 Hz is ample for a diagnostic readout and removes that storm entirely.
+      if (displayMode === 'tile') {
+        setTileState(tileMonitor.getState());
+      }
     }, 500); // Update twice per second
 
     return () => clearInterval(interval);
   }, [displayMode, queryClient]);
-
-  // Subscribe to tile state changes in a separate effect that doesn't re-run
-  useEffect(() => {
-    const unsubscribe = tileMonitor.subscribe(() => {
-      setTileState(tileMonitor.getState());
-    });
-
-    return () => unsubscribe();
-  }, []); // Empty deps - only subscribe once
 
   const handleLogReport = () => {
     perfMonitor.logReport();
