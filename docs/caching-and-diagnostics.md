@@ -52,20 +52,27 @@ fetch as long as an entry exists.
 ### 2. Cron warming
 
 The Data Cache is per-deployment and can be evicted, so an entry can go missing
-after a deploy or under memory pressure. Rather than let an unlucky user pay the
-cold fetch, Vercel Cron (`vercel.json`) re-warms every year on a schedule that
-mirrors the tiers, via `src/server/cache-warmer.ts` (`warmYears`):
+after a deploy (which wipes it) or under memory pressure. Rather than let an
+unlucky user pay the cold fetch, Vercel Cron (`vercel.json`) re-warms every year
+on a frequent schedule via `src/server/cache-warmer.ts` (`warmYears`):
 
 | Cron | Schedule | Warms |
 |------|----------|-------|
-| `warm-current` | hourly | the current year |
-| `warm-recent` | daily (00:30 Brisbane) | the last 5 past years |
-| `warm-archive` | weekly (Sun 00:30 Brisbane) | everything older, back to 2006 |
+| `warm-all` | every 10 min | every year, back to 2006 |
 
-Each warmer self-fetches the **public** route (no `Authorization` header) so a
-single warm populates both the Data Cache and the CDN edge. The cron routes
-themselves are gated by `CRON_SECRET` (`isAuthorisedCronRequest`), which Vercel
-Cron attaches automatically.
+`warm-all` sweeps the whole span every 10 minutes so **no year — in any tier —
+stays cold for longer than the cron interval**, whether it went cold from
+eviction or a fresh deploy. That is cheap: warming an already-warm year is just a
+Data-Cache read (no OpenElectricity call), so only genuinely cold years do real
+work — a full warm sweep is ~21 Data-Cache reads. The frequent cadence does not
+make data fresher (that is set by `revalidate`); it only shrinks the post-deploy
+cold window, which is exactly when a visitor could hit a cold fetch. A single
+warmer covers the current year too, so no separate `warm-current` is needed.
+Each warm self-fetches the **public** route (no `Authorization` header) so it
+populates both the Data Cache and the CDN edge. The cron route is gated by
+`CRON_SECRET` (`isAuthorisedCronRequest`), which Vercel Cron attaches
+automatically — **if `CRON_SECRET` is unset in the Vercel project, every cron
+fails closed (401) and nothing is warmed.**
 
 ### 3. Client — TanStack Query
 
@@ -203,11 +210,14 @@ it, which is exactly what the crons maintain.
 ## Known limitations
 
 - **`maxDuration`**: `vercel.json` applies a 60 s default to all
-  `src/app/api/**` functions, while `warm-archive` and `/api/diagnostics/tiles`
+  `src/app/api/**` functions, while `warm-all` and `/api/diagnostics/tiles`
   declare `maxDuration = 300`. Per-route exports normally win, but a fully-cold
-  archive run is long enough that this is worth verifying on the deployed tier.
-- **Cron schedule**: `warm-recent` and `warm-archive` both fire at 00:30
-  Brisbane on Sundays; they contend for the same rate-limited upstream window.
+  all-years run (e.g. the first sweep after a deploy) is long enough that this is
+  worth verifying on the deployed tier.
+- **Post-deploy cold window**: a deploy wipes the Data Cache, so years stay cold
+  until the next `warm-all` run — up to the cron interval (≤ 1 h). A user hitting
+  a year in that window pays one cold fetch (now ~3–4 s after the shortened retry
+  backoff, not ~15 s). Closing this fully would need deploy-triggered warming.
 - **Start-edge prefetch**: adjacent-year prefetch tries `startYear-2..-1`, which
   at 2006 are out of range and skipped — so a jump straight to the start year is
   always an on-demand fetch with no prefetch overlap.

@@ -90,11 +90,11 @@ export const TILE_CONFIG = {
 //
 // NEM data is subject to revision — in January we can easily see revisions to
 // data from the December just past — so no tier treats past years as
-// immutable. The tiers mirror the cron warmer cadence (warm-current: hourly,
-// warm-recent: daily over the last 5 past years, warm-archive: weekly), which
-// keeps every tier permanently warm; stale-while-revalidate means a warmed
-// entry is served stale instantly while it refreshes in the background, so
-// users never feel a cold fetch regardless of these windows.
+// immutable. These windows set how often a warmed entry revalidates; the cron
+// warmer (warm-all, every 10 minutes over every year back to 2006) keeps every
+// tier permanently warm, and stale-while-revalidate means a warmed entry is
+// served stale instantly while it refreshes in the background, so users never
+// feel a cold fetch regardless of these windows.
 export type YearCacheTier = 'current' | 'recent' | 'archive';
 
 export interface YearCachePolicy {
