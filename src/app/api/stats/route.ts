@@ -7,7 +7,10 @@ import type { FleetMode } from '@/shared/types';
 export const dynamic = 'force-dynamic';
 
 // Bump when the computation or DTO shape changes (busts the Data Cache key).
-const STATS_CACHE_VERSION = 'v3';
+// v4: recompute against the retired-unit colouring fix — fresh facilities
+// metadata recovers retired plants' real generation history (e.g. Liddell
+// 1999–2023), and their future days are null (not 0), so old stats are stale.
+const STATS_CACHE_VERSION = 'v4';
 const DAY_SECONDS = 60 * 60 * 24;
 const SWR_SECONDS = 60 * 60 * 24 * 7;
 

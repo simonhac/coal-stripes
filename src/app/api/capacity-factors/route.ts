@@ -80,6 +80,13 @@ async function fetchCapacityFactors(year: number, mode: FleetMode) {
 
 const FLEET_MODES: FleetMode[] = ["full", "current"];
 
+// Bump to invalidate every cached CF tile in one deploy-atomic step (it changes
+// the unstable_cache key, so all tiers/modes/years recompute on the fixed code
+// with fresh facilities metadata). Bumped for the retired-unit colouring fix:
+// future days are now null (not 0) for retired units, so tiles frozen under the
+// old logic must be discarded rather than served stale.
+const CF_CACHE_VERSION = "v2";
+
 // One unstable_cache wrapper per (freshness tier, fleet mode). Revalidate is
 // static per wrapper, so the tiers can't share one; and the mode is baked into
 // the cache key parts so the two rosters (full vs current) never share a Data
@@ -96,10 +103,14 @@ const tierCaches = Object.fromEntries(
 		Object.fromEntries(
 			FLEET_MODES.map((mode) => [
 				mode,
-				unstable_cache(fetchCapacityFactors, ["capacity-factors", tier, mode], {
-					revalidate: YEAR_CACHE_TIERS[tier].revalidateSeconds,
-					tags: ["capacity-factors", tier, mode],
-				}),
+				unstable_cache(
+					fetchCapacityFactors,
+					["capacity-factors", CF_CACHE_VERSION, tier, mode],
+					{
+						revalidate: YEAR_CACHE_TIERS[tier].revalidateSeconds,
+						tags: ["capacity-factors", tier, mode],
+					},
+				),
 			]),
 		) as Record<FleetMode, typeof fetchCapacityFactors>,
 	]),
