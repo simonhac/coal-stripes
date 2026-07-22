@@ -68,6 +68,21 @@ const headCell: React.CSSProperties = {
 };
 const numCell: React.CSSProperties = { ...cell, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
 
+// The "Cold fetch?" column echoes the raw x-cf-cold header. On a CDN edge HIT the
+// header is replayed from when the entry was first built, so `x-cf-cold: true` on
+// a warm row is *historical* telemetry (the entry was born from a cold fetch), not
+// a cost this probe paid. Only a `cold` classification is a live cold fetch — see
+// classifyProbe in src/server/cache-warmer.ts, which trusts the edge signal first.
+function coldFetchCell(t: TileDiagnostic): { text: string; colour: string } {
+  if (t.coldFetch === null) return { text: '—', colour: '#555' };
+  if (!t.coldFetch) return { text: 'no', colour: '#1a1a1a' };
+  const ms = t.coldFetchMs ? ` (${t.coldFetchMs} ms)` : '';
+  // Classified cold → no edge hit, so THIS request paid the upstream fetch.
+  if (t.classification === 'cold') return { text: `yes${ms}`, colour: CLASS_COLOUR.cold };
+  // Warm row with a cold header → replayed historical telemetry from the edge.
+  return { text: `was cold${ms}`, colour: '#888' };
+}
+
 function ServerCacheHealth() {
   const { data, isLoading, isError, error, refetch, isFetching } =
     useQuery<TilesDiagnosticsResponse>({
@@ -93,7 +108,10 @@ function ServerCacheHealth() {
         Each year is probed by self-fetching <code>/api/capacity-factors</code>. Latency and the{' '}
         <code>x-cf-cold</code> marker reveal whether a warm Next.js Data Cache served it or a cold
         OpenElectricity fetch was paid. <code>x-vercel-cache</code> reflects only the regional CDN
-        edge (a <code>MISS</code> can still be warm at the origin).
+        edge (a <code>MISS</code> can still be warm at the origin). A <code>was cold</code> value on
+        a <strong>warm</strong> row is telemetry replayed from the CDN edge — the entry was
+        originally built by a cold fetch, not a cost paid now; only a <strong>cold</strong> Status
+        means a live upstream fetch was paid just now.
       </p>
 
       {isLoading && <p style={{ color: '#555' }}>Probing every year… this can take a while if a tile is cold.</p>}
@@ -126,22 +144,23 @@ function ServerCacheHealth() {
                 </tr>
               </thead>
               <tbody>
-                {data.tiles.map((t) => (
-                  <tr key={t.year}>
-                    <td style={cell}>{t.year}</td>
-                    <td style={cell}>{t.tier}</td>
-                    <td style={{ ...cell, color: CLASS_COLOUR[t.classification], fontWeight: 600 }}>
-                      {t.classification}
-                      {!t.ok ? ` (${t.status})` : ''}
-                    </td>
-                    <td style={numCell}>{t.ms} ms</td>
-                    <td style={cell}>
-                      {t.coldFetch === null ? '—' : t.coldFetch ? `yes${t.coldFetchMs ? ` (${t.coldFetchMs} ms)` : ''}` : 'no'}
-                    </td>
-                    <td style={cell}>{t.xVercelCache ?? '—'}</td>
-                    <td style={numCell}>{t.age ?? '—'}</td>
-                  </tr>
-                ))}
+                {data.tiles.map((t) => {
+                  const cf = coldFetchCell(t);
+                  return (
+                    <tr key={t.year}>
+                      <td style={cell}>{t.year}</td>
+                      <td style={cell}>{t.tier}</td>
+                      <td style={{ ...cell, color: CLASS_COLOUR[t.classification], fontWeight: 600 }}>
+                        {t.classification}
+                        {!t.ok ? ` (${t.status})` : ''}
+                      </td>
+                      <td style={numCell}>{t.ms} ms</td>
+                      <td style={{ ...cell, color: cf.colour }}>{cf.text}</td>
+                      <td style={cell}>{t.xVercelCache ?? '—'}</td>
+                      <td style={numCell}>{t.age ?? '—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
