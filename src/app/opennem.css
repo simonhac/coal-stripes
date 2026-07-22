@@ -1136,3 +1136,220 @@ header a {
 .shortcut-sep { color: #9a9a9a; font-size: 12px; }
 .shortcut-desc { margin: 0; color: #333; text-align: right; }
 
+/* ============================================================
+   Stats / records page (/stats)
+   ============================================================ */
+.opennem-stats-container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: var(--app-padding);
+  padding-top: calc(var(--app-padding) + 65px); /* clear the fixed header */
+  font-family: var(--font-stack);
+  color: var(--primary);
+}
+
+.opennem-stats-intro {
+  margin: 8px 0 28px;
+}
+.opennem-stats-intro h1 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--dark-grey);
+  margin: 0 0 8px;
+}
+.opennem-stats-intro p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #555;
+  max-width: 660px;
+  margin: 0;
+}
+.opennem-stats-intro strong {
+  color: var(--dark-grey);
+  font-weight: 600;
+}
+
+.opennem-stats-panel {
+  margin-bottom: 34px;
+}
+.opennem-stats-panel-head {
+  margin-bottom: 8px;
+}
+.opennem-stats-panel-head h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--dark-grey);
+  margin: 0;
+}
+.opennem-stats-panel-head p {
+  font-size: 12.5px;
+  color: #6a6a6a;
+  margin: 3px 0 0;
+}
+
+.opennem-stats-scroll {
+  overflow-x: auto;
+}
+.opennem-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.opennem-stats-table thead th {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8a8a8a;
+  text-align: right;
+  padding: 0 0 8px 20px;
+  border-bottom: 1px solid #e5e5e5;
+  white-space: nowrap;
+}
+.opennem-stats-table thead th.opennem-stats-rowlabel {
+  text-align: left;
+  padding-left: 0;
+}
+
+.opennem-stats-rowlabel {
+  text-align: left;
+  white-space: nowrap;
+  padding: 10px 16px 10px 0;
+  font-weight: 500;
+  color: var(--dark-grey);
+  vertical-align: top;
+}
+.opennem-stats-rowlabel-short {
+  display: none;
+}
+
+.opennem-stats-num {
+  text-align: right;
+  padding: 10px 0 10px 20px;
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  white-space: nowrap;
+}
+
+.opennem-stats-value {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--dark-grey);
+  line-height: 1.2;
+}
+.opennem-stats-sub {
+  display: block;
+  font-size: 11.5px;
+  color: #8a8a8a;
+  margin-top: 2px;
+}
+.opennem-stats-empty {
+  color: #bbb;
+  font-weight: 400;
+}
+
+.opennem-stats-flag {
+  color: var(--opennem-primary);
+  font-weight: 700;
+  cursor: help;
+  margin-left: 1px;
+}
+
+/* Inline text button (e.g. "Show all" in the data-quality remainder row). */
+.opennem-stats-link {
+  font: inherit;
+  font-weight: 600;
+  color: var(--opennem-primary);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.opennem-stats-link:hover {
+  text-decoration: none;
+}
+.opennem-stats-link:focus-visible {
+  outline: 2px solid var(--opennem-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.opennem-stats-bar {
+  display: block;
+  width: 100%;
+  max-width: 120px;
+  height: 4px;
+  margin: 6px 0 0 auto;
+  background: #ececec;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.opennem-stats-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--opennem-primary);
+  border-radius: 2px;
+}
+
+/* Row separators and emphasis for network subtotals / grand total. */
+.opennem-stats-row > td,
+.opennem-stats-row > th {
+  border-bottom: 1px dotted #e0e0e0;
+}
+.opennem-stats-row-network > th,
+.opennem-stats-row-network > td {
+  border-top: 1px solid #d8d8d8;
+}
+.opennem-stats-row-network .opennem-stats-rowlabel,
+.opennem-stats-row-total .opennem-stats-rowlabel {
+  font-weight: 700;
+  color: black;
+}
+.opennem-stats-row-total > th,
+.opennem-stats-row-total > td {
+  border-top: 2px solid #333;
+}
+.opennem-stats-row-total .opennem-stats-value {
+  color: black;
+}
+
+.opennem-stats-note {
+  font-size: 11.5px;
+  color: #8a8a8a;
+  line-height: 1.6;
+  margin-top: 24px;
+  border-top: 1px dotted #cdcdcd;
+  padding-top: 14px;
+  max-width: 740px;
+}
+
+/* Header nav link to the records page (and back). */
+.opennem-nav-link {
+  font-family: var(--font-stack);
+  font-size: 13px;
+  font-weight: 600;
+  color: #6a6a6a;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.opennem-nav-link:hover {
+  color: var(--dark-grey);
+}
+
+@media (max-width: 600px) {
+  .opennem-stats-rowlabel-long {
+    display: none;
+  }
+  .opennem-stats-rowlabel-short {
+    display: inline;
+  }
+  .opennem-stats-intro h1 {
+    font-size: 22px;
+  }
+}
+

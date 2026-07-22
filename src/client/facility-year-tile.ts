@@ -2,24 +2,9 @@ import { Facility, GeneratingUnit } from '@/shared/types';
 import { TILE_CONFIG, PAGE_BACKGROUND_ABGR } from '@/shared/config';
 import { getDateFromIndex } from '@/shared/date-utils';
 import { capacityFactorColorMap } from '@/shared/capacity-factor-color-map';
+import { aliveSpan, classifyNull, type AliveSpan } from '@/shared/data-gaps';
 import { featureFlags } from '@/shared/feature-flags';
 import { TooltipData } from '@/components/CapFacTooltip';
-
-/** 0-based index of the last non-null day in a unit's series; -1 if all null. */
-function lastDataDayIndex(data: (number | null)[]): number {
-  for (let i = data.length - 1; i >= 0; i--) {
-    if (data[i] !== null) return i;
-  }
-  return -1;
-}
-
-/** 0-based index of the first non-null day in a unit's series; -1 if all null. */
-function firstDataDayIndex(data: (number | null)[]): number {
-  for (let i = 0; i < data.length; i++) {
-    if (data[i] !== null) return i;
-  }
-  return -1;
-}
 
 /**
  * Colour (ABGR uint32) for one day of a unit, classifying "no data" by position:
@@ -30,11 +15,16 @@ function firstDataDayIndex(data: (number | null)[]): number {
  *   • any other null (a collection gap, or an operating unit's trailing days
  *     before the data frontier) → pale blue "unknown". The region-level page-
  *     background overlay in CompositeTile covers the true data end / future.
+ *
+ * The pre-commission/interior distinction is shared with the server stats
+ * aggregation via @/shared/data-gaps; within a single-year tile a post-
+ * retirement end and an interior gap both render as pale blue (unchanged).
  */
-function unitDayColor(cf: number | null, dayIndex: number, unitFirst: number, unitLast: number): number {
+function unitDayColor(cf: number | null, dayIndex: number, span: AliveSpan): number {
   if (cf !== null) return capacityFactorColorMap.getIntColor(cf);
-  if (unitLast < 0 || dayIndex < unitFirst) return PAGE_BACKGROUND_ABGR;
-  return capacityFactorColorMap.getIntColor(null);
+  return classifyNull(dayIndex, span) === 'pre-commission'
+    ? PAGE_BACKGROUND_ABGR
+    : capacityFactorColorMap.getIntColor(null);
 }
 
 export class FacilityYearTile {
@@ -116,11 +106,10 @@ export class FacilityYearTile {
       let yOffset = 0;
       this.facility.units.forEach((unit, unitIndex) => {
         const unitHeight = unitHeights[unitIndex];
-        const unitFirst = firstDataDayIndex(unit.history.data);
-        const unitLast = lastDataDayIndex(unit.history.data);
+        const span = aliveSpan(unit.history.data);
 
         for (let dayIndex = 0; dayIndex < unit.history.data.length; dayIndex++) {
-          const color = unitDayColor(unit.history.data[dayIndex], dayIndex, unitFirst, unitLast);
+          const color = unitDayColor(unit.history.data[dayIndex], dayIndex, span);
 
           // Fill the column for this day
           for (let y = 0; y < unitHeight; y++) {
@@ -149,11 +138,10 @@ export class FacilityYearTile {
       let yOffset = 0;
       this.facility.units.forEach((unit, unitIndex) => {
         const unitHeight = unitHeights[unitIndex];
-        const unitFirst = firstDataDayIndex(unit.history.data);
-        const unitLast = lastDataDayIndex(unit.history.data);
+        const span = aliveSpan(unit.history.data);
 
         for (let dayIndex = 0; dayIndex < unit.history.data.length; dayIndex++) {
-          const color = unitDayColor(unit.history.data[dayIndex], dayIndex, unitFirst, unitLast);
+          const color = unitDayColor(unit.history.data[dayIndex], dayIndex, span);
 
           // Extract RGBA components from the 32-bit color
           const r = color & 0xFF;

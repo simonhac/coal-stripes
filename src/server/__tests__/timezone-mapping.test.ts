@@ -15,6 +15,11 @@ afterAll(() => {
 // `${D}T00:00:00+10:00`. These tests exercise the private mapping directly to
 // guard against off-by-one errors. All dates are in 2025 — comfortably in the
 // past — so none are nulled as "today/future".
+//
+// This mapping used to have to survive a DST-dependent client bug (offset
+// double-applied in createNetworkDate); that was filed as
+// opennem/openelectricity-typescript#7 and fixed in PR #8 (v0.9.1). These guards
+// stay useful regardless, since our day-bucketing must not regress.
 const nemMidnight = (day: string) => new Date(`${day}T00:00:00+10:00`);
 
 const mockFacilities = [
@@ -46,8 +51,8 @@ describe('Timezone Date Mapping', () => {
     ];
 
     const unit = process(mockData, '2025-07-01', '2025-07-02').data[0];
-    expect(unit.history.data[0]).toBe(41.7); // July 1 — 1000 MWh / 24 / 100 * 100
-    expect(unit.history.data[1]).toBe(83.3); // July 2 — 2000 MWh
+    expect(unit.history.data[0]).toBe(41.667); // July 1 — 1000 MWh / 24 / 100 * 100
+    expect(unit.history.data[1]).toBe(83.333); // July 2 — 2000 MWh
   });
 
   it('has no off-by-one errors across a complete week', () => {
@@ -61,13 +66,13 @@ describe('Timezone Date Mapping', () => {
     }
 
     const unit = process(mockData, '2025-07-01', '2025-07-07').data[0];
-    expect(unit.history.data[0]).toBe(4.2); // July 1 — 100/24/100*100
-    expect(unit.history.data[1]).toBe(8.3); // July 2
+    expect(unit.history.data[0]).toBe(4.167); // July 1 — 100/24/100*100
+    expect(unit.history.data[1]).toBe(8.333); // July 2
     expect(unit.history.data[2]).toBe(12.5); // July 3
-    expect(unit.history.data[3]).toBe(16.7); // July 4
-    expect(unit.history.data[4]).toBe(20.8); // July 5
+    expect(unit.history.data[3]).toBe(16.667); // July 4
+    expect(unit.history.data[4]).toBe(20.833); // July 5
     expect(unit.history.data[5]).toBe(25); // July 6
-    expect(unit.history.data[6]).toBe(29.2); // July 7
+    expect(unit.history.data[6]).toBe(29.167); // July 7
   });
 
   it('maps an instant on the UTC day boundary to the correct network day', () => {
@@ -77,6 +82,6 @@ describe('Timezone Date Mapping', () => {
     ];
 
     const unit = process(mockData, '2025-07-02', '2025-07-02').data[0];
-    expect(unit.history.data[0]).toBe(41.7); // July 2
+    expect(unit.history.data[0]).toBe(41.667); // July 2
   });
 });

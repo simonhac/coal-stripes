@@ -37,7 +37,7 @@ export function isAuthorisedCronRequest(request: Request): boolean {
 }
 
 /** The base URL of the current deployment, for internal self-fetches. */
-function getBaseUrl(): string {
+export function getBaseUrl(): string {
   // Production uses the stable project domain; previews use the deployment URL.
   const host =
     process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;

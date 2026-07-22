@@ -43,6 +43,11 @@ export function OpenElectricityHeader({ onOpenHelp, fleetMode, onFleetModeChange
           </Link>
 
           <div className="opennem-header-actions">
+            {/* Cross-link to the generation records / stats page. */}
+            <Link href="/stats" className="opennem-nav-link">
+              Records
+            </Link>
+
             {/* Fleet roster toggle — full historical fleet vs today's fleet. */}
             {fleetMode && onFleetModeChange && (
               <FleetModeToggle mode={fleetMode} onChange={onFleetModeChange} />

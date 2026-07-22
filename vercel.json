@@ -13,9 +13,16 @@
     },
     "src/app/api/diagnostics/tiles/route.ts": {
       "maxDuration": 300
+    },
+    "src/app/api/stats/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/cron/warm-stats/route.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [
-    { "path": "/api/cron/warm-all", "schedule": "*/10 * * * *" }
+    { "path": "/api/cron/warm-all", "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/warm-stats", "schedule": "30 15 * * *" }
   ]
 }

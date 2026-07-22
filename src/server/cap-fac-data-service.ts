@@ -356,9 +356,13 @@ export class CapFacDataService {
           } else if (currentDate.compare(todayBrisbane) >= 0) {
             capacityFactors.push(null);
           } else if (dayData && dayData.energy !== null && capacity && capacity > 0) {
-            // capacity factor = (energy_MWh / 24h) / registered_capacity * 100
+            // capacity factor = (energy_MWh / 24h) / registered_capacity * 100.
+            // Kept to 3 decimal places: the stripes only need ~integer precision,
+            // but downstream consumers reconstruct absolute generation as
+            // CF/100 × capacity × 24 (see coal-stats-service), so extra precision
+            // here keeps that reconstruction essentially exact.
             const capacityFactor = (dayData.energy / 24) / capacity * 100;
-            capacityFactors.push(Math.round(capacityFactor * 10) / 10);
+            capacityFactors.push(Math.round(capacityFactor * 1000) / 1000);
           } else {
             capacityFactors.push(null);
           }

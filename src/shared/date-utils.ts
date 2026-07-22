@@ -126,6 +126,13 @@ const NETWORK_TIME_ZONE: Record<string, string> = {
  * guesswork. The OpenElectricity client returns these instants in a
  * machine-timezone-independent way, so this is stable wherever it runs.
  *
+ * History: earlier client versions double-applied the offset in
+ * createNetworkDate (adding the host's DST-varying getTimezoneOffset() on top of
+ * the already-correct tz-aware ISO string), which shifted days around the AU DST
+ * transition. Filed as opennem/openelectricity-typescript#7 and fixed in PR #8
+ * (shipped in 0.9.1). This reprojection is correct regardless, so it needs no
+ * change — the note is just a breadcrumb for that settled area.
+ *
  * @param interval The interval timestamp returned by the API (a Date)
  * @param network  The network the data belongs to ("NEM", "WEM", …)
  * @returns The network-local calendar day
@@ -172,12 +179,22 @@ export function getTodayAEST(): CalendarDate {
 
 /**
  * Get the short month name (3 letters) for a CalendarDate
- * 
+ *
  * @param date CalendarDate object
  * @returns Three-letter month abbreviation
  */
 export function getMonthName(date: CalendarDate): string {
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return monthNames[date.month - 1];
+}
+
+/**
+ * Get the calendar quarter (1–4) a date falls in.
+ *
+ * @param date CalendarDate object
+ * @returns 1 for Jan–Mar, 2 for Apr–Jun, 3 for Jul–Sep, 4 for Oct–Dec
+ */
+export function getQuarter(date: CalendarDate): number {
+  return Math.floor((date.month - 1) / 3) + 1;
 }
