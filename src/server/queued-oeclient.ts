@@ -18,8 +18,11 @@ type IFacilityParams = NonNullable<Parameters<OpenElectricityClient['getFaciliti
 // request starts within 100ms of each other.
 const QUEUE_OPTIONS = { concurrency: 10, interval: 100, intervalCap: 1 } as const;
 
-// 4 retries with exponential backoff: 1s, 2s, 4s, 8s (capped at 30s).
-const RETRY_OPTIONS = { retries: 4, minTimeout: 1_000, maxTimeout: 30_000 } as const;
+// 2 retries with exponential backoff: 1s then 2s (~3s of added latency, capped
+// at 4s). Kept deliberately short so a genuinely cold miss returns in a few
+// seconds rather than ~15s; a warm-all cron re-attempts any year that fails
+// under transient upstream rate-limiting, so we don't need long retry chains.
+const RETRY_OPTIONS = { retries: 2, minTimeout: 1_000, maxTimeout: 4_000 } as const;
 
 /** Details we attach to a thrown error so the API route can surface them. */
 export interface OERequestDetails {

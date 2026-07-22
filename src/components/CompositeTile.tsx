@@ -56,7 +56,14 @@ const CompositeTileComponent = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastKnownHeightRef = useRef<number>(12); // Default height
   const animationFrameRef = useRef<number | null>(null);
-  const lastRenderedRangeRef = useRef<string>('');
+  const lastRenderRef = useRef<{
+    startStr: string;
+    endStr: string;
+    leftState: TileState;
+    rightState: TileState;
+    left: FacilityYearTile | null;
+    right: FacilityYearTile | null;
+  } | null>(null);
   const shimmerOffsetRef = useRef<number>(0);
   const lastAnimationTimeRef = useRef<number>(performance.now());
   const lastLoggedOffsetRef = useRef<number | null>(null);
@@ -243,25 +250,45 @@ const CompositeTileComponent = ({
   }, [dateRange, tiles, facilityName, facilityCode]);
 
   useEffect(() => {
-    const rangeKey = `${dateRange.start.toString()}-${dateRange.end.toString()}`;
-    
+    const startStr = dateRange.start.toString();
+    const endStr = dateRange.end.toString();
+
     // Check if tiles need loading/shimmer
-    const tilesNeedShimmer = tiles.leftState === 'pendingData' || 
+    const tilesNeedShimmer = tiles.leftState === 'pendingData' ||
                             (dateRange.start.year !== dateRange.end.year && tiles.rightState === 'pendingData');
-    
-    // Skip rendering only if:
-    // 1. The date range hasn't changed AND
-    // 2. We don't need shimmer animation AND  
-    // 3. Tiles are already loaded (not idle)
-    if (lastRenderedRangeRef.current === rangeKey && 
-        !tilesNeedShimmer && 
-        tiles.leftState !== 'idle' && 
-        tiles.rightState !== 'idle') {
+
+    // Skip the repaint only when NOTHING that affects the painted output has
+    // changed since the last paint AND we don't need to keep a shimmer running.
+    // The signature must include each tile's identity, not just the date range:
+    // keying on the range alone stranded a freshly-arrived tile — when the
+    // second year of a two-year window loaded AFTER the first paint, the range
+    // was unchanged so the guard skipped the repaint and that half stayed grey.
+    // Tile identity (not just state) matters because structuralSharing:false
+    // (see year-queries) yields a brand-new FacilityYearTile on refetch, so
+    // 'hasData' alone can't detect a data change.
+    const last = lastRenderRef.current;
+    const unchanged =
+      last !== null &&
+      last.startStr === startStr &&
+      last.endStr === endStr &&
+      last.leftState === tiles.leftState &&
+      last.rightState === tiles.rightState &&
+      last.left === tiles.left &&
+      last.right === tiles.right;
+
+    if (unchanged && !tilesNeedShimmer) {
       return;
     }
-    
-    // Only update the ref after we've actually rendered
-    lastRenderedRangeRef.current = rangeKey;
+
+    // Only update the ref after we've decided to render
+    lastRenderRef.current = {
+      startStr,
+      endStr,
+      leftState: tiles.leftState,
+      rightState: tiles.rightState,
+      left: tiles.left,
+      right: tiles.right,
+    };
     
     const perfName = 'CompositeTile.render';
     perfMonitor.start(perfName);
