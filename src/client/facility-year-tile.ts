@@ -1,9 +1,40 @@
 import { Facility, GeneratingUnit } from '@/shared/types';
-import { TILE_CONFIG } from '@/shared/config';
+import { TILE_CONFIG, PAGE_BACKGROUND_ABGR } from '@/shared/config';
 import { getDateFromIndex } from '@/shared/date-utils';
 import { capacityFactorColorMap } from '@/shared/capacity-factor-color-map';
 import { featureFlags } from '@/shared/feature-flags';
 import { TooltipData } from '@/components/CapFacTooltip';
+
+/** 0-based index of the last non-null day in a unit's series; -1 if all null. */
+function lastDataDayIndex(data: (number | null)[]): number {
+  for (let i = data.length - 1; i >= 0; i--) {
+    if (data[i] !== null) return i;
+  }
+  return -1;
+}
+
+/** 0-based index of the first non-null day in a unit's series; -1 if all null. */
+function firstDataDayIndex(data: (number | null)[]): number {
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] !== null) return i;
+  }
+  return -1;
+}
+
+/**
+ * Colour (ABGR uint32) for one day of a unit, classifying "no data" by position:
+ *   • before the unit's first data (not yet commissioned) or a unit with no data
+ *     at all → page background (fades out, like the chart's empty ends)
+ *   • after the unit's last data (shut down) → red (0%)
+ *   • a null between first and last data (collection gap) → pale blue "unknown"
+ *   • real data → the capacity-factor colour
+ */
+function unitDayColor(cf: number | null, dayIndex: number, unitFirst: number, unitLast: number): number {
+  if (cf !== null) return capacityFactorColorMap.getIntColor(cf);
+  if (unitLast < 0 || dayIndex < unitFirst) return PAGE_BACKGROUND_ABGR;
+  if (dayIndex > unitLast) return capacityFactorColorMap.getIntColor(0);
+  return capacityFactorColorMap.getIntColor(null);
+}
 
 export class FacilityYearTile {
   private facility: Facility;
@@ -84,17 +115,17 @@ export class FacilityYearTile {
       let yOffset = 0;
       this.facility.units.forEach((unit, unitIndex) => {
         const unitHeight = unitHeights[unitIndex];
-        
-        
+        const unitFirst = firstDataDayIndex(unit.history.data);
+        const unitLast = lastDataDayIndex(unit.history.data);
+
         for (let dayIndex = 0; dayIndex < unit.history.data.length; dayIndex++) {
-          const capacityFactor = unit.history.data[dayIndex];
-          const color = capacityFactorColorMap.getIntColor(capacityFactor);
-          
+          const color = unitDayColor(unit.history.data[dayIndex], dayIndex, unitFirst, unitLast);
+
           // Fill the column for this day
           for (let y = 0; y < unitHeight; y++) {
             const pixelIndex = (yOffset + y) * width + dayIndex;
-            
-            
+
+
             pixels[pixelIndex] = color;
           }
         }
@@ -117,11 +148,12 @@ export class FacilityYearTile {
       let yOffset = 0;
       this.facility.units.forEach((unit, unitIndex) => {
         const unitHeight = unitHeights[unitIndex];
-        
+        const unitFirst = firstDataDayIndex(unit.history.data);
+        const unitLast = lastDataDayIndex(unit.history.data);
+
         for (let dayIndex = 0; dayIndex < unit.history.data.length; dayIndex++) {
-          const capacityFactor = unit.history.data[dayIndex];
-          const color = capacityFactorColorMap.getIntColor(capacityFactor);
-          
+          const color = unitDayColor(unit.history.data[dayIndex], dayIndex, unitFirst, unitLast);
+
           // Extract RGBA components from the 32-bit color
           const r = color & 0xFF;
           const g = (color >> 8) & 0xFF;
