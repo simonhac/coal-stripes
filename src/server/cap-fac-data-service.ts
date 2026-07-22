@@ -339,21 +339,28 @@ export class CapFacDataService {
         // A retired unit is switched off after its last day of data: emit 0
         // (generated nothing) there rather than null, so the client can tell a
         // decommissioned unit (red 0%) apart from one with no data yet or a
-        // collection gap (null). Not-yet-commissioned days and gaps stay null.
+        // collection gap (null). `decommissionedAfter` is its last day of data.
         const decommissionedAfter =
           unit.unit_status === 'retired' && unit.unit_last_seen
             ? parseDate(unit.unit_last_seen.slice(0, 10))
             : null;
 
-        // Fill the full requested range; missing/today/future days are null,
-        // except a retired unit's post-shutdown days, which are 0.
+        // Fill the full requested range. Branch precedence matters:
+        //   1. today/future           → null   (unknown; even a long-retired unit
+        //                                        must NOT paint red into the future —
+        //                                        the frontier overlay fades this to
+        //                                        the page background)
+        //   2. a real reading         → CF     (a genuine reading always wins, so
+        //                                        generation is never masked by a
+        //                                        synthetic 0 if unit_last_seen lags)
+        //   3. retired & past its end → 0      (decommissioned: red from last
+        //                                        generation up to today)
+        //   4. otherwise              → null   (collection gap / not yet commissioned)
         const capacityFactors: (number | null)[] = [];
         let currentDate = requestedStartDate;
         while (currentDate.compare(requestedEndDate) <= 0) {
           const dayData = dataByDay.get(currentDate.toString());
-          if (decommissionedAfter && currentDate.compare(decommissionedAfter) > 0) {
-            capacityFactors.push(0);
-          } else if (currentDate.compare(todayBrisbane) >= 0) {
+          if (currentDate.compare(todayBrisbane) >= 0) {
             capacityFactors.push(null);
           } else if (dayData && dayData.energy !== null && capacity && capacity > 0) {
             // capacity factor = (energy_MWh / 24h) / registered_capacity * 100.
@@ -363,6 +370,8 @@ export class CapFacDataService {
             // here keeps that reconstruction essentially exact.
             const capacityFactor = (dayData.energy / 24) / capacity * 100;
             capacityFactors.push(Math.round(capacityFactor * 1000) / 1000);
+          } else if (decommissionedAfter && currentDate.compare(decommissionedAfter) > 0) {
+            capacityFactors.push(0);
           } else {
             capacityFactors.push(null);
           }

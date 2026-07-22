@@ -5,6 +5,7 @@
  */
 import { CapFacDataService } from '@/server/cap-fac-data-service';
 import { parseDate } from '@internationalized/date';
+import { getDaysBetween, getTodayAEST } from '@/shared/date-utils';
 import { setupTestLogger, cleanupTestLogger } from '../test-helpers';
 
 // The mock must provide a real NoDataFound class (defined inside the factory to
@@ -39,6 +40,10 @@ interface MockUnit {
   unit_code: string;
   unit_fueltech: string;
   unit_capacity: number | null;
+  // From the /facilities endpoint. A 'retired' unit's days after unit_last_seen
+  // (its last day of data) are filled with 0 (decommissioned red), not null.
+  unit_status: string | null;
+  unit_last_seen: string | null;
 }
 
 function unitRecord(over: Partial<MockUnit>): MockUnit {
@@ -50,9 +55,29 @@ function unitRecord(over: Partial<MockUnit>): MockUnit {
     unit_code: 'U1',
     unit_fueltech: 'coal_black',
     unit_capacity: 100,
+    unit_status: null,
+    unit_last_seen: null,
     ...over,
   };
 }
+
+// Rows of a steady 50% capacity factor (energy 1200 MWh/day, capacity 100 MW) for
+// the given inclusive date range — used to model a retired unit whose data ends.
+function rowsForRange(unitCode: string, network: string, start: string, end: string): unknown[] {
+  const tz = network === 'WEM' ? '+08:00' : '+10:00';
+  const rows: unknown[] = [];
+  let d = parseDate(start);
+  const last = parseDate(end);
+  while (d.compare(last) <= 0) {
+    rows.push({ interval: new Date(`${d.toString()}T00:00:00${tz}`), unit_code: unitCode, energy: 1200 });
+    d = d.add({ days: 1 });
+  }
+  return rows;
+}
+
+// Day-of-year index (0-based) of a date within its year — the index into history.data.
+const dayIndex = (isoDate: string): number =>
+  getDaysBetween(parseDate(`${parseDate(isoDate).year}-01-01`), parseDate(isoDate));
 
 // Daily energy rows for one unit across the year → a steady 50% capacity factor.
 function yearRows(unitCode: string, network: string): unknown[] {
@@ -155,4 +180,56 @@ describe('fleet modes', () => {
     const service = new CapFacDataService('key');
     await expect(service.getCapacityFactors(YEAR, 'full')).rejects.toThrow();
   }, 10000);
+});
+
+describe('retired-unit colouring (fill precedence)', () => {
+  // A retired plant whose data ended mid-2019. Data runs Jan 1–Jun 30, then a
+  // single stray reading on Aug 15 (a metadata `unit_last_seen` that lags the
+  // real series). unit_last_seen = 2019-06-30.
+  const RETIRED = {
+    facility_code: 'LIDDELL',
+    facility_name: 'Liddell',
+    unit_code: 'LD01',
+    unit_status: 'retired',
+    unit_last_seen: '2019-06-30T08:00:00+10:00',
+  };
+
+  it('fills a retired unit red (0) from last generation to today, but a real reading still wins', async () => {
+    // YEAR (2019) is entirely in the past, so no day is future-nulled.
+    getFacilities.mockResolvedValue({
+      table: { getRecords: () => [unitRecord(RETIRED)] },
+    });
+    const rows = [
+      ...rowsForRange('LD01', 'NEM', `${YEAR}-01-01`, `${YEAR}-06-30`),
+      ...rowsForRange('LD01', 'NEM', `${YEAR}-08-15`, `${YEAR}-08-15`), // stray reading after unit_last_seen
+    ];
+    getFacilityData.mockResolvedValue({ datatable: { getRows: () => rows } });
+
+    const service = new CapFacDataService('key');
+    const full = await service.getCapacityFactors(YEAR, 'full');
+    const data = full.data.find((u) => u.duid === 'LD01')!.history.data;
+
+    expect(data[dayIndex(`${YEAR}-01-15`)]).toBe(50); // real generation early
+    expect(data[dayIndex(`${YEAR}-07-15`)]).toBe(0); // past, no data, retired → red
+    expect(data[dayIndex(`${YEAR}-08-15`)]).toBe(50); // a real reading beats the synthetic 0
+    expect(data[dayIndex(`${YEAR}-12-31`)]).toBe(0); // still red at year end
+    // A fully-past retired year has no nulls: every day is either CF or 0 (red).
+    expect(data.every((v) => v !== null)).toBe(true);
+  });
+
+  it('never paints a retired unit red into the future — future days are null, not 0', async () => {
+    // A whole year in the future: every day is >= today, so nothing may be filled
+    // with the decommissioned 0 even though the unit retired years ago.
+    const futureYear = getTodayAEST().add({ years: 2 }).year;
+    getFacilities.mockResolvedValue({
+      table: { getRecords: () => [unitRecord(RETIRED)] },
+    });
+    getFacilityData.mockResolvedValue({ datatable: { getRows: () => [] } });
+
+    const service = new CapFacDataService('key');
+    const full = await service.getCapacityFactors(futureYear, 'full');
+    const data = full.data.find((u) => u.duid === 'LD01')!.history.data;
+
+    expect(data.every((v) => v === null)).toBe(true); // background, not red
+  });
 });
