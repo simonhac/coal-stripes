@@ -7,6 +7,12 @@
   "functions": {
     "src/app/api/**/*.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/cron/warm-all/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/diagnostics/tiles/route.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [

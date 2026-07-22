@@ -209,15 +209,18 @@ it, which is exactly what the crons maintain.
 
 ## Known limitations
 
-- **`maxDuration`**: `vercel.json` applies a 60 s default to all
-  `src/app/api/**` functions, while `warm-all` and `/api/diagnostics/tiles`
-  declare `maxDuration = 300`. Per-route exports normally win, but a fully-cold
-  all-years run (e.g. the first sweep after a deploy) is long enough that this is
-  worth verifying on the deployed tier.
+- **`maxDuration`**: `vercel.json` applies a 60 s default to all `src/app/api/**`
+  functions, and the two long-running routes (`warm-all`, `/api/diagnostics/tiles`)
+  need the full 300 s for a fully-cold all-years run (e.g. the first sweep after a
+  deploy). Both the route-segment exports (`maxDuration = 300`) *and* explicit
+  per-route `functions` entries in `vercel.json` declare 300 s, so the resolved
+  limit does not depend on route-segment-vs-glob precedence.
 - **Post-deploy cold window**: a deploy wipes the Data Cache, so years stay cold
-  until the next `warm-all` run — up to the cron interval (≤ 1 h). A user hitting
-  a year in that window pays one cold fetch (now ~3–4 s after the shortened retry
-  backoff, not ~15 s). Closing this fully would need deploy-triggered warming.
+  until the next `warm-all` run — up to the cron interval (≤ 10 min), plus the
+  sweep itself: a fully-cold ~21-year sweep runs sequentially and takes ~60–90 s,
+  so the tail years clear a little after the earlier ones. A user hitting a year in
+  that window pays one cold fetch (now ~3–4 s after the shortened retry backoff, not
+  ~15 s). Closing this fully would need deploy-triggered warming.
 - **Start-edge prefetch**: adjacent-year prefetch tries `startYear-2..-1`, which
   at 2006 are out of range and skipped — so a jump straight to the start year is
   always an on-demand fetch with no prefetch overlap.
