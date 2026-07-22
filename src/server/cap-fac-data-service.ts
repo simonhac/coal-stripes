@@ -20,6 +20,12 @@ interface UnitRecord {
   // (rare for coal, but possible for some retired units), so callers must guard
   // the capacity-factor division and row-height maths against null.
   unit_capacity: number | null;
+  // Operating status ('operating' | 'retired') and the last day the unit had
+  // data, from the /facilities endpoint. Used to emit 0 (generated nothing,
+  // i.e. decommissioned) rather than null for a retired unit's days after it
+  // stopped — see the fill loop in processGeneratingUnitCapFacHistoryDTO.
+  unit_status: string | null;
+  unit_last_seen: string | null;
 }
 
 interface Facility {
@@ -330,12 +336,24 @@ export class CapFacDataService {
           ])
         );
 
-        // Fill the full requested range; missing/today/future days are null.
+        // A retired unit is switched off after its last day of data: emit 0
+        // (generated nothing) there rather than null, so the client can tell a
+        // decommissioned unit (red 0%) apart from one with no data yet or a
+        // collection gap (null). Not-yet-commissioned days and gaps stay null.
+        const decommissionedAfter =
+          unit.unit_status === 'retired' && unit.unit_last_seen
+            ? parseDate(unit.unit_last_seen.slice(0, 10))
+            : null;
+
+        // Fill the full requested range; missing/today/future days are null,
+        // except a retired unit's post-shutdown days, which are 0.
         const capacityFactors: (number | null)[] = [];
         let currentDate = requestedStartDate;
         while (currentDate.compare(requestedEndDate) <= 0) {
           const dayData = dataByDay.get(currentDate.toString());
-          if (currentDate.compare(todayBrisbane) >= 0) {
+          if (decommissionedAfter && currentDate.compare(decommissionedAfter) > 0) {
+            capacityFactors.push(0);
+          } else if (currentDate.compare(todayBrisbane) >= 0) {
             capacityFactors.push(null);
           } else if (dayData && dayData.energy !== null && capacity && capacity > 0) {
             // capacity factor = (energy_MWh / 24h) / registered_capacity * 100

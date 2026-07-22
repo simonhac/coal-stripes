@@ -23,16 +23,17 @@ function firstDataDayIndex(data: (number | null)[]): number {
 
 /**
  * Colour (ABGR uint32) for one day of a unit, classifying "no data" by position:
+ *   • real data → the capacity-factor colour (incl. 0 → red; the server emits 0
+ *     for a decommissioned unit's post-shutdown days, so "shut down" is red here)
  *   • before the unit's first data (not yet commissioned) or a unit with no data
  *     at all → page background (fades out, like the chart's empty ends)
- *   • after the unit's last data (shut down) → red (0%)
- *   • a null between first and last data (collection gap) → pale blue "unknown"
- *   • real data → the capacity-factor colour
+ *   • any other null (a collection gap, or an operating unit's trailing days
+ *     before the data frontier) → pale blue "unknown". The region-level page-
+ *     background overlay in CompositeTile covers the true data end / future.
  */
 function unitDayColor(cf: number | null, dayIndex: number, unitFirst: number, unitLast: number): number {
   if (cf !== null) return capacityFactorColorMap.getIntColor(cf);
   if (unitLast < 0 || dayIndex < unitFirst) return PAGE_BACKGROUND_ABGR;
-  if (dayIndex > unitLast) return capacityFactorColorMap.getIntColor(0);
   return capacityFactorColorMap.getIntColor(null);
 }
 
