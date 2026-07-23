@@ -6,6 +6,14 @@ import { getTodayAEST } from '@/shared/date-utils';
 import { yearCachePolicy } from '@/shared/config';
 import { tileTimingRecorder } from './tile-timing-recorder';
 
+// Per-deploy id (see next.config.ts). Appended to the tile-fetch URL as `&v=` so
+// every deploy rotates the URL and the browser + Vercel-edge HTTP caches miss and
+// refetch — the origin Data Cache (keyed on year/mode/version, not the URL) still
+// serves the computed tile, so it's an edge miss but an origin hit (no OE fetch).
+// A fix therefore reaches users immediately instead of being masked for up to the
+// tile's 24h/7d max-age. Stable `dev` locally keeps the dev URL cacheable.
+const BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID ?? 'dev';
+
 /**
  * Get the earliest year for which data is available.
  */
@@ -45,12 +53,15 @@ export function isValidYear(year: number): boolean {
  */
 export function yearQueryOptions(mode: FleetMode, year: number) {
   return queryOptions({
-    queryKey: ['capFacYear', mode, year] as const,
+    queryKey: ['capFacYear', mode, year, BUILD_ID] as const,
     queryFn: async ({ signal }): Promise<CapFacYear> => {
       // Time the whole fetch + parse + build as `fetch-build` — the latency a
       // user feels per tile. Network overhead ≈ fetch-build − year-build.
       const fetchBuildStart = performance.now();
-      const response = await fetch(`/api/capacity-factors?year=${year}&fleet=${mode}`, { signal });
+      const response = await fetch(
+        `/api/capacity-factors?year=${year}&fleet=${mode}&v=${BUILD_ID}`,
+        { signal },
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
