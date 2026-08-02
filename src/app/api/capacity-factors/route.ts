@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
-import { CapFacDataService } from "@/server/cap-fac-data-service";
+import { getCapFacDataService } from "@/server/cap-fac-data-service";
 import { initializeRequestLogger } from "@/server/request-logger";
 import { getTodayAEST, getAESTDateTimeString } from "@/shared/date-utils";
 import {
@@ -31,20 +31,6 @@ export const dynamic = "force-dynamic";
 const port = Number.parseInt(process.env.PORT || "3000");
 initializeRequestLogger(port);
 
-// Create a singleton instance of the service to avoid creating multiple API clients
-let serviceInstance: CapFacDataService | null = null;
-
-function getService(): CapFacDataService {
-	if (!serviceInstance) {
-		const apiKey = process.env.OPENELECTRICITY_API_KEY;
-		if (!apiKey) {
-			throw new Error("API key not configured");
-		}
-		serviceInstance = new CapFacDataService(apiKey);
-	}
-	return serviceInstance;
-}
-
 // Per-instance record of genuine cold fetches. `fetchCapacityFactors` (below)
 // is the function wrapped by unstable_cache, so it ONLY runs on a Data-Cache
 // miss — i.e. a real, rate-limited OpenElectricity fetch. We record each such
@@ -65,7 +51,7 @@ const coldKey = (year: number, mode: FleetMode): string => `${mode}:${year}`;
 
 async function fetchCapacityFactors(year: number, mode: FleetMode) {
 	debug(`🔄 Cache miss - fetching data for year ${year} (${mode})`);
-	const service = getService();
+	const service = getCapFacDataService();
 	const started = performance.now();
 	const result = await service.getCapacityFactors(year, mode);
 	const key = coldKey(year, mode);
@@ -176,13 +162,36 @@ export async function GET(request: Request) {
 			response.headers.set("x-cf-cold-ms", String(coldAfter.lastColdFetchMs));
 		}
 
+		// When this payload was actually assembled from OpenElectricity — NOT when
+		// it was read from a cache. It travels with the body, so a copy replayed
+		// from the CDN still reports its true age. Surfaced per year on
+		// /diagnostics; the same value reaches /stats via the DTO's created_at.
+		response.headers.set("x-cf-built-at", data.created_at);
+
+		// Vercel CDN cache tags, so the purge endpoint can invalidate the edge —
+		// something revalidateTag cannot do for a route that sets its own
+		// Cache-Control. Note the year is tag-able here even though the Data Cache
+		// tags can't be: those are fixed per (tier, mode) wrapper, whereas this
+		// header is written per response.
+		response.headers.set(
+			"Vercel-Cache-Tag",
+			`capacity-factors,cf-${policy.tier},cf-${mode},cf-year-${year}`,
+		);
+
 		if (year > currentYear) {
 			// Future years: never cache (data does not exist yet).
 			response.headers.set("Cache-Control", "no-store");
 		} else {
+			// Split browser and edge lifetimes. The browser cache is the ONE layer
+			// no purge can reach, so keep it short — a fix must never be masked by
+			// a copy sitting in someone's browser. The Vercel edge keeps the full
+			// freshness-tier window (it's fast, and now purgeable by tag), and
+			// TanStack Query already dedupes within a session, so the short browser
+			// max-age costs at most one edge round-trip per year per page load.
+			response.headers.set("Cache-Control", "public, max-age=60");
 			response.headers.set(
-				"Cache-Control",
-				`public, max-age=${policy.revalidateSeconds}, s-maxage=${policy.revalidateSeconds}, stale-while-revalidate=${policy.swrSeconds}`,
+				"Vercel-CDN-Cache-Control",
+				`public, s-maxage=${policy.revalidateSeconds}, stale-while-revalidate=${policy.swrSeconds}`,
 			);
 		}
 

@@ -28,6 +28,7 @@ import type {
   GranularityStat,
   PeriodCoverage,
   StatRow,
+  StatsSources,
   StatValue,
 } from '@/shared/types';
 import { DATE_BOUNDARIES } from '@/shared/config';
@@ -123,6 +124,13 @@ export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationS
   // 1. Fetch every year (bounded concurrency; cached upstream) and assemble each
   //    unit's whole-of-history daily series.
   const dtos = await mapPool(years, 5, (y) => fetchYear(baseUrl, y, mode));
+
+  // Record where the data came from. Each year's payload carries its own
+  // `created_at` — when it was last built from OpenElectricity — which survives
+  // being replayed from any cache layer, so it is the honest answer to "how old
+  // is this?". Surfaced on /stats so nobody has to guess whether a stale cache
+  // is masking an upstream fix.
+  const sources = summariseSources(years, dtos);
 
   const units = new Map<string, UnitSeries>();
   for (const dto of dtos) {
@@ -243,6 +251,36 @@ export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationS
     units: 'MWh',
     rows: statRows,
     dataQuality: { totalHoleUnitDays, gaps: sortedGaps },
+    sources,
+  };
+}
+
+/**
+ * Pair each requested year with the `created_at` of the payload we got for it,
+ * and reduce to the oldest/newest across the set.
+ *
+ * The timestamps are AEST strings from getAESTDateTimeString (a fixed +10:00
+ * offset, zero-padded), so they sort lexicographically in chronological order —
+ * no parsing needed to find the extremes.
+ */
+function summariseSources(
+  years: number[],
+  dtos: (GeneratingUnitCapFacHistoryDTO | null)[],
+): StatsSources {
+  const sourceYears = years.map((year, i) => ({
+    year,
+    builtAt: dtos[i]?.created_at ?? null,
+  }));
+
+  const stamps = sourceYears
+    .map((s) => s.builtAt)
+    .filter((s): s is string => s !== null)
+    .sort();
+
+  return {
+    years: sourceYears,
+    oldestBuiltAt: stamps[0] ?? null,
+    newestBuiltAt: stamps[stamps.length - 1] ?? null,
   };
 }
 

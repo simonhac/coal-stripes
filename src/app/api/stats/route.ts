@@ -7,10 +7,9 @@ import type { FleetMode } from '@/shared/types';
 export const dynamic = 'force-dynamic';
 
 // Bump when the computation or DTO shape changes (busts the Data Cache key).
-// v4: recompute against the retired-unit colouring fix — fresh facilities
-// metadata recovers retired plants' real generation history (e.g. Liddell
-// 1999–2023), and their future days are null (not 0), so old stats are stale.
-const STATS_CACHE_VERSION = 'v4';
+// v5: the DTO gained `sources` (per-year provenance for the recency line on
+// /stats); a v4 payload predates the field and would render without it.
+const STATS_CACHE_VERSION = 'v5';
 const DAY_SECONDS = 60 * 60 * 24;
 const SWR_SECONDS = 60 * 60 * 24 * 7;
 
@@ -45,9 +44,17 @@ export async function GET(request: Request) {
     const data = await statsCaches[mode]();
 
     const response = NextResponse.json(data);
+
+    // Lets the purge endpoint invalidate this at the Vercel edge; revalidateTag
+    // only reaches the Data Cache. See src/app/api/admin/purge/route.ts.
+    response.headers.set('Vercel-Cache-Tag', `coal-stats,stats-${mode}`);
+
+    // Short in the browser (the one cache nothing can purge), full day at the
+    // edge — see the matching comment in the capacity-factors route.
+    response.headers.set('Cache-Control', 'public, max-age=60');
     response.headers.set(
-      'Cache-Control',
-      `public, max-age=${DAY_SECONDS}, s-maxage=${DAY_SECONDS}, stale-while-revalidate=${SWR_SECONDS}`,
+      'Vercel-CDN-Cache-Control',
+      `public, s-maxage=${DAY_SECONDS}, stale-while-revalidate=${SWR_SECONDS}`,
     );
     response.headers.set('Vary', 'Accept-Encoding');
     return response;

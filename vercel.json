@@ -19,6 +19,9 @@
     },
     "src/app/api/cron/warm-stats/route.ts": {
       "maxDuration": 300
+    },
+    "src/app/api/admin/purge/route.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [

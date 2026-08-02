@@ -136,6 +136,11 @@ export interface ProbeResult {
   age: number | null; // CDN Age header, seconds
   coldFetch: boolean | null; // from x-cf-cold; null when the header is absent
   coldFetchMs: number | null; // from x-cf-cold-ms
+  // From x-cf-built-at: when this year's payload was last assembled from
+  // OpenElectricity. Unlike the cache signals above it is a property of the
+  // BODY, so an edge replay reports the original build time — which is exactly
+  // what "how old is the data?" means. Null when the header is absent.
+  builtAt: string | null;
   classification: TileClassification;
 }
 
@@ -202,6 +207,7 @@ export async function probeYears(years: number[]): Promise<ProbeResult[]> {
         age,
         coldFetch,
         coldFetchMs,
+        builtAt: res.headers.get('x-cf-built-at'),
         classification: classifyProbe(res.ok, ms, xVercelCache, age, coldFetch),
       });
     } catch {
@@ -215,6 +221,7 @@ export async function probeYears(years: number[]): Promise<ProbeResult[]> {
         age: null,
         coldFetch: null,
         coldFetchMs: null,
+        builtAt: null,
         classification: 'uncertain',
       });
     }

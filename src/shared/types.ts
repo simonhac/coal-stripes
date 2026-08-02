@@ -109,6 +109,24 @@ export interface DataGap {
 }
 
 /** The full /api/stats payload. */
+/**
+ * Provenance of the per-year capacity-factor payloads a stats result was built
+ * from. `builtAt` is each payload's own `created_at` — the moment it was last
+ * assembled from OpenElectricity, NOT when it was read out of a cache — so it
+ * answers "how old is the data I'm looking at?" honestly however many cache
+ * layers served it. See computeCoalStats in @/server/coal-stats-service.
+ */
+export interface StatsSourceYear {
+  year: number;
+  builtAt: string | null; // null when that year's fetch failed
+}
+
+export interface StatsSources {
+  years: StatsSourceYear[];
+  oldestBuiltAt: string | null; // null when no year resolved
+  newestBuiltAt: string | null;
+}
+
 export interface CoalGenerationStatsDTO {
   type: 'coal_generation_stats';
   version: string;
@@ -121,6 +139,9 @@ export interface CoalGenerationStatsDTO {
     totalHoleUnitDays: number;
     gaps: DataGap[]; // every gap, sorted longest-first
   };
+  // Optional so a payload cached before this field existed still type-checks —
+  // the stats page renders the recency line only when it is present.
+  sources?: StatsSources;
 }
 
 // Clean internal representations for the client

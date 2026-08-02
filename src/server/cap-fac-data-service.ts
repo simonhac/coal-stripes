@@ -90,6 +90,21 @@ export class CapFacDataService {
   }
 
   /**
+   * Drop the memoised facilities roster so the next request re-reads unit
+   * metadata (capacities, commissioning/retirement dates) from OpenElectricity.
+   *
+   * Deliberately narrower than cleanup(): it leaves the request queue intact, so
+   * it is safe to call on a live instance serving traffic. Used by the purge
+   * endpoint, since this memo is the one data cache that revalidateTag cannot
+   * reach. It only affects THIS serverless instance — other warm instances keep
+   * their copy until the 24 h TTL expires.
+   */
+  clearFacilitiesCache(): void {
+    this.facilitiesCache.clear();
+    this.facilitiesFetchedAt.clear();
+  }
+
+  /**
    * Clean up resources
    */
   async cleanup(): Promise<void> {
@@ -407,4 +422,21 @@ export class CapFacDataService {
       data: coalUnits
     };
   }
+}
+
+// The process-wide service singleton, so every route shares one API client (and
+// so one rate-limited request queue). Module-level ⇒ per serverless instance.
+// It lives here rather than in the capacity-factors route because the purge
+// endpoint also needs it, to drop the facilities memo.
+let serviceInstance: CapFacDataService | null = null;
+
+export function getCapFacDataService(): CapFacDataService {
+  if (!serviceInstance) {
+    const apiKey = process.env.OPENELECTRICITY_API_KEY;
+    if (!apiKey) {
+      throw new Error('API key not configured');
+    }
+    serviceInstance = new CapFacDataService(apiKey);
+  }
+  return serviceInstance;
 }
