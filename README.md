@@ -107,6 +107,7 @@ Dates use `@internationalized/date` (not the built-in `Date`) throughout, with h
 |----------|-------------|----------|
 | `OPENELECTRICITY_API_KEY` | Your OpenElectricity API key | Yes |
 | `CRON_SECRET` | Shared secret authorising the `/api/cron/warm-*` endpoints; Vercel Cron sends it automatically once set in the project's env vars | For deployed cron |
+| `CACHE_SECRET` | Shared secret authorising `POST /api/admin/purge` and the purge button on `/diagnostics`. Deliberately separate from `CRON_SECRET` — it gets typed by hand, so it must not double as the cron token | For the purge button |
 | `ENABLE_FILE_LOGGING` | Write request logs to `logs/` (default: on in development, off in production; keep off on serverless) | No |
 | `DEBUG_OE` | Set to `1` for verbose server logging of fetches and cache hits | No |
 
@@ -122,7 +123,7 @@ npm run test:e2e          # Playwright browser tests of the gesture navigation
 
 ## Deployment
 
-The app deploys to Vercel as-is (`vercel.json` configures the cron schedules and function timeouts). Set `OPENELECTRICITY_API_KEY` and `CRON_SECRET` in the project's environment variables, and leave `ENABLE_FILE_LOGGING` unset or `false`.
+The app deploys to Vercel as-is (`vercel.json` configures the cron schedules and function timeouts). Set `OPENELECTRICITY_API_KEY`, `CRON_SECRET` and `CACHE_SECRET` in the project's environment variables, and leave `ENABLE_FILE_LOGGING` unset or `false`. A newly added variable only reaches the running app on the next deploy.
 
 ## Contributing
 

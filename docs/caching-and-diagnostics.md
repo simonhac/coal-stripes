@@ -188,8 +188,12 @@ counted in the line rather than silently dropped.
 ## Purging the caches
 
 `POST /api/admin/purge`, or the **Purge server caches** button on `/diagnostics`.
-Authorised with `CRON_SECRET` — the same bearer token Vercel Cron uses — because
-a purge forces cold, rate-limited upstream fetches.
+Authorised with `CACHE_SECRET`, because a purge forces cold, rate-limited
+upstream fetches. That is a **different** secret from the `CRON_SECRET` the
+`/api/cron/warm-*` routes use: the cron token is machine-only and never leaves
+Vercel, while this one is typed by hand into the `/diagnostics` field, so
+keeping them apart means the convenient one can't impersonate cron and either
+can be rotated alone. Both fail closed — an unset secret authorises nobody.
 
 | Layer | Cleared by |
 |-------|-----------|
@@ -212,10 +216,10 @@ click.
 
 ```bash
 # Purge everything, then re-warm just the years you care about (max 10).
-curl -sX POST -H "Authorization: Bearer $CRON_SECRET" -H 'Content-Type: application/json' \
+curl -sX POST -H "Authorization: Bearer $CACHE_SECRET" -H 'Content-Type: application/json' \
   -d '{"mode":"purge"}' https://stripes.energy/api/admin/purge | jq '.steps'
 
-curl -sX POST -H "Authorization: Bearer $CRON_SECRET" -H 'Content-Type: application/json' \
+curl -sX POST -H "Authorization: Bearer $CACHE_SECRET" -H 'Content-Type: application/json' \
   -d '{"mode":"rewarm","rewarmFrom":2009,"rewarmTo":2013}' \
   https://stripes.energy/api/admin/purge | jq '.steps'
 ```
@@ -249,7 +253,7 @@ Parameters:
 - `?year=2024` — a single year.
 - no params — the full span.
 
-It is left **public** (no `CRON_SECRET`): it only re-exercises the already-public,
+It is left **public** (no bearer token): it only re-exercises the already-public,
 CDN-cached `/api/capacity-factors` route, so it adds no attack surface a caller
 doesn't already have — and that lets the `/diagnostics` page read it without a
 secret in the browser.

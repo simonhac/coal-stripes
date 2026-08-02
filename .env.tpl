@@ -27,3 +27,7 @@ ENABLE_FILE_LOGGING=true
 # send the same value as `Authorization: Bearer …`. The real secret is
 # prod-only (Vercel cron runs only in production; see coal-stripes-prod vault).
 # CRON_SECRET=local-dev-only
+# Same deal for POST /api/admin/purge and the /diagnostics purge button, which
+# use their own secret. The real one is prod-only (coal-stripes-prod vault) and
+# is deliberately NOT written here — this file is committed to a public repo.
+# CACHE_SECRET=local-dev-only

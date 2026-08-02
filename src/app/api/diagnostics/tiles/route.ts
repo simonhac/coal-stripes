@@ -18,8 +18,8 @@ export const maxDuration = 300;
 // Cap the probe fan-out. This endpoint only re-exercises the already-public,
 // CDN-cached /api/capacity-factors route — it adds no attack surface a caller
 // doesn't already have — so it is left PUBLIC, which also lets the /diagnostics
-// page read it without leaking CRON_SECRET into the browser. The cap is a
-// belt-and-braces guard against an absurdly wide range.
+// page read it without a secret in the browser. The cap is a belt-and-braces
+// guard against an absurdly wide range.
 const MAX_YEARS = 30;
 
 interface DiagnosticsSummary {
