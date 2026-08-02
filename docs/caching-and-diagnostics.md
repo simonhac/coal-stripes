@@ -11,6 +11,9 @@ lets you confirm they are doing their job.
   - [1. Server — Next.js Data Cache + CDN](#1-server--nextjs-data-cache--cdn)
   - [2. Cron warming](#2-cron-warming)
   - [3. Client — TanStack Query](#3-client--tanstack-query)
+  - [4. The stats layer](#4-the-stats-layer)
+- [How old is the data?](#how-old-is-the-data)
+- [Purging the caches](#purging-the-caches)
 - [Tile-render diagnostics](#tile-render-diagnostics)
   - [`GET /api/diagnostics/tiles`](#get-apidiagnosticstiles)
   - [The `x-cf-cold` marker](#the-x-cf-cold-marker)
@@ -81,6 +84,23 @@ by both the server route (`revalidate` + `Cache-Control`) and the client
 stale**, while it refreshes in the background — so users never feel a cold
 fetch as long as an entry exists.
 
+**Browser and edge lifetimes are set separately**, because they are not equally
+controllable:
+
+| Header | Audience | Value |
+|--------|----------|-------|
+| `Cache-Control` | the browser | `public, max-age=60` |
+| `Vercel-CDN-Cache-Control` | the Vercel edge | the tier's `s-maxage` + `stale-while-revalidate` (stripped before it reaches the browser) |
+
+The browser's HTTP cache is the **one layer no purge can reach**, so it is kept
+deliberately short — a data fix must never be masked by a copy sitting in
+someone's browser. The edge keeps the full tier window: it is fast, and it *is*
+purgeable, because both data routes also emit a `Vercel-Cache-Tag` header
+(`capacity-factors,cf-<tier>,cf-<mode>,cf-year-<year>` and
+`coal-stats,stats-<mode>`). Within a session TanStack Query dedupes anyway, so
+the short browser `max-age` costs at most one edge round-trip per year per page
+load.
+
 ### 2. Cron warming
 
 The Data Cache is per-deployment and can be evicted, so an entry can go missing
@@ -91,6 +111,7 @@ on a frequent schedule via `src/server/cache-warmer.ts` (`warmYears`):
 | Cron | Schedule | Warms |
 |------|----------|-------|
 | `warm-all` | every 10 min | every year back to 1999, for both fleet modes |
+| `warm-stats` | daily, 15:30 UTC (01:30 AEST) | `/api/stats` for both fleet modes |
 
 `warm-all` sweeps the whole span every 10 minutes so **no year — in any tier —
 stays cold for longer than the cron interval**, whether it went cold from
@@ -115,6 +136,98 @@ is the fully pre-rendered `CapFacYear`, including the offscreen canvas tiles
 the server tier, and adjacent years are prefetched in the background
 (`usePrefetchAdjacentYears`). The browser only ever talks to our own route,
 never to OpenElectricity.
+
+### 4. The stats layer
+
+`/stats` (the coal-generation records page) sits **on top of** everything above.
+`computeCoalStats` (`src/server/coal-stats-service.ts`) self-fetches
+`/api/capacity-factors` once per year, 1999→current, and reconstructs MWh from
+capacity factor × capacity × 24. The whole result is then cached for a day by
+`/api/stats` (`unstable_cache`, tagged `coal-stats`), and `warm-stats` triggers
+the daily recompute so it never lands on a user.
+
+Two consequences worth remembering:
+
+- A stats result is **only as fresh as the year payloads it read**, which have
+  their own independent tier lifetimes (an archive year can be a week old). This
+  is why the page states its own provenance — see below.
+- After a purge, the years are all cold, so a `/stats` request recomputes from
+  ~28 cold upstream fetches and is slow. Let `warm-all` refill first.
+
+---
+
+## How old is the data?
+
+A stale cache and a genuine upstream data gap look identical on the page unless
+the page says which it is. Two mechanisms make the age explicit:
+
+**`created_at` in every capacity-factor payload** is stamped when that payload
+was assembled from OpenElectricity — not when it was read from a cache. It is
+therefore honest however many cache layers replayed it. The route echoes it as
+the **`x-cf-built-at`** response header, so the age can be read without parsing
+the body:
+
+```bash
+curl -sI "https://stripes.energy/api/capacity-factors?year=2011&fleet=full" \
+  | grep -i 'x-cf-built-at\|x-cf-cold\|x-vercel-cache'
+```
+
+**The `sources` block in the stats DTO** pairs each year with its `builtAt` and
+records the oldest/newest across the set (`StatsSources` in
+`src/shared/types.ts`). `/stats` renders it as a line under the intro —
+"Records computed 4 hours ago (…) from 28 yearly data files fetched from
+OpenElectricity between … and … — oldest 6 days ago" — and `/diagnostics` shows
+**Built at** and **Data age** columns per year.
+
+`sources` is optional on the DTO so a payload cached before the field existed
+still renders; a year that failed to load is recorded as `builtAt: null` and
+counted in the line rather than silently dropped.
+
+---
+
+## Purging the caches
+
+`POST /api/admin/purge`, or the **Purge server caches** button on `/diagnostics`.
+Authorised with `CRON_SECRET` — the same bearer token Vercel Cron uses — because
+a purge forces cold, rate-limited upstream fetches.
+
+| Layer | Cleared by |
+|-------|-----------|
+| Next.js Data Cache | `revalidateTag('capacity-factors' / 'coal-stats')` |
+| Vercel CDN edge | `invalidateByTag()` from `@vercel/functions`, against the `Vercel-Cache-Tag` headers |
+| Facilities roster memo (24 h) | `clearFacilitiesCache()` — **this instance only** |
+| Browser HTTP cache | nothing; hence the 60 s browser `max-age` |
+
+`revalidateTag` alone is not enough: it never touches the CDN entry, because
+these routes are `force-dynamic` and set their own `Cache-Control`, so Next
+never sees the cached response.
+
+**The purge and the re-warm are two separate requests, deliberately.**
+`revalidateTag` invalidates everything carrying that tag *including entries
+written later in the same request*, so a re-warm bundled into the purge writes
+cache entries that are discarded the moment it returns (verified: a year
+re-warmed in-request came back cold on the very next call). The `/diagnostics`
+button issues `{mode:'purge'}` then `{mode:'rewarm'}` back to back — still one
+click.
+
+```bash
+# Purge everything, then re-warm just the years you care about (max 10).
+curl -sX POST -H "Authorization: Bearer $CRON_SECRET" -H 'Content-Type: application/json' \
+  -d '{"mode":"purge"}' https://stripes.energy/api/admin/purge | jq '.steps'
+
+curl -sX POST -H "Authorization: Bearer $CRON_SECRET" -H 'Content-Type: application/json' \
+  -d '{"mode":"rewarm","rewarmFrom":2009,"rewarmTo":2013}' \
+  https://stripes.energy/api/admin/purge | jq '.steps'
+```
+
+Re-warming is capped at 10 years per call: after a purge every year is cold, and
+warming all ~28 in both fleet modes would blow the 300 s function limit. Years
+outside the range refill on the next `warm-all` run (≤ 10 min).
+
+Locally there is no CDN, so the `cdn-edge` step reports *skipped* (gated on
+`process.env.VERCEL` — `invalidateByTag` returns success off-platform, which
+would otherwise read as a real purge). `rm -rf .next/cache` remains the blunt
+local option.
 
 ---
 
@@ -158,8 +271,13 @@ curl -s "https://stripes.energy/api/diagnostics/tiles?years=2024-2026" | jq '.su
 ```
 
 Each `tiles[]` entry carries `tier`, `ms`, `classification`
-(`warm` | `cold` | `uncertain`), and the raw signals (`xVercelCache`, `age`,
-`coldFetch`, `coldFetchMs`).
+(`warm` | `cold` | `uncertain`), the raw cache signals (`xVercelCache`, `age`,
+`coldFetch`, `coldFetchMs`), and `builtAt` (from `x-cf-built-at`).
+
+Note the difference: the cache signals describe **how this response was served**,
+while `builtAt` describes **how old the data in it is**. A year can be perfectly
+warm and still hold week-old data — that combination is the one that makes an
+upstream fix look like it never landed.
 
 **How a year is classified** (honest, in order of trust):
 
@@ -190,10 +308,15 @@ curl -sI "https://stripes.energy/api/capacity-factors?year=2006" | grep -i 'x-cf
 
 ### The `/diagnostics` page
 
-`src/app/diagnostics/page.tsx` is a client page with two tables:
+`src/app/diagnostics/page.tsx` is a client page with a purge control and two
+tables:
 
+- **Purge server caches** — the one-click purge described above. The secret is
+  held in React state only, never `localStorage`, so it lives no longer than the
+  tab.
 - **Server cache health** — a per-year view of `GET /api/diagnostics/tiles`,
-  with a headline warm/cold verdict and a "Re-probe" button.
+  with a headline warm/cold verdict, **Built at** / **Data age** columns, and a
+  "Re-probe" button.
 - **Client tile renders** — every tile render in this browser session, with its
   duration and an AEST timestamp.
 
@@ -259,3 +382,13 @@ it, which is exactly what the crons maintain.
 - **Per-instance history**: the `x-cf-cold` *per-request* signal is authoritative,
   but any aggregate cold-fetch counts kept in module memory are per-serverless
   instance and best-effort.
+- **The browser cache cannot be purged.** A purge clears every server-side layer,
+  but a visitor's own HTTP cache is beyond reach. This is why both data routes
+  cap the browser at `max-age=60` rather than relying on it.
+- **The facilities memo is per-instance.** A purge clears it only on the instance
+  that served the purge request; other warm instances keep their roster until the
+  24 h TTL expires. Unit metadata (capacities, retirements) can therefore lag a
+  purge by up to a day.
+- **Purging is not free.** It discards ~28 years × 2 fleet modes, and everything
+  outside the re-warm range is cold until `warm-all` catches up. Loading `/stats`
+  in that window recomputes from ~28 cold upstream fetches.

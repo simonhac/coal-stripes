@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { OpenElectricityHeader } from '@/components/OpenElectricityHeader';
 import { statsQueryOptions } from '@/client/stats-queries';
 import { formatEnergy, formatPercent, type Granularity } from '@/shared/energy-format';
+import { formatAgeFromAEST } from '@/shared/date-utils';
 import type { CoalGenerationStatsDTO, GranularityStat, StatRow, StatValue } from '@/shared/types';
 import '../opennem.css';
 
@@ -224,6 +225,68 @@ function DataQualityPanel({ dq }: { dq: CoalGenerationStatsDTO['dataQuality'] })
   );
 }
 
+/** `2026-08-02T17:03:39+10:00` → `2026-08-02 17:03 AEST`. */
+function formatStamp(stamp: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(stamp);
+  return match ? `${match[1]} ${match[2]} AEST` : stamp;
+}
+
+/**
+ * States how old the data behind this page actually is.
+ *
+ * Records are computed from ~28 per-year capacity-factor payloads, each cached
+ * independently for up to a week. Without this, a stale cache and a genuine
+ * upstream gap look identical — which is exactly the confusion that prompted
+ * the panel. `builtAt` is when a payload was last assembled from
+ * OpenElectricity, so it stays honest however many caches replayed it.
+ */
+function DataRecency({ data }: { data: CoalGenerationStatsDTO }) {
+  const computedAge = formatAgeFromAEST(data.created_at);
+  // Absent on a payload cached before `sources` was introduced.
+  const sources = data.sources;
+  const oldest = sources?.oldestBuiltAt ?? null;
+  const newest = sources?.newestBuiltAt ?? null;
+  const oldestAge = oldest ? formatAgeFromAEST(oldest) : null;
+  const missing = sources ? sources.years.filter((y) => y.builtAt === null).length : 0;
+
+  // A purge rebuilds every year at once, so the range collapses to a single
+  // moment — reading that back as "between X and X" is noise.
+  const sameMoment = oldest !== null && newest !== null && formatStamp(oldest) === formatStamp(newest);
+
+  return (
+    <p className="opennem-stats-recency">
+      Records computed <strong>{computedAge ?? formatStamp(data.created_at)}</strong> (
+      {formatStamp(data.created_at)})
+      {oldest && newest && (
+        <>
+          {' '}
+          from {sources?.years.length} yearly data files fetched from OpenElectricity{' '}
+          {sameMoment ? (
+            <>
+              at <strong>{formatStamp(oldest)}</strong>
+              {oldestAge && <> ({oldestAge})</>}
+            </>
+          ) : (
+            <>
+              between <strong>{formatStamp(oldest)}</strong> and{' '}
+              <strong>{formatStamp(newest)}</strong>
+              {oldestAge && <> — oldest {oldestAge}</>}
+            </>
+          )}
+        </>
+      )}
+      .
+      {missing > 0 && (
+        <>
+          {' '}
+          <strong>{missing}</strong> year{missing === 1 ? '' : 's'} could not be loaded and{' '}
+          {missing === 1 ? 'is' : 'are'} missing from these totals.
+        </>
+      )}
+    </p>
+  );
+}
+
 export default function StatsPage() {
   const { data, isLoading, isError, error } = useQuery(statsQueryOptions('full'));
 
@@ -245,6 +308,7 @@ export default function StatsPage() {
               </>
             )}
           </p>
+          {data && <DataRecency data={data} />}
         </header>
 
         {isLoading && (

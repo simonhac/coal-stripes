@@ -1169,6 +1169,16 @@ header a {
   color: var(--dark-grey);
   font-weight: 600;
 }
+/* Data-recency disclosure: quieter than the intro copy, but always present so
+   the age of the underlying cached data is never something you have to guess. */
+.opennem-stats-intro p.opennem-stats-recency {
+  font-size: 12.5px;
+  color: #7a7a7a;
+  margin-top: 10px;
+  padding-left: 10px;
+  border-left: 2px solid #e0e0e0;
+  max-width: 660px;
+}
 
 .opennem-stats-panel {
   margin-bottom: 34px;

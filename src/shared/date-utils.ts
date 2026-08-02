@@ -1,4 +1,14 @@
-import { fromDate, toZoned, toCalendarDate, CalendarDate, parseDate, today } from '@internationalized/date';
+import {
+  fromDate,
+  toZoned,
+  toCalendarDate,
+  CalendarDate,
+  parseAbsolute,
+  parseDate,
+  today,
+  now,
+  type ZonedDateTime,
+} from '@internationalized/date';
 
 /**
  * Calculate the number of days between two CalendarDate objects
@@ -170,11 +180,58 @@ export function getAESTDateTimeString(date: Date = new Date()): string {
 
 /**
  * Get today's date in AEST (Brisbane time)
- * 
+ *
  * @returns CalendarDate object representing today in Australian Eastern Standard Time
  */
 export function getTodayAEST(): CalendarDate {
   return today('Australia/Brisbane');
+}
+
+/**
+ * Parse a timestamp produced by getAESTDateTimeString back into an instant.
+ *
+ * Returns null rather than throwing, so a missing or malformed value — say from
+ * a payload cached before a field existed — degrades to "unknown" at the call
+ * site instead of breaking the page.
+ */
+export function parseAESTDateTime(stamp: string): ZonedDateTime | null {
+  try {
+    return parseAbsolute(stamp, 'Australia/Brisbane');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How long ago `stamp` was, in words: "just now", "12 minutes ago",
+ * "3 hours ago", "7 days ago". Null when the stamp can't be parsed.
+ *
+ * Used to state the age of cached data on /stats and /diagnostics, where the
+ * question is always "is this fresh enough to trust?" — a rounded, readable
+ * answer serves that better than a raw timestamp, which is shown alongside.
+ */
+export function formatAgeFromAEST(
+  stamp: string,
+  reference: ZonedDateTime = now('Australia/Brisbane'),
+): string | null {
+  const when = parseAESTDateTime(stamp);
+  if (!when) return null;
+
+  // toDate() is the library's own interop for absolute comparison: there is no
+  // way to subtract two instants without dropping to epoch milliseconds.
+  const seconds = Math.round((reference.toDate().getTime() - when.toDate().getTime()) / 1000);
+  if (seconds < 90) return 'just now';
+
+  const plural = (n: number, unit: string): string =>
+    `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return plural(minutes, 'minute');
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return plural(hours, 'hour');
+
+  return plural(Math.round(hours / 24), 'day');
 }
 
 /**

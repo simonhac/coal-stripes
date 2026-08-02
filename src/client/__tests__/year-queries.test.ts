@@ -68,9 +68,21 @@ describe('year-queries', () => {
   });
 
   describe('yearQueryOptions', () => {
-    it('keys queries by mode and year', () => {
-      expect(yearQueryOptions('full', 2023).queryKey).toEqual(['capFacYear', 'full', 2023]);
-      expect(yearQueryOptions('current', 2023).queryKey).toEqual(['capFacYear', 'current', 2023]);
+    it('keys queries by mode and year, plus the build id', () => {
+      // The build id (NEXT_PUBLIC_BUILD_ID, 'dev' when unset) is part of the key
+      // so a deploy invalidates every cached year — see year-queries.ts.
+      expect(yearQueryOptions('full', 2023).queryKey).toEqual([
+        'capFacYear',
+        'full',
+        2023,
+        'dev',
+      ]);
+      expect(yearQueryOptions('current', 2023).queryKey).toEqual([
+        'capFacYear',
+        'current',
+        2023,
+        'dev',
+      ]);
     });
 
     it('gives the current year the short (hourly) staleTime', () => {
