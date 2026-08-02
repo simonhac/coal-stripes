@@ -143,7 +143,7 @@ function PurgeCaches() {
 
   async function purge() {
     if (!secret) {
-      setError('Enter CRON_SECRET first.');
+      setError('Enter CACHE_SECRET first.');
       return;
     }
     if (
@@ -194,8 +194,8 @@ function PurgeCaches() {
         next visitor doesn&rsquo;t pay the cold fetch. Years outside that range are purged but
         refill on the next <code>warm-all</code> cron run (every 10 minutes). The browser&rsquo;s
         own HTTP cache can never be purged, which is why the data routes keep their browser{' '}
-        <code>max-age</code> down to 60 s. Requires <code>CRON_SECRET</code>; it is kept in this
-        tab only, never stored.
+        <code>max-age</code> down to 60 s. Requires <code>CACHE_SECRET</code> (its own secret, not
+        the cron token); it is kept in this tab only, never stored.
       </p>
 
       <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -203,7 +203,7 @@ function PurgeCaches() {
           type="password"
           value={secret}
           onChange={(e) => setSecret(e.target.value)}
-          placeholder="CRON_SECRET"
+          placeholder="CACHE_SECRET"
           autoComplete="off"
           style={{ ...inputStyle, width: '220px' }}
         />

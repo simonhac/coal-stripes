@@ -22,9 +22,9 @@
  *      routes now send only a 60 s browser max-age and keep the long window at
  *      the (purgeable) edge.
  *
- * Authorised with CRON_SECRET, the same bearer token Vercel Cron uses, so a
- * purge — which forces cold, rate-limited upstream fetches — can't be triggered
- * by a passer-by.
+ * Authorised with CACHE_SECRET — its own secret, separate from the cron token —
+ * so a purge, which forces cold, rate-limited upstream fetches, can't be
+ * triggered by a passer-by.
  *
  * Two modes, and they MUST be two separate requests. revalidateTag() invalidates
  * everything carrying that tag, including entries written later in the same
@@ -41,7 +41,7 @@ import {
   currentDataYear,
   earliestDataYear,
   getBaseUrl,
-  isAuthorisedCronRequest,
+  isAuthorisedPurgeRequest,
   warmYears,
   yearRange,
   type WarmResult,
@@ -103,7 +103,7 @@ function resolveRewarmRange(
 }
 
 export async function POST(request: Request) {
-  if (!isAuthorisedCronRequest(request)) {
+  if (!isAuthorisedPurgeRequest(request)) {
     return NextResponse.json({ error: 'Unauthorised' }, { status: 401 });
   }
 

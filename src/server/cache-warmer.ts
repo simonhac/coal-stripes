@@ -23,6 +23,12 @@ import {
 } from '@/shared/config';
 import type { FleetMode } from '@/shared/types';
 
+/** Bearer-token check that fails closed when no secret is configured. */
+function matchesBearer(request: Request, secret: string | undefined): boolean {
+  if (!secret) return false;
+  return request.headers.get('authorization') === `Bearer ${secret}`;
+}
+
 /**
  * Verify a request came from Vercel Cron (or another authorised caller).
  *
@@ -31,9 +37,20 @@ import type { FleetMode } from '@/shared/types';
  * closed: if no secret is configured, no caller is authorised.
  */
 export function isAuthorisedCronRequest(request: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  return request.headers.get('authorization') === `Bearer ${secret}`;
+  return matchesBearer(request, process.env.CRON_SECRET);
+}
+
+/**
+ * Verify a request is authorised to purge the caches.
+ *
+ * Deliberately a different secret from `CRON_SECRET`: the cron token is
+ * machine-only and never leaves Vercel, while this one gets typed by hand into
+ * the field on /diagnostics. Keeping them separate means the convenient one
+ * can't be used to impersonate cron, and either can be rotated alone. Same
+ * fail-closed rule — if `CACHE_SECRET` is unset, nobody is authorised.
+ */
+export function isAuthorisedPurgeRequest(request: Request): boolean {
+  return matchesBearer(request, process.env.CACHE_SECRET);
 }
 
 /** The base URL of the current deployment, for internal self-fetches. */
