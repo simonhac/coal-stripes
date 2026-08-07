@@ -48,22 +48,20 @@ import {
 } from '@/server/cache-warmer';
 import { getCapFacDataService } from '@/server/cap-fac-data-service';
 import { getAESTDateTimeString } from '@/shared/date-utils';
-import type { FleetMode } from '@/shared/types';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-const FLEET_MODES: FleetMode[] = ['full', 'current'];
-
-// Every cache tag the data routes emit at the top level. Tier/mode/year-specific
-// tags hang off these, but purging the roots covers them all.
+// Every cache tag the data routes emit at the top level. Tier- and
+// year-specific tags hang off these, but purging the roots covers them all.
 const DATA_CACHE_TAGS = ['capacity-factors', 'coal-stats'];
 
 // Re-warming is deliberately bounded. A purge empties the Data Cache for all
-// ~28 years, and re-warming every year in both fleet modes would mean ~56 cold
-// fetches through a rate-limited queue — well past maxDuration. So we re-warm a
-// small range (the years you're actually looking at) and let the warm-all cron,
-// which runs every 10 minutes, refill the rest.
+// ~28 years, and re-warming every one of them means ~28 cold fetches through a
+// rate-limited queue — still past maxDuration, though half what it was when
+// each year had two rosters. So we re-warm a small range (the years you're
+// actually looking at) and let the warm-all cron, which runs every 10 minutes,
+// refill the rest.
 const MAX_REWARM_YEARS = 10;
 
 type PurgeMode = 'purge' | 'rewarm';
@@ -182,16 +180,12 @@ export async function POST(request: Request) {
     // Re-warm only — a separate request, so these cache writes survive the
     // preceding purge. See the note at the top of this file.
     const years = yearRange(range.from, range.to);
-    for (const fleet of FLEET_MODES) {
-      rewarm.push(...(await warmYears(years, fleet)));
-    }
+    rewarm.push(...(await warmYears(years)));
     const failures = rewarm.filter((r) => !r.ok).length;
     steps.push({
       step: 'rewarm',
       ok: failures === 0,
-      detail:
-        `${years.length} year(s) x ${FLEET_MODES.length} fleet modes: ` +
-        `${rewarm.length - failures} ok, ${failures} failed`,
+      detail: `${years.length} year(s): ${rewarm.length - failures} ok, ${failures} failed`,
     });
   }
 

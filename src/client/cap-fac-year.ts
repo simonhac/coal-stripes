@@ -10,7 +10,11 @@ export interface CapFacYear {
   data: GeneratingUnitCapFacHistoryDTO;
   facilityTiles: Map<string, FacilityYearTile>;
   regionCapacityFactors: Map<string, (number | null)[]>; // Map of region name to array of 12 monthly capacity-weighted capacity factors
-  totalSizeBytes: number;
+  // Approximate canvas memory owned by this view alone. The payload `data`
+  // above is NOT counted here: it is shared with the other fleet view of the
+  // same year, and is measured once, at fetch, on the query that owns it (see
+  // yearDataQueryOptions).
+  canvasSizeBytes: number;
   daysInYear: number;
   // Per-region 0-based day-of-year of the FIRST and LAST day any unit in that
   // region has actual (non-null) data; -1 if the region has no data that year.
@@ -200,17 +204,12 @@ export function createCapFacYear(
   const regionCapacityFactors = buildMonthlyCapacityFactorsForEachRegion(data.data, year);
   const regionDataBounds = buildRegionDataDayBounds(data.data);
   
-  // Calculate total size: JSON data + canvas memory
-  const jsonSizeBytes = JSON.stringify(data).length;
+  // Approximate canvas memory (width × height × 4 per tile).
   let canvasSizeBytes = 0;
-  
-  // Calculate canvas memory
   for (const tile of facilityTiles.values()) {
     canvasSizeBytes += tile.getSizeBytes();
   }
-  
-  const totalSizeBytes = jsonSizeBytes + canvasSizeBytes;
-  
+
   // Determine days in year from the data
   const daysInYear = data.data.length > 0 && data.data[0].history.data 
     ? data.data[0].history.data.length 
@@ -228,7 +227,7 @@ export function createCapFacYear(
     data,
     facilityTiles,
     regionCapacityFactors,
-    totalSizeBytes,
+    canvasSizeBytes,
     daysInYear,
     regionFirstDataDayIndex: regionDataBounds.first,
     regionLastDataDayIndex: regionDataBounds.last

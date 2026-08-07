@@ -40,7 +40,7 @@ import {
 } from '@/server/cf-cache';
 import { mapPool } from '@/server/map-pool';
 import { QUEUE_PRIORITY, withQueuePriority } from '@/server/queued-oeclient';
-import type { FleetMode } from '@/shared/types';
+import { capacityFactorsPath } from '@/shared/capacity-factors-url';
 
 /** Bearer-token check that fails closed when no secret is configured. */
 function matchesBearer(request: Request, secret: string | undefined): boolean {
@@ -98,7 +98,6 @@ export const WARM_CONCURRENCY = 4;
 
 export interface WarmResult {
   year: number;
-  mode: FleetMode;
   ok: boolean;
   status: number;
   ms: number;
@@ -129,11 +128,11 @@ export interface WarmOptions {
 /**
  * Should this sweep spend a round-trip keeping the edge copy of a year alive?
  *
- * Not every year, every sweep. A full payload is ~230 KB, so refreshing all 56
- * (year, mode) entries every 10 minutes moves ~13 MB a sweep — around 57 GB a
- * month — to keep entries alive that already have a 7-day edge lifetime. With
- * the origin in Sydney an edge miss now costs a visitor one local round-trip
- * rather than a cold fetch, so that is a poor trade for the archive.
+ * Not every year, every sweep. A full payload is ~230 KB, so refreshing all ~28
+ * year entries every 10 minutes moves ~6.5 MB a sweep — around 28 GB a month —
+ * to keep entries alive that already have a 7-day edge lifetime. With the origin
+ * in Sydney an edge miss now costs a visitor one local round-trip rather than a
+ * cold fetch, so that is a poor trade for the archive.
  *
  * So we refresh the edge for:
  *   - `current` and `recent` years, which is where visitors actually land (the
@@ -155,10 +154,15 @@ function shouldRefreshEdge(year: number, rebuilt: boolean): boolean {
  * answers from cache in milliseconds. Failures are swallowed: locally there is
  * no CDN at all, and a missed edge refresh costs a visitor one origin
  * round-trip, not a cold fetch.
+ *
+ * Uses capacityFactorsPath so this warms the exact URL a browser asks for. The
+ * CDN keys on the whole query string, so requesting anything else — as this did
+ * before, omitting the build id the client has sent since the per-deploy cache
+ * bust — warms an entry no visitor ever reads.
  */
-async function refreshEdge(baseUrl: string, year: number, mode: FleetMode): Promise<void> {
+async function refreshEdge(baseUrl: string, year: number): Promise<void> {
   try {
-    const res = await fetch(`${baseUrl}/api/capacity-factors?year=${year}&fleet=${mode}`, {
+    const res = await fetch(`${baseUrl}${capacityFactorsPath(year)}`, {
       headers: { 'user-agent': 'coal-stripes-cache-warmer' },
       cache: 'no-store',
     });
@@ -171,16 +175,16 @@ async function refreshEdge(baseUrl: string, year: number, mode: FleetMode): Prom
 }
 
 /**
- * Warm both cache layers for the given years, for one fleet mode.
+ * Warm both cache layers for the given years.
  *
- * The two fleet modes (`full`/`current`) are cached under separate keys, so
- * each must be warmed independently. Upstream requests are queued at background
+ * One pass covers both fleet views: the server holds a single roster per year
+ * and `current` is derived from it in the browser, so there is nothing
+ * mode-specific left to warm. Upstream requests are queued at background
  * priority, so a visitor who lands on a cold year mid-sweep jumps ahead of the
  * sweep's remaining work rather than queueing behind it.
  */
 export async function warmYears(
   years: number[],
-  mode: FleetMode,
   options: WarmOptions = {},
 ): Promise<WarmResult[]> {
   const baseUrl = getBaseUrl();
@@ -188,18 +192,17 @@ export async function warmYears(
   return mapPool(years, WARM_CONCURRENCY, async (year) => {
     const started = performance.now();
     if (options.deadline !== undefined && started > options.deadline) {
-      return { year, mode, ok: false, status: 0, ms: 0, cold: false, skipped: true };
+      return { year, ok: false, status: 0, ms: 0, cold: false, skipped: true };
     }
     try {
-      const coldBefore = coldFetchCount(year, mode);
+      const coldBefore = coldFetchCount(year);
       await withQueuePriority(QUEUE_PRIORITY.background, () =>
-        getCachedCapacityFactors(year, mode),
+        getCachedCapacityFactors(year),
       );
-      const cold = coldFetchCount(year, mode) > coldBefore;
-      if (shouldRefreshEdge(year, cold)) await refreshEdge(baseUrl, year, mode);
+      const cold = coldFetchCount(year) > coldBefore;
+      if (shouldRefreshEdge(year, cold)) await refreshEdge(baseUrl, year);
       return {
         year,
-        mode,
         ok: true,
         status: 200,
         ms: Math.round(performance.now() - started),
@@ -211,12 +214,11 @@ export async function warmYears(
       // identical to one that had nothing to do, and the whole point of this
       // module is knowing which.
       console.error(
-        `warm-all: ${year} (${mode}) failed:`,
+        `warm-all: ${year} failed:`,
         error instanceof Error ? error.stack ?? error.message : error,
       );
       return {
         year,
-        mode,
         ok: false,
         status: 0,
         ms: Math.round(performance.now() - started),
@@ -342,7 +344,9 @@ export async function probeYears(years: number[]): Promise<ProbeResult[]> {
     try {
       const originStarted = performance.now();
       const res = await fetch(
-        `${baseUrl}/api/capacity-factors?year=${year}&probe=${++probeCounter}`,
+        // `probe` makes the URL unique so the edge cannot answer and the origin
+        // must run — that is the point of this leg.
+        `${baseUrl}${capacityFactorsPath(year)}&probe=${++probeCounter}`,
         { headers: { 'user-agent': 'coal-stripes-cache-probe' }, cache: 'no-store' },
       );
       const coldHeader = res.headers.get('x-cf-cold');
@@ -358,11 +362,13 @@ export async function probeYears(years: number[]): Promise<ProbeResult[]> {
       // Leave the defaults; classification falls through to 'uncertain'.
     }
 
-    // 2. Edge probe — the real URL, exactly as a visitor requests it.
+    // 2. Edge probe — the real URL, exactly as a visitor requests it. That
+    //    means the build id too: without it this measured an edge entry the
+    //    browser never requests, so the verdict below described the wrong copy.
     let edge: ProbeEdge = { xVercelCache: null, age: null, ms: 0 };
     try {
       const edgeStarted = performance.now();
-      const res = await fetch(`${baseUrl}/api/capacity-factors?year=${year}`, {
+      const res = await fetch(`${baseUrl}${capacityFactorsPath(year)}`, {
         headers: { 'user-agent': 'coal-stripes-cache-probe' },
         cache: 'no-store',
       });

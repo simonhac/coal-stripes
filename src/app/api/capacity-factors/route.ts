@@ -7,7 +7,6 @@ import {
 } from "@/server/cf-cache";
 import { initializeRequestLogger } from "@/server/request-logger";
 import { getTodayAEST } from "@/shared/date-utils";
-import type { FleetMode } from "@/shared/types";
 
 // Opt-in verbose logging: set DEBUG_OE=1 to trace requests locally.
 const debug = (...args: unknown[]): void => {
@@ -31,7 +30,7 @@ const port = Number.parseInt(process.env.PORT || "3000");
 initializeRequestLogger(port);
 
 // This route is a thin HTTP wrapper. The Data Cache itself — the unstable_cache
-// wrappers, the tier/mode key layout and the cold-fetch bookkeeping — lives in
+// wrappers, the per-tier key layout and the cold-fetch bookkeeping — lives in
 // @/server/cf-cache, because the cron warmer calls the very same wrappers
 // in-process and the two must share one set of instances to share cache keys.
 export async function GET(request: Request) {
@@ -55,19 +54,14 @@ export async function GET(request: Request) {
 			);
 		}
 
-		// Fleet mode selects the roster: `full` (every unit that ever operated,
-		// including retired plants) or `current` (operating units only).
-		// Defaults to `full`.
-		const fleetParam = searchParams.get("fleet");
-		if (fleetParam !== null && fleetParam !== "full" && fleetParam !== "current") {
-			return NextResponse.json(
-				{ error: "Invalid fleet parameter (expected 'full' or 'current')" },
-				{ status: 400 },
-			);
-		}
-		const mode: FleetMode = fleetParam === "current" ? "current" : "full";
+		// There is no `fleet` parameter any more: one roster is served (every unit
+		// that ever operated, each tagged with `status`), and the `current` view is
+		// a client-side filter over it — see @/shared/fleet-filter. A stale
+		// `?fleet=` is ignored rather than rejected, so an old bookmark still gets
+		// a valid payload; note it does still fork the EDGE cache, since the CDN
+		// keys on the whole URL.
 
-		debug(`🌐 API: Fetching capacity factors for year ${year} (${mode})`);
+		debug(`🌐 API: Fetching capacity factors for year ${year}`);
 
 		// Pick the freshness tier for this year. NEM data is subject to revision
 		// (January can revise the December just past), so no tier is immutable.
@@ -76,9 +70,9 @@ export async function GET(request: Request) {
 
 		// Detect whether THIS request triggered a cold fetch, by watching the
 		// cold-fetch counter across the (possibly cached) await.
-		const coldBefore = coldFetchCount(year, mode);
-		const data = await getCachedCapacityFactors(year, mode);
-		const didColdFetch = coldFetchCount(year, mode) > coldBefore;
+		const coldBefore = coldFetchCount(year);
+		const data = await getCachedCapacityFactors(year);
+		const didColdFetch = coldFetchCount(year) > coldBefore;
 
 		debug(`🌐 API: Returning data for year ${year}`);
 
@@ -89,7 +83,7 @@ export async function GET(request: Request) {
 		// Read back by probeYears() in @/server/cache-warmer.
 		response.headers.set("x-cf-cold", String(didColdFetch));
 		if (didColdFetch) {
-			const record = lastColdFetch(year, mode);
+			const record = lastColdFetch(year);
 			if (record) {
 				response.headers.set("x-cf-cold-ms", String(record.lastColdFetchMs));
 			}
@@ -104,11 +98,11 @@ export async function GET(request: Request) {
 		// Vercel CDN cache tags, so the purge endpoint can invalidate the edge —
 		// something revalidateTag cannot do for a route that sets its own
 		// Cache-Control. Note the year is tag-able here even though the Data Cache
-		// tags can't be: those are fixed per (tier, mode) wrapper, whereas this
-		// header is written per response.
+		// tags can't be: those are fixed per tier wrapper, whereas this header is
+		// written per response.
 		response.headers.set(
 			"Vercel-Cache-Tag",
-			`capacity-factors,cf-${policy.tier},cf-${mode},cf-year-${year}`,
+			`capacity-factors,cf-${policy.tier},cf-year-${year}`,
 		);
 
 		if (year > currentYear) {

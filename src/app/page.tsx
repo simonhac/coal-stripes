@@ -206,7 +206,7 @@ export default function Home() {
         // Load the current year(s) for this mode (fetchQuery dedupes with any
         // fetch the tiles kick off for the same year + mode).
         const yearResults = await Promise.all(
-          years.map(year => queryClient.fetchQuery(yearQueryOptions(mode, year)))
+          years.map(year => queryClient.fetchQuery(yearQueryOptions(queryClient, mode, year)))
         );
         if (cancelled) return;
 

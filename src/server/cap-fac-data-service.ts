@@ -1,6 +1,5 @@
 import { OEClientQueued } from './queued-oeclient';
 import {
-  FleetMode,
   GeneratingUnitCapFacHistoryDTO,
   GeneratingUnitDTO
 } from '@/shared/types';
@@ -23,7 +22,9 @@ interface UnitRecord {
   // Operating status ('operating' | 'retired') and the last day the unit had
   // data, from the /facilities endpoint. Used to emit 0 (generated nothing,
   // i.e. decommissioned) rather than null for a retired unit's days after it
-  // stopped — see the fill loop in processGeneratingUnitCapFacHistoryDTO.
+  // stopped — see the fill loop in processGeneratingUnitCapFacHistoryDTO — and
+  // carried through to the DTO as `status`, which is what lets the client
+  // derive the `current` fleet view without a second request.
   unit_status: string | null;
   unit_last_seen: string | null;
 }
@@ -75,17 +76,20 @@ const isNoData = (err: unknown): boolean => err instanceof NoDataFound;
  * upstream fan-out, which is what lets cf-cache count cold fetches honestly.
  * Only the facilities list is memoised, with a TTL so new or retired units
  * appear within a day.
+ *
+ * There is exactly ONE roster: every unit that ever operated, each tagged with
+ * its `status`. The `current` fleet view (operating units only) is a client-side
+ * filter over this payload — see @/shared/fleet-filter. It used to be a second
+ * upstream query and a second copy of every cache entry.
  */
 const FACILITIES_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class CapFacDataService {
   private client: OEClientQueued;
-  // Facilities are memoised per fleet mode: `full` (operating + retired) and
-  // `current` (operating only) are different rosters, so they can't share a
-  // cache slot.
-  private facilitiesCache = new Map<FleetMode, Facility[]>();
-  private facilitiesFetchedAt = new Map<FleetMode, number>();
-  private facilitiesFetchPromise = new Map<FleetMode, Promise<Facility[]>>();
+  // The single memoised roster (operating + retired), refreshed on the TTL.
+  private facilitiesCache: Facility[] | null = null;
+  private facilitiesFetchedAt = 0;
+  private facilitiesFetchPromise: Promise<Facility[]> | null = null;
 
   constructor(apiKey: string) {
     this.client = new OEClientQueued(apiKey);
@@ -102,25 +106,25 @@ export class CapFacDataService {
    * their copy until the 24 h TTL expires.
    */
   clearFacilitiesCache(): void {
-    this.facilitiesCache.clear();
-    this.facilitiesFetchedAt.clear();
+    this.facilitiesCache = null;
+    this.facilitiesFetchedAt = 0;
   }
 
   /**
    * Clean up resources
    */
   async cleanup(): Promise<void> {
-    // Wait for any pending facility fetches (across modes) to complete
+    // Wait for any pending facility fetch to complete
     try {
-      await Promise.all(this.facilitiesFetchPromise.values());
+      await this.facilitiesFetchPromise;
     } catch {
       // Ignore errors during cleanup
     }
 
     // Clear caches and any pending requests
-    this.facilitiesCache.clear();
-    this.facilitiesFetchedAt.clear();
-    this.facilitiesFetchPromise.clear();
+    this.facilitiesCache = null;
+    this.facilitiesFetchedAt = 0;
+    this.facilitiesFetchPromise = null;
     this.client.clearQueue();
   }
 
@@ -128,7 +132,7 @@ export class CapFacDataService {
    * Fetch capacity factors for coal units for a specific year.
    * Always returns data for the full year with today and future dates nulled out.
    */
-  async getCapacityFactors(year: number, mode: FleetMode): Promise<GeneratingUnitCapFacHistoryDTO> {
+  async getCapacityFactors(year: number): Promise<GeneratingUnitCapFacHistoryDTO> {
     const startTime = performance.now();
 
     // Always work with full years - no partial years allowed.
@@ -136,9 +140,9 @@ export class CapFacDataService {
     // fits in a single request (no splitting needed).
     const startDate = parseDate(`${year}-01-01`);
     const endDate = parseDate(`${year}-12-31`);
-    debug(`📡 API fetch: ${year} (${mode})`);
+    debug(`📡 API fetch: ${year}`);
 
-    const facilities = await this.getAllCoalFacilities(mode);
+    const facilities = await this.getAllCoalFacilities();
     const energyData = await this.fetchEnergyData(
       facilities,
       startDate.toString(),
@@ -149,12 +153,11 @@ export class CapFacDataService {
       energyData,
       facilities,
       startDate,
-      endDate,
-      mode
+      endDate
     );
 
     const elapsed = Math.round(performance.now() - startTime);
-    debug(`✅ API response: ${year} (${mode}) | ${elapsed}ms`);
+    debug(`✅ API response: ${year} | ${elapsed}ms`);
 
     return coalStripesData;
   }
@@ -162,32 +165,31 @@ export class CapFacDataService {
   /**
    * Get all coal facilities from OpenElectricity API
    */
-  private async getAllCoalFacilities(mode: FleetMode): Promise<Facility[]> {
+  private async getAllCoalFacilities(): Promise<Facility[]> {
     // Return cached facilities while fresh; the TTL lets new or retired units
     // appear within a day on a long-lived warm instance.
-    const cached = this.facilitiesCache.get(mode);
-    if (cached && Date.now() - (this.facilitiesFetchedAt.get(mode) ?? 0) < FACILITIES_TTL_MS) {
-      return cached;
+    if (this.facilitiesCache && Date.now() - this.facilitiesFetchedAt < FACILITIES_TTL_MS) {
+      return this.facilitiesCache;
     }
 
-    // Return existing promise if a fetch for this mode is in progress
-    const inFlight = this.facilitiesFetchPromise.get(mode);
-    if (inFlight) {
-      return inFlight;
+    // Return existing promise if a fetch is already in progress
+    if (this.facilitiesFetchPromise) {
+      return this.facilitiesFetchPromise;
     }
 
     // Start new fetch
     const promise = (async () => {
       try {
-        debug(`🏭 Fetching coal facilities (${mode})...`);
+        debug(`🏭 Fetching coal facilities...`);
         // The key OpenElectricity facilities query: filter the /facilities
-        // endpoint down to coal units. `full` mode also includes retired
-        // plants so history shows the fleet that actually operated then;
-        // `current` mode is operating units only. We exclude 'committed' —
-        // units that never generated. Other filters (e.g. gas, wind) work the
-        // same way — see the fueltech and status ids in the OpenElectricity docs.
+        // endpoint down to coal units. Retired plants are included so history
+        // shows the fleet that actually operated then; the `current` view drops
+        // them client-side using the `status` we emit per unit. We exclude
+        // 'committed' — units that never generated. Other filters (e.g. gas,
+        // wind) work the same way — see the fueltech and status ids in the
+        // OpenElectricity docs.
         const { table } = await this.client.getFacilities({
-          status_id: mode === 'full' ? ['operating', 'retired'] : ['operating'],
+          status_id: ['operating', 'retired'],
           fueltech_id: ['coal_black', 'coal_brown']
         });
 
@@ -215,17 +217,17 @@ export class CapFacDataService {
           a.facility_name.localeCompare(b.facility_name)
         );
 
-        this.facilitiesCache.set(mode, facilities);
-        this.facilitiesFetchedAt.set(mode, Date.now());
-        debug(`🏭 Found ${facilities.length} coal facilities with ${units.length} units (${mode})`);
+        this.facilitiesCache = facilities;
+        this.facilitiesFetchedAt = Date.now();
+        debug(`🏭 Found ${facilities.length} coal facilities with ${units.length} units`);
 
         return facilities;
       } finally {
-        this.facilitiesFetchPromise.delete(mode);
+        this.facilitiesFetchPromise = null;
       }
     })();
 
-    this.facilitiesFetchPromise.set(mode, promise);
+    this.facilitiesFetchPromise = promise;
     return promise;
   }
 
@@ -306,8 +308,7 @@ export class CapFacDataService {
     data: EnergyRow[],
     facilities: Facility[],
     requestedStartDate: CalendarDate,
-    requestedEndDate: CalendarDate,
-    mode: FleetMode
+    requestedEndDate: CalendarDate
   ): GeneratingUnitCapFacHistoryDTO {
     const startTime = performance.now();
 
@@ -331,14 +332,12 @@ export class CapFacDataService {
 
       for (const unit of sortedUnits) {
         const unitData = data.filter((row) => row.unit_code === unit.unit_code);
-        // In `full` mode we emit a row for every roster unit even when it has
-        // no data this year (retired units, or years before it was
-        // commissioned) — the fill loop below yields an all-null history that
-        // renders as the "no data" pale blue. In `current` mode we keep the
-        // historical behaviour of dropping units with no data for the year.
-        if (unitData.length === 0 && mode !== 'full') {
-          continue;
-        }
+        // We emit a row for every roster unit even when it has no data this
+        // year (retired units, or years before it was commissioned) — the fill
+        // loop below yields an all-null history that renders as the "no data"
+        // pale blue. The `current` view drops those rows client-side; that it
+        // can recognise them by their all-null history is exactly why this
+        // emits them unconditionally. See @/shared/fleet-filter.
 
         // Registered capacity in MW; can be null (rare for coal). Guard the
         // capacity-factor division so it can't produce Infinity/NaN, and emit a
@@ -405,6 +404,10 @@ export class CapFacDataService {
           facility_code: facility.facility_code,
           facility_name: facility.facility_name,
           fueltech: unit.unit_fueltech === 'coal_brown' ? 'coal_brown' : 'coal_black',
+          // The facilities query asks for 'operating' and 'retired' only, so
+          // anything not explicitly retired is operating (the metadata leaves
+          // unit_status null for some units).
+          status: unit.unit_status === 'retired' ? 'retired' : 'operating',
           history: {
             start: requestedStartDate.toString(),
             last: requestedEndDate.toString(),

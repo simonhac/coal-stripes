@@ -1,18 +1,12 @@
-import { queryOptions } from '@tanstack/react-query';
+import { QueryClient, queryOptions } from '@tanstack/react-query';
 import { FleetMode, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 import { CapFacYear, createCapFacYear } from './cap-fac-year';
+import { filterFleet } from '@/shared/fleet-filter';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getTodayAEST } from '@/shared/date-utils';
 import { yearCachePolicy } from '@/shared/config';
+import { BUILD_ID, capacityFactorsPath } from '@/shared/capacity-factors-url';
 import { tileTimingRecorder } from './tile-timing-recorder';
-
-// Per-deploy id (see next.config.ts). Appended to the tile-fetch URL as `&v=` so
-// every deploy rotates the URL and the browser + Vercel-edge HTTP caches miss and
-// refetch — the origin Data Cache (keyed on year/mode/version, not the URL) still
-// serves the computed tile, so it's an edge miss but an origin hit (no OE fetch).
-// A fix therefore reaches users immediately instead of being masked for up to the
-// tile's 24h/7d max-age. Stable `dev` locally keeps the dev URL cacheable.
-const BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID ?? 'dev';
 
 /**
  * Get the earliest year for which data is available.
@@ -36,43 +30,95 @@ export function isValidYear(year: number): boolean {
   return year >= getEarliestYear() && year <= getLatestYear();
 }
 
+/** A year's payload, with its size measured once rather than on every read. */
+export interface YearPayload {
+  data: GeneratingUnitCapFacHistoryDTO;
+  /**
+   * Approximate bytes of `data`, for the performance overlay. Taken here
+   * because it is the one place the payload is known to be new; the overlay
+   * polls on a timer and must not re-stringify ~28 years a tick. It is a proxy:
+   * JSON.stringify().length counts UTF-16 code units, not bytes, and ignores
+   * in-memory object overhead.
+   */
+  sizeBytes: number;
+}
+
 /**
- * The client's single definition of a year of capacity-factor data, one
- * calendar year per query. Note the separation of concerns: the browser NEVER
- * talks to OpenElectricity directly — the queryFn fetches from our own
- * /api/capacity-factors route (which holds the API key and does the heavy
- * lifting), then pre-renders the year into canvas tiles (CapFacYear).
+ * A year's raw payload, straight from our API. One entry per year, shared by
+ * both fleet views.
+ *
+ * Note the separation of concerns: the browser NEVER talks to OpenElectricity
+ * directly — this fetches from our own /api/capacity-factors route, which holds
+ * the API key and does the heavy lifting.
+ *
+ * This layer exists so switching fleet mode costs nothing. The server sends one
+ * roster (every unit that ever operated, each tagged with `status`) and the
+ * `current` view is filtered out of it below, so the toggle re-renders from
+ * memory instead of refetching every visible year.
+ */
+export function yearDataQueryOptions(year: number) {
+  return queryOptions({
+    queryKey: ['capFacYearData', year, BUILD_ID] as const,
+    queryFn: async ({ signal }): Promise<YearPayload> => {
+      const response = await fetch(capacityFactorsPath(year), { signal });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const text = await response.text();
+      return { data: JSON.parse(text), sizeBytes: text.length };
+    },
+    // NEM data is subject to revision (January can revise the December just
+    // past), so even past years go stale — on the same tiers the server
+    // route uses. Held here, on the layer that actually fetches.
+    staleTime: yearCachePolicy(year, getTodayAEST().year).revalidateSeconds * 1000,
+  });
+}
+
+/**
+ * The client's single definition of a year of capacity-factor data, as one
+ * fleet view sees it: the payload above, filtered to `mode` and pre-rendered
+ * into canvas tiles (CapFacYear).
  *
  * TanStack Query supplies the caching, in-flight dedupe by key, retries with
  * exponential backoff, and prefetch support that used to be hand-rolled.
  * Callers are responsible for gating on isValidYear (via `enabled` or an
  * explicit check) — the queryFn does not validate bounds.
  *
- * `mode` is the fleet roster (full vs current); it's part of the query key and
- * the request URL so the two rosters are cached and fetched independently.
+ * `mode` stays in the key because the tiles genuinely differ: a facility tile
+ * stacks its units vertically, so dropping retired ones changes the canvas.
+ * Only the *fetch* is shared, via the base query — which is why this queryFn
+ * takes a QueryClient and performs no fetch of its own.
  */
-export function yearQueryOptions(mode: FleetMode, year: number) {
+export function yearQueryOptions(queryClient: QueryClient, mode: FleetMode, year: number) {
   return queryOptions({
     queryKey: ['capFacYear', mode, year, BUILD_ID] as const,
     queryFn: async ({ signal }): Promise<CapFacYear> => {
       // Time the whole fetch + parse + build as `fetch-build` — the latency a
-      // user feels per tile. Network overhead ≈ fetch-build − year-build.
+      // user feels per tile. Network overhead ≈ fetch-build − year-build. On a
+      // mode switch the base query is already resolved, so this is build-only.
       const fetchBuildStart = performance.now();
-      const response = await fetch(
-        `/api/capacity-factors?year=${year}&fleet=${mode}&v=${BUILD_ID}`,
-        { signal },
-      );
+      // fetchQuery, NOT ensureQueryData: ensureQueryData returns whatever is
+      // cached regardless of age, which would strand this view on a stale
+      // payload forever — the revalidation the staleTime below asks for would
+      // rebuild the tiles from the same old data. fetchQuery honours the base
+      // query's staleTime, so a stale year genuinely refetches; concurrent
+      // callers (the two fleet views, adjacent tiles) still share one request.
+      const payload = await queryClient.fetchQuery(yearDataQueryOptions(year));
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data: GeneratingUnitCapFacHistoryDTO = await response.json();
+      // Bail before painting if nobody is waiting any more. Panning quickly
+      // across cold years would otherwise build — and cache for gcTime — a full
+      // set of canvases per year scrolled past, since the payload resolves long
+      // after the tile that asked for it has gone. The signal is deliberately
+      // NOT passed to the fetch above: that payload is shared, and one view
+      // unmounting must not cancel a download the other view still wants.
+      if (signal.aborted) throw new Error(`Year ${year} (${mode}) no longer needed`);
 
       // Tiles are built here, in the queryFn, so the cached value IS the
       // fully-constructed CapFacYear — shared by every observer and readable
       // synchronously via queryClient.getQueryData (see cap-fac-stats).
-      const capFacYear = createCapFacYear(year, data);
+      const capFacYear = createCapFacYear(year, filterFleet(payload.data, mode));
       tileTimingRecorder.record({
         kind: 'fetch-build',
         year,
@@ -81,10 +127,14 @@ export function yearQueryOptions(mode: FleetMode, year: number) {
       });
       return capFacYear;
     },
-    // NEM data is subject to revision (January can revise the December just
-    // past), so even past years go stale — on the same tiers the server
-    // route uses.
+    // Matches the base query, so a stale year re-runs the filter+build against
+    // a freshly revalidated payload rather than serving tiles built from one.
     staleTime: yearCachePolicy(year, getTodayAEST().year).revalidateSeconds * 1000,
+    // The base query owns the network, and the default retry: 3 applies to
+    // BOTH layers — so a failing year would be 4 payload attempts, retried 4
+    // times by this layer: 16 requests where the user sees one tile. This layer
+    // only filters and paints, so it has nothing of its own to retry.
+    retry: false,
     // CapFacYear holds Maps of canvas-bearing class instances; walking them
     // for structural sharing is wasted work and could mix old tiles into new
     // data. The trade-off: a refetch returning identical JSON still yields a

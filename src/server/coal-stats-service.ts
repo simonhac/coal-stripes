@@ -32,6 +32,8 @@ import type {
   StatValue,
 } from '@/shared/types';
 import { DATE_BOUNDARIES } from '@/shared/config';
+import { capacityFactorsPath } from '@/shared/capacity-factors-url';
+import { isInFleet } from '@/shared/fleet-filter';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getAESTDateTimeString, getDaysBetween, getQuarter } from '@/shared/date-utils';
 import { formatPeriodLabel, type Granularity } from '@/shared/energy-format';
@@ -77,12 +79,24 @@ interface RowAccum {
   hole: Float64Array; // alive unit-days missing (interior gaps)
 }
 
+/**
+ * One year's full-roster payload. The fleet view is applied afterwards, by
+ * filterFleet — so computing both modes reads the same cached payloads rather
+ * than fetching each year twice.
+ *
+ * The URL carries the build id (capacityFactorsPath) and that is load-bearing,
+ * not cosmetic. `cache: 'no-store'` governs Next's own fetch cache; it does
+ * NOT stop the Vercel edge answering, so an unversioned URL could hand this a
+ * payload built by a previous deploy. That matters now the fleet view is
+ * derived from a per-unit `status`: a pre-status payload would fail every
+ * `current` test, and the day-long stats cache would then store an empty
+ * current-fleet result.
+ */
 async function fetchYear(
   baseUrl: string,
   year: number,
-  mode: FleetMode,
 ): Promise<GeneratingUnitCapFacHistoryDTO | null> {
-  const res = await fetch(`${baseUrl}/api/capacity-factors?year=${year}&fleet=${mode}`, {
+  const res = await fetch(`${baseUrl}${capacityFactorsPath(year)}`, {
     headers: { 'user-agent': 'coal-stripes-stats' },
     cache: 'no-store',
   });
@@ -110,7 +124,7 @@ export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationS
 
   // 1. Fetch every year (bounded concurrency; cached upstream) and assemble each
   //    unit's whole-of-history daily series.
-  const dtos = await mapPool(years, 5, (y) => fetchYear(baseUrl, y, mode));
+  const dtos = await mapPool(years, 5, (y) => fetchYear(baseUrl, y));
 
   // Record where the data came from. Each year's payload carries its own
   // `created_at` — when it was last built from OpenElectricity — which survives
@@ -119,10 +133,13 @@ export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationS
   // is masking an upstream fix.
   const sources = summariseSources(years, dtos);
 
+  // The fleet view is applied here, not at fetch time: `full` aggregates every
+  // unit that ever operated, `current` only those still operating. Same
+  // payloads either way — see @/shared/fleet-filter.
   const units = new Map<string, UnitSeries>();
   for (const dto of dtos) {
     if (!dto) continue;
-    for (const u of dto.data) {
+    for (const u of dto.data.filter((unit) => isInFleet(unit, mode))) {
       const region = u.network === 'wem' ? 'WEM' : (u.region ?? 'UNKNOWN');
       let series = units.get(u.duid);
       if (!series) {

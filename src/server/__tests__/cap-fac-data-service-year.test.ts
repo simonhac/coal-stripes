@@ -85,7 +85,7 @@ describe('CapFacDataService - Year-based Fetching', () => {
 
   describe('Data Structure', () => {
     test('should return properly structured coal stripes data', async () => {
-      const result = await service.getCapacityFactors(2023, 'full');
+      const result = await service.getCapacityFactors(2023);
 
       // Check structure
       expect(result).toHaveProperty('data');
@@ -124,7 +124,7 @@ describe('CapFacDataService - Year-based Fetching', () => {
     });
 
     test('returns a full leap year (366 days) from a single fetch', async () => {
-      const result = await service.getCapacityFactors(2024, 'full');
+      const result = await service.getCapacityFactors(2024);
       expect(result.data[0].history.data.length).toBe(366);
       expect(result.data[0].history.start).toBe('2024-01-01');
       expect(result.data[0].history.last).toBe('2024-12-31');

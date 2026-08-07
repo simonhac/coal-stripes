@@ -8,8 +8,12 @@
 // ever operated across recorded history (includes retired plants); `current` =
 // only units operating in the present year. The mode selects which rows exist;
 // missing cells (e.g. a unit before it was commissioned, or WEM pre-2006) still
-// render as the "no data" (null) pale blue. Threaded through the API query, the
-// data-cache key, and the client query key.
+// render as the "no data" (null) pale blue.
+//
+// This is a VIEW selector, not a server query parameter. The server always
+// serves the full roster (each unit tagged with its `status`), and `current` is
+// derived from it by filtering — see @/shared/fleet-filter. It therefore
+// appears in the client query key but in no server cache key or request URL.
 export type FleetMode = 'full' | 'current';
 
 /** A contiguous run of daily values for one unit. */
@@ -36,6 +40,12 @@ export interface GeneratingUnitDTO {
   facility_code: string;
   facility_name: string;
   fueltech: string; // 'coal_black' or 'coal_brown'
+  // The unit's operating status as at the time the payload was built — NOT as
+  // at the payload's year. A unit retired in 2012 is 'retired' in every year's
+  // payload, including 1999 when it was running. This is what lets the client
+  // derive the `current` fleet view without a second request; see
+  // @/shared/fleet-filter.
+  status: 'operating' | 'retired';
   history: UnitHistoryDTO;
 }
 
