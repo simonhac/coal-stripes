@@ -3,6 +3,7 @@
 import React from 'react';
 import { Modal } from './Modal';
 import { KeyCombo } from './Kbd';
+import { SHORTCUTS, SHORTCUT_GROUPS, chordCaps } from '@/shared/shortcuts';
 import type { DeviceCapabilities } from '@/hooks/useDeviceCapabilities';
 
 interface ShortcutsDialogProps {
@@ -11,16 +12,10 @@ interface ShortcutsDialogProps {
   capabilities: DeviceCapabilities;
 }
 
-interface ShortcutRow {
-  keys: React.ReactNode;
-  desc: string;
-}
-
-interface ShortcutGroup {
-  title: string;
-  rows: ShortcutRow[];
-}
-
+/**
+ * Rendered entirely from the shortcut registry, so the list can't drift from
+ * the bindings — that drift is what let ⌘S go unnoticed.
+ */
 export function ShortcutsDialog({
   isOpen,
   onClose,
@@ -28,90 +23,36 @@ export function ShortcutsDialog({
 }: ShortcutsDialogProps) {
   const { isApple } = capabilities;
 
-  const groups: ShortcutGroup[] = [
-    {
-      title: 'Navigate',
-      rows: [
-        {
-          keys: (
-            <>
-              <KeyCombo keys={['ArrowLeft']} isApple={isApple} />
-              <span className="shortcut-sep">/</span>
-              <KeyCombo keys={['ArrowRight']} isApple={isApple} />
-            </>
-          ),
-          desc: 'Back / forward one month',
-        },
-        {
-          keys: (
-            <>
-              <KeyCombo keys={['shift', 'ArrowLeft']} isApple={isApple} />
-              <span className="shortcut-sep">/</span>
-              <KeyCombo keys={['shift', 'ArrowRight']} isApple={isApple} />
-            </>
-          ),
-          desc: 'Back / forward six months',
-        },
-        {
-          keys: (
-            <>
-              <KeyCombo keys={['cmd', 'ArrowLeft']} isApple={isApple} />
-              <span className="shortcut-sep">/</span>
-              <KeyCombo keys={['cmd', 'ArrowRight']} isApple={isApple} />
-            </>
-          ),
-          desc: 'Jump to the previous / next year boundary',
-        },
-      ],
-    },
-    {
-      title: 'Jump to',
-      rows: [
-        {
-          keys: (
-            <>
-              <KeyCombo keys={['Home']} isApple={isApple} />
-              <span className="shortcut-sep">or</span>
-              <KeyCombo keys={['T']} isApple={isApple} />
-            </>
-          ),
-          desc: 'Latest data (the present)',
-        },
-        {
-          keys: <KeyCombo keys={['S']} isApple={isApple} />,
-          desc: 'Start of the data',
-        },
-      ],
-    },
-    {
-      title: 'Help',
-      rows: [
-        {
-          keys: <KeyCombo keys={['?']} isApple={isApple} />,
-          desc: 'Show keyboard shortcuts',
-        },
-        {
-          keys: <KeyCombo keys={['A']} isApple={isApple} />,
-          desc: 'About / welcome',
-        },
-      ],
-    },
-  ];
-
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Keyboard shortcuts">
       <dl className="shortcuts-list">
-        {groups.map((group) => (
-          <div className="shortcuts-group" key={group.title}>
-            <p className="shortcuts-group-title">{group.title}</p>
-            {group.rows.map((row, i) => (
-              <div className="shortcut-row" key={i}>
-                <dt className="shortcut-keys">{row.keys}</dt>
-                <dd className="shortcut-desc">{row.desc}</dd>
-              </div>
-            ))}
-          </div>
-        ))}
+        {SHORTCUT_GROUPS.map((group) => {
+          const shortcuts = SHORTCUTS.filter(
+            (s) => s.group === group && (s.requires?.(capabilities) ?? true)
+          );
+          if (shortcuts.length === 0) return null;
+
+          return (
+            <div className="shortcuts-group" key={group}>
+              <p className="shortcuts-group-title">{group}</p>
+              {shortcuts.map((shortcut) => (
+                <div className="shortcut-row" key={shortcut.id}>
+                  <dt className="shortcut-keys">
+                    {shortcut.chords.map((chord, i) => (
+                      <React.Fragment key={i}>
+                        {i > 0 && (
+                          <span className="shortcut-sep">{shortcut.sep ?? '/'}</span>
+                        )}
+                        <KeyCombo keys={chordCaps(chord)} isApple={isApple} />
+                      </React.Fragment>
+                    ))}
+                  </dt>
+                  <dd className="shortcut-desc">{shortcut.desc}</dd>
+                </div>
+              ))}
+            </div>
+          );
+        })}
       </dl>
     </Modal>
   );

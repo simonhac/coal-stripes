@@ -157,4 +157,23 @@ test.describe('gesture navigator', () => {
     expect(after).toBeLessThan(before); // moved back
     expect(before - after).toBeLessThan(60); // ~1 month, not a huge jump
   });
+
+  // Ctrl+S used to match the bare 's' binding, preventDefault the browser's
+  // Save Page, and fling the timeline to the start of the data.
+  test('Ctrl+S is left to the browser, not treated as "jump to start"', async ({ page }) => {
+    await loadApp(page);
+    const before = (await offset(page))!;
+    await page.keyboard.press('Control+s');
+    await page.waitForTimeout(500);
+    expect(await offset(page)).toBe(before);
+  });
+
+  // Alt+ArrowLeft is Back in Chrome and Firefox on Windows and Linux.
+  test('Alt+ArrowLeft is left to the browser, not treated as a pan', async ({ page }) => {
+    await loadApp(page);
+    const before = (await offset(page))!;
+    await page.keyboard.press('Alt+ArrowLeft');
+    await page.waitForTimeout(500);
+    expect(await offset(page)).toBe(before);
+  });
 });

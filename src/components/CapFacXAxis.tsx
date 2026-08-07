@@ -18,8 +18,8 @@ interface CapFacXAxisProps {
   isMobile?: boolean;
 }
 
-export function CapFacXAxis({ 
-  dateRange, 
+function CapFacXAxisComponent({
+  dateRange,
   regionCode,
   onMonthClick,
   isMobile = false
@@ -345,3 +345,10 @@ export function CapFacXAxis({
     </div>
   );
 }
+// Memoised so an incidental Home re-render doesn't re-run the month-bar loop
+// and re-diff twelve cells per region for nothing. All four props are stable
+// between frames: `dateRange` is memoised on the animated end date, and
+// `onMonthClick` is a useCallback.
+export const CapFacXAxis = React.memo(CapFacXAxisComponent);
+
+CapFacXAxisComponent.displayName = 'CapFacXAxis';
