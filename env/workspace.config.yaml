@@ -1,0 +1,12 @@
+# coal-stripes workspace setup/run — driven by @simon/workspace-env.
+# Secrets: op inject of the committed .env.tpl (op:// refs into coal-stripes-dev)
+# via the Keychain SA token op-sa-coal-stripes-dev.
+project: coal-stripes
+setup:
+  - vercelLink            # link the "coal-stripes" Vercel project (deploys only)
+  - opInjectEnv           # op inject .env.tpl -> .env.local from 1Password
+  - validateEnv           # runs the project's @t3-oss/env schema if configured; else info-skips
+  - verify                # node_modules present
+run:
+  command: npm run dev
+  port: { from: 3010, span: 5 }   # coal-stripes' range 3010–3014
