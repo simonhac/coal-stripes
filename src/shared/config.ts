@@ -66,13 +66,22 @@ export const DATE_BOUNDARIES = {
   // number of days displayed in the tile
   TILE_WIDTH: 365,
 
-  // The earliest date we have data from. Although the NEM commenced on 13 Dec
-  // 1998, OpenElectricity's *facility-level* (per-unit) daily energy series only
-  // begins on 1 January 1999 (a whole-year or December-1998 request returns
-  // NoDataFound — verified against the API). The WEM series only starts on
-  // 20 September 2006, so 1999–2005 render WEM as blank page background, not
-  // pale blue: with no data at all in the year, every day of those tiles
-  // classifies as pre-commission (see @/shared/data-gaps).
+  // The earliest date we have data from. The NEM commenced on 13 Dec 1998, but
+  // OpenElectricity's record begins at 1999-01-01T00:00:00+10:00 exactly — the
+  // market's first 19 days are absent. Verified 2026-08-07 against every
+  // endpoint and resolution: facility energy at 5m/1h/1d, facility power at 5m,
+  // network energy, and market demand all clip to that same instant, and a
+  // 5-minute query straddling the boundary returns its first interval there
+  // rather than any earlier one. A request confined to December 1998 returns
+  // NoDataFound; one that straddles is silently clipped instead.
+  //
+  // Do NOT trust the facilities metadata here: 71 of 99 coal units report a
+  // `data_first_seen` in December 1998 (67 of them 1998-12-07), which is both
+  // earlier than any data the API will serve and earlier than the NEM itself.
+  //
+  // The WEM series only starts on 20 September 2006, so 1999–2005 render WEM as
+  // blank page background, not pale blue: with no data at all in the year, every
+  // day of those tiles classifies as pre-commission (see @/shared/data-gaps).
   EARLIEST_START_DATE: new CalendarDate(1999, 1, 1),
 
   // Buffer months to allow beyond data boundaries for UI flexibility
