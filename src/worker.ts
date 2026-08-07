@@ -24,19 +24,19 @@ export default {
    * all, and it is the opposite of what docs/cloudflare.md §3 predicted.
    */
   async scheduled(_event: ScheduledController, _env: unknown, ctx: ExecutionContext) {
-    // Warm with a PLAIN OUTBOUND FETCH to the public hostname, not a loopback.
-    //
-    // A loopback via `exports.default` (module-level or `ctx.exports`) does not
-    // populate the entries external traffic reads on this deployment: Start
-    // ships static assets, so public requests are routed through an
-    // assets-aware wrapper and `exports.default` is a different cache key. Both
-    // loopback flavours were tried; both reported rebuilding all 28 years while
-    // external requests kept missing. Silent, and exactly the Vercel
-    // "warmed the wrong layer" failure in new clothing.
-    //
-    // Going out through the edge is by construction the same path a visitor
-    // takes, which is what makes the warmer's effect observable with curl.
-    const summary = await withSelfFetch((request) => fetch(request), () => warmAll());
+    // NOTE: this warmer does not currently reach the cache entries visitors
+    // read. See docs/caching-and-diagnostics.md — `exports.default`,
+    // `ctx.exports.default`, a plain outbound fetch() and a self service
+    // binding have all been tried against the live deployment. Watch the
+    // `unreached` count in the log line below: while it is non-zero the warmer
+    // is a no-op, whatever `rebuilt` claims.
+    const exportsFromCtx = (ctx as unknown as {
+      exports: { default: { fetch(request: Request): Promise<Response> } };
+    }).exports;
+    const summary = await withSelfFetch(
+      (request) => exportsFromCtx.default.fetch(request),
+      () => warmAll(),
+    );
     console.log(JSON.stringify({ log: 'warm-all', ...summary, warmed: undefined }));
 
     // Surface anything that failed; a silent warmer is how the Vercel one hid a

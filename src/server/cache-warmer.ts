@@ -75,6 +75,7 @@ export async function warmAll(): Promise<{
   warmed: WarmResult[];
   rebuilt: number;
   failed: number;
+  unreached: number;
   totalMs: number;
 }> {
   const started = performance.now();
@@ -103,6 +104,13 @@ export async function warmAll(): Promise<{
     // watching, because it should be near zero in a steady state.
     rebuilt: warmed.filter((w) => w.ok && w.cacheStatus !== 'HIT').length,
     failed: warmed.filter((w) => !w.ok).length,
+    // Responses that came back WITHOUT a cf-cache-status header never went
+    // through Workers Cache at all — so whatever they populated, it is not what
+    // visitors read. This is the tell that distinguishes "warming works" from
+    // "warming reports success and achieves nothing", which is the failure this
+    // architecture has now produced twice. A non-zero count here means the
+    // warmer is a no-op no matter what `rebuilt` says.
+    unreached: warmed.filter((w) => w.ok && w.cacheStatus === null).length,
     totalMs: Math.round(performance.now() - started),
   };
 }

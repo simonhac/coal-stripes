@@ -104,44 +104,68 @@ Future years are `Cache-Control: no-store` — the data does not exist yet.
 
 ---
 
-## ⚠️ The warmer does not currently work in production
+## ⚠️ There is currently no working warmer
 
 **Status 2026-08-08: unresolved, and a blocker for DNS cutover.**
 
-The cron fires, sweeps all 28 years plus both stats modes, and reports
-`{"log":"warm-all","rebuilt":30,"failed":0}` — yet an external `curl` for a year
-the sweep just rebuilt still returns `cf-cache-status: MISS`. The warmer is
-populating cache entries **nobody reads**.
+The `scheduled` handler in `src/worker.ts` cannot do the job, and this is
+documented rather than surprising:
 
-Three mechanisms have been tried against the deployed Worker, all with the same
-result:
+> Other invocation types — scheduled (Cron Triggers), queue consumers,
+> Workflows, Tail Workers, Durable Object invocations, Email Workers — always
+> run without cache involvement.
+>
+> — [Workers Cache limitations](https://developers.cloudflare.com/workers/cache/limitations/)
+
+The whole scheduled invocation runs with the cache bypassed, including its
+subrequests. Four mechanisms were tried against the live deployment and all
+failed for that single reason:
 
 | Mechanism | Result |
 |---|---|
-| Module-level `exports.default.fetch` from `cloudflare:workers` | sweep succeeds, external requests still MISS |
-| `ctx.exports.default.fetch` from the `scheduled` handler | same |
-| Plain outbound `fetch()` to the public hostname | same |
+| Module-level `exports.default.fetch` | sweep reports success; external requests still MISS |
+| `ctx.exports.default.fetch` from `scheduled` | same |
+| Plain outbound `fetch()` to the public hostname | 404 |
+| Self service binding (`env.SELF.fetch`) | 404 |
 
-External requests themselves cache correctly (`MISS` → `HIT`), purge works, and
-`cross_version_cache` works — so the cache is fine. It is specifically
-**in-Worker requests that do not populate the key public traffic reads.**
+Everything else about the cache is healthy: external requests go MISS→HIT, tag
+purge works, and `cross_version_cache` holds entries across deploys. It is
+specifically **warming from inside the Worker** that cannot work.
 
-The likely cause is **Workers Assets**: TanStack Start uploads a static-asset
-bundle, so public requests are routed through an assets-aware wrapper, and
-`exports.default` is a different entrypoint — and the cache key includes the
-entrypoint. The bare probe Worker used during the spike had no assets, which is
-why warming appeared to work there and does not here.
+`warmAll()` now reports an `unreached` count — responses that came back with no
+`cf-cache-status` header at all, meaning they never went through Workers Cache.
+While that is non-zero the warmer is a no-op regardless of what `rebuilt` says.
 
-**Until this is resolved the site has no warmer**, and because Workers Cache does
-not honour `stale-while-revalidate` (below), the first visitor after each TTL
-boundary pays a full 3–9 s OpenElectricity fetch. That is a regression against
-the Vercel setup and must be fixed before cutover.
+### What this costs, concretely
 
-The most likely fix is to warm from **outside** the Worker entirely — a
-scheduled GitHub Action, or a second Worker, hitting the public URLs. Being a
-genuinely external client is the only way to guarantee it takes the same path a
-visitor does, which is the property that has failed here twice in two different
-architectures.
+Workers Cache does not honour `stale-while-revalidate` either, so a lapsed entry
+blocks the next visitor for a full OpenElectricity fetch (3–9 s). With request
+collapsing, only *one* visitor pays per expiry. Per day that is roughly:
+
+- current year, 1 h tier → ~24 slow requests
+- 5 recent years, 24 h tier → ~5
+- 22 archive years, 7 d tier → ~3
+
+So on the order of **30 slow first-requests a day**, each landing on one unlucky
+visitor. Tolerable, but strictly worse than the Vercel setup, where the cron
+kept every tier permanently warm.
+
+### The options
+
+1. **An external HTTP client on a schedule.** The only thing that provably
+   works, because it is a real visitor-path request. A monitoring service or a
+   Cloudflare Health Check would do it; GitHub Actions would too, but its cron
+   is unreliable.
+2. **Serve stale ourselves.** Keep the last good payload in KV or R2 and return
+   it immediately on a miss while refreshing in the background — reimplementing
+   `stale-while-revalidate` at the application layer. More code, but it removes
+   the dependency on anything external and makes a cold cache cheap rather than
+   rare.
+3. **Accept it.** Lengthen the tiers so entries lapse less often and let ~30
+   visitors a day pay for the rebuild.
+
+Option 2 is the most robust and the most work; option 1 is the smallest change
+that restores current behaviour.
 
 ---
 

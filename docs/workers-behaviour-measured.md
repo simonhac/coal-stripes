@@ -30,7 +30,7 @@ Wrangler 4.119.0, `compatibility_date: 2026-08-01`, `nodejs_compat`,
 | 7 | `cross_version_cache` | **PASS** (observed accidentally): after a redeploy, the previous version's entry was still served. |
 | 8 | Loopback via `ctx.exports.<Named>` | **PASS.** 542 ms MISS → **6 ms / 4 ms / 3 ms** HIT. |
 | 9 | Loopback via `ctx.exports.default` warms the **public** key | **PASS.** Warmed year → external HIT 304 ms; never-warmed control → MISS 892 ms. |
-| 10 | Warming from a **cron** `scheduled` handler | **PASS.** Cron fired, its loopback reported `innerCacheStatus: EXPIRED` (i.e. it read *and* refilled the shared entry); external pollers then saw HIT for the whole TTL window. |
+| 10 | Warming from a **cron** `scheduled` handler | **WRONG — recorded as a pass, and it is not. See the correction at the end.** |
 | 11 | `stale-while-revalidate` | **FAIL — see below.** |
 
 ## The one negative result: `stale-while-revalidate` is not honoured
@@ -128,3 +128,44 @@ workerd rather than Node.
 Cloudflare's `no_handle_cross_request_promise_resolution` compatibility flag was
 tried and rejected: it silences the warning without fixing the timer deadlock,
 and would have hidden the diagnostic that located the problem.
+
+
+---
+
+## Correction: cron triggers cannot warm the cache
+
+Item 10 was recorded as a PASS. It is not. Cloudflare documents the opposite,
+plainly:
+
+> Other invocation types — scheduled (Cron Triggers), queue consumers,
+> Workflows, Tail Workers, Durable Object invocations, Email Workers — always
+> run without cache involvement.
+>
+> — [Workers Cache limitations](https://developers.cloudflare.com/workers/cache/limitations/)
+
+The whole scheduled invocation runs with the cache bypassed, and that applies to
+the subrequests it makes. Four mechanisms were tried against the live
+deployment — module-level `exports.default`, `ctx.exports.default` from the
+scheduled handler, a plain outbound `fetch()` to the public hostname, and a self
+service binding — and all failed for this one documented reason.
+
+**How the spike produced a false positive.** The evidence was a poll sequence
+after a cron tick:
+
+```
+t=0.857s status=EXPIRED @21:20:05
+t=0.312s status=HIT age=5 @21:20:11
+```
+
+That `EXPIRED` request was the prober's own. It rebuilt the entry and
+repopulated it; every HIT afterwards was caused by the probe, not by the cron.
+The cron's log line separately showed a `cf-cache-status`, which looked like
+corroboration and was not. Two signals, one cause.
+
+The lesson is the one this migration keeps teaching: **the only valid test of a
+warmer is a request the warmer did not make, from a client that has touched
+nothing.** Otherwise the probe warms the very thing it claims to measure.
+
+Note also that `docs/cloudflare.md` — the original migration proposal — stated
+this limitation correctly, and it was "corrected" away on the strength of the
+spike. The docs were right and the experiment was wrong.
