@@ -1043,7 +1043,7 @@ a.opennem-facility-label:focus-visible {
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 .welcome-swatch--out   { background: #d24646; }   /* red = out of service */
-.welcome-swatch--light { background: #bfbfbf; }   /* lightly loaded (25% grey ramp) */
+.welcome-swatch--light { background: #bfbfbf; }   /* lightly loaded (20% grey ramp) */
 .welcome-swatch--full  { background: #000000; }   /* fully loaded */
 
 /* Inline keycap that also opens the shortcuts dialog */
