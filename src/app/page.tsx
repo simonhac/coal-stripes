@@ -244,7 +244,6 @@ export default function Home() {
 
       // Check if the touch is on an interactive element
       const isInteractiveElement =
-        target.closest('.opennem-facility-label') ||
         target.closest('.opennem-region-label') ||
         target.closest('.opennem-facility-canvas') ||
         target.closest('.opennem-month-label') ||
