@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback } from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { DATE_BOUNDARIES } from '@/shared/config';
@@ -15,20 +15,19 @@ interface UseKeyboardNavigationOptions {
   currentEndDate: CalendarDate | null;
   /** Animate to an absolute end date (drives the shared gesture spring). */
   navigateToDate: (date: CalendarDate) => void;
-  isDragging?: boolean;
-  disabled?: boolean;
 }
 
 /**
- * Hook for handling keyboard navigation.
- * Delegates the actual animation to the shared gesture spring via `navigateToDate`
- * so keyboard, month-clicks, drag, and wheel all move through one animator.
+ * The timeline's navigation actions.
+ *
+ * Knows nothing about keys — the bindings live in src/shared/shortcuts.ts and
+ * are dispatched by useShortcuts. Every action delegates its animation to the
+ * shared gesture spring via `navigateToDate`, so keyboard, month-clicks, drag
+ * and wheel all move through one animator.
  */
 export function useKeyboardNavigation({
   currentEndDate,
   navigateToDate,
-  isDragging = false,
-  disabled = false,
 }: UseKeyboardNavigationOptions) {
   // Navigate by months
   const navigateByMonths = useCallback((months: number) => {
@@ -60,65 +59,23 @@ export function useKeyboardNavigation({
     navigateToDate(boundaries.earliestDataEndDay);
   }, [navigateToDate]);
 
-  // Keyboard event handler
-  useEffect(() => {
-    if (disabled) return;
-    
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't handle if user is typing in an input
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        return;
-      }
+  // Snap to the previous (dir < 0) or next (dir > 0) year boundary. When the
+  // view already starts on Jan 1, step a whole year rather than sitting still.
+  const navigateToYearBoundary = useCallback((dir: number) => {
+    if (!currentEndDate) return;
+    const startDate = currentEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
+    const onYearStart = startDate.month === 1 && startDate.day === 1;
+    const targetYear = dir < 0
+      ? (onYearStart ? startDate.year - 1 : startDate.year)
+      : (onYearStart ? currentEndDate.year + 1 : currentEndDate.year);
+    navigateToYearStart(targetYear);
+  }, [currentEndDate, navigateToYearStart]);
 
-      // Don't handle keyboard navigation while dragging
-      if (isDragging) return;
-
-      // Only handle if we have an end date
-      if (!currentEndDate) return;
-
-      const isShift = e.shiftKey;
-      const isCmd = e.metaKey || e.ctrlKey; // Support both Mac (Cmd) and Windows/Linux (Ctrl)
-      const monthsToMove = isShift ? 6 : 1;
-
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        if (isCmd) {
-          // Command+Left: Go to Jan 1 of start year (or previous year if already Jan 1)
-          const startDate = currentEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
-          const targetYear = (startDate.month === 1 && startDate.day === 1) 
-            ? startDate.year - 1 
-            : startDate.year;
-          navigateToYearStart(targetYear);
-        } else {
-          navigateByMonths(-monthsToMove);
-        }
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        if (isCmd) {
-          // Command+Right: Go to Jan 1 of end year (or next year if start date is already Jan 1)
-          const startDate = currentEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
-          const targetYear = (startDate.month === 1 && startDate.day === 1) 
-            ? currentEndDate.year + 1 
-            : currentEndDate.year;
-          navigateToYearStart(targetYear);
-        } else {
-          navigateByMonths(monthsToMove);
-        }
-      } else if (e.key === 'Home') {
-        e.preventDefault();
-        navigateToToday();
-      } else if (e.key === 't' || e.key === 'T') {
-        e.preventDefault();
-        navigateToToday();
-      } else if (e.key === 's' || e.key === 'S') {
-        e.preventDefault();
-        navigateToStart();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentEndDate, navigateByMonths, navigateToToday, navigateToYearStart, navigateToStart, isDragging, disabled]);
-
-  return { navigateToMonth };
+  return {
+    navigateByMonths,
+    navigateToMonth,
+    navigateToToday,
+    navigateToStart,
+    navigateToYearBoundary,
+  };
 }

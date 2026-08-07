@@ -1,15 +1,8 @@
 import React from 'react';
+import type { KeyToken } from '@/shared/shortcuts';
 
-// Tokens the app uses; anything else (letters, "Home", "?") renders verbatim.
-export type KeyToken =
-  | 'cmd'
-  | 'shift'
-  | 'ArrowLeft'
-  | 'ArrowRight'
-  | 'ArrowUp'
-  | 'ArrowDown'
-  | 'Home'
-  | (string & {});
+// KeyToken lives in the shortcut registry, which owns the key vocabulary.
+export type { KeyToken };
 
 function keyLabel(token: KeyToken, isApple: boolean): string {
   switch (token) {
@@ -17,6 +10,8 @@ function keyLabel(token: KeyToken, isApple: boolean): string {
       return isApple ? '⌘' : 'Ctrl'; // ⌘ vs Ctrl
     case 'shift':
       return '⇧'; // ⇧
+    case 'alt':
+      return isApple ? '⌥' : 'Alt'; // ⌥ vs Alt
     case 'ArrowLeft':
       return '←'; // ←
     case 'ArrowRight':
@@ -37,7 +32,7 @@ export function Kbd({ children }: { children: React.ReactNode }) {
 
 interface KeyComboProps {
   /** Tokens in order, e.g. ['cmd', 'ArrowLeft'] → ⌘ + ← */
-  keys: KeyToken[];
+  keys: readonly KeyToken[];
   isApple: boolean;
 }
 

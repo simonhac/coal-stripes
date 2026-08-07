@@ -9,16 +9,19 @@ import { PerformanceDisplay } from '../components/PerformanceDisplay';
 import { OpenElectricityHeader } from '../components/OpenElectricityHeader';
 import { RegionSection } from '../components/RegionSection';
 import { DateRange } from '../components/DateRange';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQueryClient, type NotifyOnChangeProps } from '@tanstack/react-query';
 import { yearQueryOptions } from '@/client/year-queries';
 import { getRegionNames } from '@/client/cap-fac-stats';
 import { FleetModeProvider } from '@/client/fleet-mode-context';
 import type { FleetMode } from '@/shared/types';
 import type { CapFacYear } from '@/client/cap-fac-year';
 import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
+import { useShortcuts, type ShortcutHandlers } from '@/hooks/useShortcuts';
+import type { ShortcutScope } from '@/shared/shortcuts';
 import { useGestureSpring } from '@/hooks/useGestureSpring';
 import { usePrefetchAdjacentYears } from '@/hooks/usePrefetchAdjacentYears';
 import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities';
+import { useHoverIndicator } from '@/hooks/useHoverIndicator';
 import { hasSeenWelcome, markWelcomeSeen } from '@/shared/welcome-state';
 import { WelcomeDialog } from '../components/WelcomeDialog';
 import { ShortcutsDialog } from '../components/ShortcutsDialog';
@@ -26,6 +29,11 @@ import './opennem.css';
 
 // Region display order is fixed; a region only appears if it has facilities.
 const ALL_REGION_CODES = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1', 'WEM'];
+
+// Background-refetch fetchStatus churn must not re-render the whole page.
+// Typed (not `as const`) because useQueries' mapped-array form wants a mutable
+// NotifyOnChangeProps, unlike its fixed-tuple form.
+const ROSTER_NOTIFY_ON: NotifyOnChangeProps = ['data', 'status'];
 
 // Build the region → facilities roster from one or more years of data. The
 // roster (which rows exist) is derived from the loaded DTO(s); in `full` mode
@@ -65,11 +73,8 @@ function buildFacilitiesByRegion(
 
 export default function Home() {
   const queryClient = useQueryClient();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [endDate, setEndDate] = useState<CalendarDate | null>(null);
   const [animatedEndDate, setAnimatedEndDate] = useState<CalendarDate | null>(null);
-  const [facilitiesByRegion, setFacilitiesByRegion] = useState<Map<string, { code: string; name: string }[]>>(new Map());
   // Fleet roster mode. Defaults to `full` (every unit that ever operated);
   // initialised from ?fleet= in a mount effect (below) to avoid a hydration
   // mismatch, and mirrored back to the URL so the view is shareable.
@@ -129,6 +134,43 @@ export default function Home() {
   const currentOffset = getDaysBetween(boundaries.earliestDataEndDay, currentEndDateForGesture);
   const maxOffset = getDaysBetween(boundaries.earliestDataEndDay, boundaries.latestDataDay);
 
+  // The roster (which facility rows exist) is always derived from the CURRENT
+  // year's data — independent of what year is being viewed — so panning never
+  // changes the row set. Switching mode swaps the whole roster (e.g. SA1 and
+  // retired plants appear in `full`).
+  const rosterYears = useMemo(() => {
+    const end = boundaries.latestDataDay;
+    const start = end.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
+    return start.year === end.year ? [start.year] : [start.year, end.year];
+  }, [boundaries]);
+
+  const rosterResults = useQueries({
+    queries: rosterYears.map(year => ({
+      ...yearQueryOptions(queryClient, mode, year),
+      notifyOnChangeProps: ROSTER_NOTIFY_ON,
+    })),
+  });
+
+  // Destructured rather than used as an array, because useQueries hands back a
+  // fresh array every render while the individual `data` references are stable.
+  const rosterLeft = rosterResults[0]?.data;
+  const rosterRight = rosterResults[1]?.data;
+  const rosterError = rosterResults.find(r => r.error)?.error ?? null;
+  const rosterLoaded = rosterLeft !== undefined && (rosterYears.length === 1 || rosterRight !== undefined);
+
+  // Hold the last good roster while a mode switch loads, so the rows don't
+  // vanish behind the spinner mid-session. (useQueries takes no
+  // placeholderData, so this is the equivalent by hand.)
+  const lastRosterRef = useRef<Map<string, { code: string; name: string }[]>>(new Map());
+  const facilitiesByRegion = useMemo(() => {
+    if (rosterLoaded) {
+      lastRosterRef.current = buildFacilitiesByRegion(
+        [rosterLeft, rosterRight].filter(Boolean) as CapFacYear[]
+      );
+    }
+    return lastRosterRef.current;
+  }, [rosterLoaded, rosterLeft, rosterRight]);
+
   // Gesture spring → date. Offset can be negative for elastic overshoot.
   const handleOffsetChange = useCallback((offset: number, dragging: boolean) => {
     handleDateNavigate(boundaries.earliestDataEndDay.add({ days: offset }), dragging);
@@ -146,16 +188,45 @@ export default function Home() {
     navigateToOffset(getDaysBetween(boundaries.earliestDataEndDay, date));
   }, [boundaries, navigateToOffset]);
 
-  // Keyboard navigation drives the same spring via navigateToDate.
-  // Disabled while a dialog is open so arrows/Home/t/s don't scrub the timeline
-  // behind the modal.
-  const { navigateToMonth } = useKeyboardNavigation({
+  // Timeline navigation actions, all driving the same spring via navigateToDate.
+  const {
+    navigateByMonths,
+    navigateToMonth,
+    navigateToToday,
+    navigateToStart,
+    navigateToYearBoundary,
+  } = useKeyboardNavigation({
     currentEndDate: endDate,
     navigateToDate,
-    isDragging,
-    disabled: welcomeOpen || shortcutsOpen,
   });
   const handleMonthClick = navigateToMonth;
+
+  // Bind the shortcut registry. `navigation` shortcuts go inert while a dialog
+  // is open (so arrows don't scrub the timeline behind the modal), while a drag
+  // is in flight, and before the first data load settles an end date. `global`
+  // ones stay live, which is how `a` / `?` close the dialog they opened.
+  const shortcutHandlers = useMemo<ShortcutHandlers>(() => ({
+    stepMonth: (months) => navigateByMonths(months ?? 0),
+    stepSixMonths: (months) => navigateByMonths(months ?? 0),
+    yearBoundary: (dir) => navigateToYearBoundary(dir ?? 0),
+    toLatest: () => navigateToToday(),
+    toStart: () => navigateToStart(),
+    toggleShortcuts: () => (shortcutsOpen ? setShortcutsOpen(false) : openShortcuts()),
+    toggleWelcome: () => (welcomeOpen ? setWelcomeOpen(false) : openWelcome()),
+  }), [
+    navigateByMonths, navigateToYearBoundary, navigateToToday, navigateToStart,
+    shortcutsOpen, welcomeOpen, openShortcuts, openWelcome,
+  ]);
+
+  const isScopeActive = useCallback((scope: ShortcutScope) => (
+    scope === 'global' ||
+    (!welcomeOpen && !shortcutsOpen && !isDragging && endDate !== null)
+  ), [welcomeOpen, shortcutsOpen, isDragging, endDate]);
+
+  useShortcuts(shortcutHandlers, { capabilities, isScopeActive });
+
+  // One pointer-tracking listener for the whole page, driving --hover-x.
+  useHoverIndicator();
 
   // Target date range (for display in header)
   const targetDateRange = endDate ? {
@@ -184,52 +255,13 @@ export default function Home() {
     window.history.replaceState(null, '', url);
   }, [mode]);
 
-  // Build the roster for the active mode. The roster (which facility rows
-  // exist) is always derived from the CURRENT year's data — independent of what
-  // year is being viewed — so panning never changes the row set, and switching
-  // mode swaps the whole roster (e.g. SA1 and retired plants appear in `full`).
-  // Runs on mount and whenever mode changes; navigation (endDate) is preserved
-  // across a mode switch.
+  // On the first load, position the timeline. On a later mode switch, keep the
+  // current navigation target.
   useEffect(() => {
-    let cancelled = false;
-    async function loadRoster() {
-      try {
-        const boundaries = getDateBoundaries();
-        const calculatedEndDate = boundaries.latestDataDay;
-        const startDate = calculatedEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
-
-        // Determine which years the current window spans
-        const startYear = startDate.year;
-        const endYear = calculatedEndDate.year;
-        const years = startYear === endYear ? [startYear] : [startYear, endYear];
-
-        // Load the current year(s) for this mode (fetchQuery dedupes with any
-        // fetch the tiles kick off for the same year + mode).
-        const yearResults = await Promise.all(
-          years.map(year => queryClient.fetchQuery(yearQueryOptions(queryClient, mode, year)))
-        );
-        if (cancelled) return;
-
-        setFacilitiesByRegion(buildFacilitiesByRegion(yearResults));
-
-        // On the first load, position the timeline and reveal the UI. On a
-        // later mode switch, keep the current navigation target.
-        setEndDate(prev => prev ?? calculatedEndDate);
-        setAnimatedEndDate(prev => prev ?? calculatedEndDate);
-        setLoading(false);
-      } catch (err) {
-        if (cancelled) return;
-        console.error('Failed to load data:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load data');
-        setLoading(false);
-      }
-    }
-
-    loadRoster();
-    return () => {
-      cancelled = true;
-    };
-  }, [queryClient, mode]);
+    if (!rosterLoaded) return;
+    setEndDate(prev => prev ?? boundaries.latestDataDay);
+    setAnimatedEndDate(prev => prev ?? boundaries.latestDataDay);
+  }, [rosterLoaded, boundaries]);
 
 
   // Ensure the page has focus on mount for keyboard navigation
@@ -285,52 +317,28 @@ export default function Home() {
     }
   }, []);
 
-  // Global hotkeys: 'a' toggles the welcome dialog, '?' toggles shortcuts.
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't handle if user is typing in an input
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        return;
-      }
-      // Ignore chords so we don't clobber ⌘A / Ctrl+A etc.
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-      if (e.key === 'a' || e.key === 'A') {
-        e.preventDefault();
-        if (welcomeOpen) setWelcomeOpen(false);
-        else openWelcome();
-      } else if (e.key === '?' && capabilities.hasKeyboard) {
-        // '?' is typically Shift+/, so match the produced character.
-        e.preventDefault();
-        if (shortcutsOpen) setShortcutsOpen(false);
-        else openShortcuts();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [welcomeOpen, shortcutsOpen, capabilities.hasKeyboard, openWelcome, openShortcuts]);
-
-
-  if (loading) {
-    return (
-      <div className="opennem-loading">
-        <div className="opennem-loading-spinner"></div>
-        Loading stripes data...
-      </div>
-    );
-  }
-
-  if (error) {
+  if (rosterError) {
     return (
       <div className="opennem-error">
         <div>
           <h2>Unable to load data</h2>
-          <p>{error}</p>
+          <p>{rosterError instanceof Error ? rosterError.message : 'Failed to load data'}</p>
           <button onClick={() => window.location.reload()}>
             Try again
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // Gate on having *a* roster rather than a freshly-loaded one, so a mode
+  // switch keeps the current rows on screen instead of flashing the spinner.
+  // endDate is settled by an effect once the first roster lands.
+  if (facilitiesByRegion.size === 0 || !endDate) {
+    return (
+      <div className="opennem-loading">
+        <div className="opennem-loading-spinner"></div>
+        Loading stripes data...
       </div>
     );
   }

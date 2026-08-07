@@ -25,6 +25,7 @@ import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { perfMonitor } from '@/shared/performance-monitor';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
+import { getPointerPosition } from '@/hooks/useHoverIndicator';
 import { featureFlags } from '@/shared/feature-flags';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { tileMonitor } from '@/shared/tile-monitor';
@@ -72,7 +73,6 @@ const CompositeTileComponent = ({
   const loggingSuppressedRef = useRef<boolean>(false);
   
   // Mouse position tracking for tooltip updates during scrolling
-  const mousePosRef = useRef<{ x: number; y: number } | null>(null);
   
   // Use provided animated date range, or calculate from endDate
   const dateRange = useMemo(() => {
@@ -193,6 +193,19 @@ const CompositeTileComponent = ({
     return { canvasX, canvasY };
   }, []);
   
+  // The last (unit, day) broadcast, so an un-deduped mousemove stream doesn't
+  // re-broadcast an identical payload. A day column is ~2.7 CSS px wide, so
+  // roughly ten mousemoves land on each one, and every listener downstream
+  // (six RegionSections, six RegionLabels, and the region stats they
+  // recompute) used to run for all ten. Null means "nothing is showing", so
+  // re-entering the same column after a hover-end broadcasts again.
+  const lastHoverKeyRef = useRef<string | null>(null);
+
+  // Stale once the data or the visible window moves under the cursor.
+  useEffect(() => {
+    lastHoverKeyRef.current = null;
+  }, [tiles, dateRange]);
+
   const updateTooltip = useCallback((x: number, y: number) => {
     try {
       const startYear = dateRange.start.year;
@@ -228,6 +241,12 @@ const CompositeTileComponent = ({
     }
     
     if (tooltipData) {
+      // Same unit, same day → byte-identical payload, so nothing downstream
+      // can tell that we skipped it.
+      const hoverKey = `${tooltipData.unitName}|${tooltipData.startDate?.toString() ?? ''}|${tooltipData.tooltipType}`;
+      if (hoverKey === lastHoverKeyRef.current) return;
+      lastHoverKeyRef.current = hoverKey;
+
       // Format unit name - for WA units, show only the part after underscore
       let unitName = tooltipData.unitName;
       if (tooltipData.network && tooltipData.network.toUpperCase() === 'WEM' && unitName && unitName.includes('_')) {
@@ -270,6 +289,7 @@ const CompositeTileComponent = ({
       window.dispatchEvent(event);
     } else {
       // Clear mouse position when no tooltip
+      lastHoverKeyRef.current = null;
       tileMonitor.clearMousePosition();
     }
     } catch (error) {
@@ -373,10 +393,11 @@ const CompositeTileComponent = ({
     const endYear = dateRange.end.year;
     
     // Update tooltip if mouse is hovering during date range changes
-    if (mousePosRef.current && canvasRef.current) {
-      const elementAtMouse = document.elementFromPoint(mousePosRef.current.x, mousePosRef.current.y);
+    const mousePos = getPointerPosition();
+    if (mousePos && canvasRef.current) {
+      const elementAtMouse = document.elementFromPoint(mousePos.x, mousePos.y);
       if (elementAtMouse === canvasRef.current) {
-        const { canvasX, canvasY } = clientToCanvasCoordinates(mousePosRef.current.x, mousePosRef.current.y);
+        const { canvasX, canvasY } = clientToCanvasCoordinates(mousePos.x, mousePos.y);
         updateTooltip(canvasX, canvasY);
       }
     }
@@ -602,42 +623,21 @@ const CompositeTileComponent = ({
     updateTooltip(canvasX, canvasY);
   }, [clientToCanvasCoordinates, updateTooltip]);
   
-  // Global mouse position tracking for hover indicator
-  useEffect(() => {
-    const handleGlobalMouseMove = (e: MouseEvent) => {
-      mousePosRef.current = { x: e.clientX, y: e.clientY };
-      
-      // Update hover indicator if mouse is over any canvas
-      const elementAtMouse = document.elementFromPoint(e.clientX, e.clientY);
-      if (elementAtMouse && elementAtMouse.classList.contains('opennem-facility-canvas')) {
-        const tileWidth = DATE_BOUNDARIES.TILE_WIDTH; // all canvases are TILE_WIDTH px wide internally
-        const rect = elementAtMouse.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const dayColumn = Math.floor((x / rect.width) * tileWidth);
-        if (dayColumn >= 0 && dayColumn < tileWidth) {
-          const percentage = (dayColumn / tileWidth) * 100;
-          document.documentElement.style.setProperty('--hover-x', `${percentage}%`);
-        }
-      }
-    };
-    
-    document.addEventListener('mousemove', handleGlobalMouseMove);
-    return () => {
-      document.removeEventListener('mousemove', handleGlobalMouseMove);
-    };
-  }, []);
-  
+  // Pointer tracking and the --hover-x indicator are hoisted into a single
+  // app-level useHoverIndicator() — see that hook for why.
+
   // Handle window scroll to update tooltip
   useEffect(() => {
     const handleScroll = () => {
-      if (!canvasRef.current || !mousePosRef.current) return;
-      
+      const mousePos = getPointerPosition();
+      if (!canvasRef.current || !mousePos) return;
+
       // Get element at current mouse position
-      const elementAtMouse = document.elementFromPoint(mousePosRef.current.x, mousePosRef.current.y);
-      
+      const elementAtMouse = document.elementFromPoint(mousePos.x, mousePos.y);
+
       // Check if it's our canvas
       if (elementAtMouse === canvasRef.current) {
-        const { canvasX, canvasY } = clientToCanvasCoordinates(mousePosRef.current.x, mousePosRef.current.y);
+        const { canvasX, canvasY } = clientToCanvasCoordinates(mousePos.x, mousePos.y);
         updateTooltip(canvasX, canvasY);
       } else {
         // Mouse not over our canvas - check if we need to call onHoverEnd
@@ -651,6 +651,15 @@ const CompositeTileComponent = ({
     return () => window.removeEventListener('scroll', handleScroll);
   }, [updateTooltip, facilityCode, clientToCanvasCoordinates]);
 
+  // Shared by mouse-leave and touch-end: drop the hover indicator, tell the
+  // perf overlay, and arm the dedupe so the next entry always broadcasts.
+  const endHover = useCallback(() => {
+    lastHoverKeyRef.current = null;
+    document.documentElement.style.removeProperty('--hover-x');
+    tileMonitor.clearMousePosition();
+    window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'));
+  }, []);
+
   // Touch handlers for hover functionality
   const touchHandlers = useTouchAsHover({
     onHoverStart: (clientX, clientY) => {
@@ -661,11 +670,7 @@ const CompositeTileComponent = ({
       const { canvasX, canvasY } = clientToCanvasCoordinates(clientX, clientY);
       updateTooltip(canvasX, canvasY);
     },
-    onHoverEnd: () => {
-      document.documentElement.style.removeProperty('--hover-x');
-      const event = new CustomEvent('tooltip-data-hover-end');
-      window.dispatchEvent(event);
-    }
+    onHoverEnd: endHover,
   });
 
   return (
@@ -678,17 +683,7 @@ const CompositeTileComponent = ({
           imageRendering: 'pixelated'
         }}
         onMouseMove={handleMouseMove}
-        onMouseLeave={() => {
-          // Clear hover position on document root
-          document.documentElement.style.removeProperty('--hover-x');
-          
-          // Clear mouse position in tile monitor
-          tileMonitor.clearMousePosition();
-          
-          // Broadcast hover end event
-          const event = new CustomEvent('tooltip-data-hover-end');
-          window.dispatchEvent(event);
-        }}
+        onMouseLeave={endHover}
         {...touchHandlers}
       />
     </div>

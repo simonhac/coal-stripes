@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatAgeFromAEST, getAESTDateTimeString, getTodayAEST } from '@/shared/date-utils';
 import {
   tileTimingRecorder,
@@ -132,10 +132,7 @@ function PurgeCaches() {
   const [secret, setSecret] = useState('');
   const [from, setFrom] = useState(String(currentYear));
   const [to, setTo] = useState(String(currentYear));
-  const [phase, setPhase] = useState<'idle' | 'purging' | 'rewarming'>('idle');
-  const [results, setResults] = useState<PurgeResponse[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const busy = phase !== 'idle';
+  const [precondition, setPrecondition] = useState<string | null>(null);
 
   async function call(body: Record<string, unknown>): Promise<PurgeResponse> {
     const res = await fetch('/api/admin/purge', {
@@ -151,9 +148,36 @@ function PurgeCaches() {
     return json as PurgeResponse;
   }
 
-  async function purge() {
+  // Two mutations, deliberately: revalidateTag also discards cache entries
+  // written later in the SAME request, so a re-warm bundled into the purge
+  // would be thrown away. See src/app/api/admin/purge/route.ts.
+  const purgeMutation = useMutation({
+    mutationFn: () => call({ mode: 'purge' }),
+    onSuccess: () => rewarmMutation.mutate(),
+  });
+
+  const rewarmMutation = useMutation({
+    mutationFn: () =>
+      call({
+        mode: 'rewarm',
+        rewarmFrom: Number.parseInt(from, 10),
+        rewarmTo: Number.parseInt(to, 10),
+      }),
+    // Drop this tab's own query cache too, so the app reflects the purge
+    // without a reload.
+    onSuccess: () => queryClient.invalidateQueries(),
+  });
+
+  const busy = purgeMutation.isPending || rewarmMutation.isPending;
+  const results = [purgeMutation.data, rewarmMutation.data].filter(Boolean) as PurgeResponse[];
+  const error =
+    precondition ??
+    (purgeMutation.error ?? rewarmMutation.error)?.message ??
+    null;
+
+  function purge() {
     if (!secret) {
-      setError('Enter CACHE_SECRET first.');
+      setPrecondition('Enter CACHE_SECRET first.');
       return;
     }
     if (
@@ -166,32 +190,9 @@ function PurgeCaches() {
       return;
     }
 
-    setError(null);
-    setResults([]);
-    try {
-      // Two requests, deliberately: revalidateTag also discards cache entries
-      // written later in the SAME request, so a re-warm bundled into the purge
-      // would be thrown away. See src/app/api/admin/purge/route.ts.
-      setPhase('purging');
-      const purged = await call({ mode: 'purge' });
-      setResults([purged]);
-
-      setPhase('rewarming');
-      const rewarmed = await call({
-        mode: 'rewarm',
-        rewarmFrom: Number.parseInt(from, 10),
-        rewarmTo: Number.parseInt(to, 10),
-      });
-      setResults([purged, rewarmed]);
-
-      // Drop this tab's own query cache too, so the app reflects the purge
-      // without a reload.
-      await queryClient.invalidateQueries();
-    } catch (e) {
-      setError((e as Error)?.message ?? 'Request failed');
-    } finally {
-      setPhase('idle');
-    }
+    setPrecondition(null);
+    rewarmMutation.reset(); // clear the previous run's second panel
+    purgeMutation.mutate();
   }
 
   return (
@@ -234,9 +235,9 @@ function PurgeCaches() {
           />
         </label>
         <button onClick={purge} disabled={busy} style={buttonStyle}>
-          {phase === 'purging'
+          {purgeMutation.isPending
             ? 'Purging…'
-            : phase === 'rewarming'
+            : rewarmMutation.isPending
               ? `Re-warming ${from}–${to}…`
               : 'Purge caches'}
         </button>
