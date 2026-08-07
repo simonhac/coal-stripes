@@ -104,6 +104,47 @@ Future years are `Cache-Control: no-store` — the data does not exist yet.
 
 ---
 
+## ⚠️ The warmer does not currently work in production
+
+**Status 2026-08-08: unresolved, and a blocker for DNS cutover.**
+
+The cron fires, sweeps all 28 years plus both stats modes, and reports
+`{"log":"warm-all","rebuilt":30,"failed":0}` — yet an external `curl` for a year
+the sweep just rebuilt still returns `cf-cache-status: MISS`. The warmer is
+populating cache entries **nobody reads**.
+
+Three mechanisms have been tried against the deployed Worker, all with the same
+result:
+
+| Mechanism | Result |
+|---|---|
+| Module-level `exports.default.fetch` from `cloudflare:workers` | sweep succeeds, external requests still MISS |
+| `ctx.exports.default.fetch` from the `scheduled` handler | same |
+| Plain outbound `fetch()` to the public hostname | same |
+
+External requests themselves cache correctly (`MISS` → `HIT`), purge works, and
+`cross_version_cache` works — so the cache is fine. It is specifically
+**in-Worker requests that do not populate the key public traffic reads.**
+
+The likely cause is **Workers Assets**: TanStack Start uploads a static-asset
+bundle, so public requests are routed through an assets-aware wrapper, and
+`exports.default` is a different entrypoint — and the cache key includes the
+entrypoint. The bare probe Worker used during the spike had no assets, which is
+why warming appeared to work there and does not here.
+
+**Until this is resolved the site has no warmer**, and because Workers Cache does
+not honour `stale-while-revalidate` (below), the first visitor after each TTL
+boundary pays a full 3–9 s OpenElectricity fetch. That is a regression against
+the Vercel setup and must be fixed before cutover.
+
+The most likely fix is to warm from **outside** the Worker entirely — a
+scheduled GitHub Action, or a second Worker, hitting the public URLs. Being a
+genuinely external client is the only way to guarantee it takes the same path a
+visitor does, which is the property that has failed here twice in two different
+architectures.
+
+---
+
 ## Keeping it warm: the cron warmer
 
 `wrangler.jsonc` runs `*/10 * * * *` into the `scheduled` handler in

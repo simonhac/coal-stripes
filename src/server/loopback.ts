@@ -19,6 +19,8 @@
  *     /api/stats would pay 28 cold OpenElectricity fetches on every rebuild.
  */
 import { env, exports as workerExports } from 'cloudflare:workers';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { readEnv } from '@/server/runtime-env';
 import { capacityFactorsPath } from '@/shared/capacity-factors-url';
 
 /**
@@ -68,24 +70,60 @@ export function loopbackAvailable(): boolean {
  * `GlobalProps.mainModule` is declared, and our main module is
  * `@tanstack/react-start/server-entry`.
  */
+type SelfFetch = (request: Request) => Promise<Response>;
+
 const self = workerExports as unknown as {
-  default: { fetch(request: Request): Promise<Response> };
+  default: { fetch: SelfFetch };
 };
 
 /**
- * Origin used to build loopback URLs. The host is not part of the cache key —
- * only the path and query string are — so this only has to be a well-formed
- * absolute URL, not a reachable one.
+ * The loopback used for the current call.
+ *
+ * Module-level `exports` works from inside a `fetch` handler, but **not** from a
+ * `scheduled` one: the cron's warming loop ran, rebuilt every year and reported
+ * success, yet external requests still missed — it was populating cache entries
+ * nobody reads. That is the Vercel "self-fetch warms the wrong layer" trap
+ * wearing a new hat, and it is silent, which is worse.
+ *
+ * So the scheduled handler passes its own `ctx.exports.default.fetch`, which is
+ * bound to a live invocation context. `withSelfFetch` scopes it for the duration
+ * of the sweep; anything outside such a scope falls back to the module-level
+ * export, which is correct inside a request.
  */
-const LOOPBACK_ORIGIN = 'https://stripes.energy';
+const selfFetchStore = new AsyncLocalStorage<SelfFetch>();
+
+export function withSelfFetch<T>(fetchImpl: SelfFetch, fn: () => Promise<T>): Promise<T> {
+  return selfFetchStore.run(fetchImpl, fn);
+}
+
+function selfFetch(request: Request): Promise<Response> {
+  const scoped = selfFetchStore.getStore();
+  return scoped ? scoped(request) : self.default.fetch(request);
+}
+
+/**
+ * Origin used to build loopback URLs.
+ *
+ * Cloudflare documents the cache key as path + query string, with the host
+ * excluded — which suggests any well-formed absolute URL would do. Do not rely
+ * on that: warming with a host visitors don't use is unverifiable from the
+ * outside and fails silently, which is precisely the class of bug this
+ * architecture exists to remove. Point it at the hostname real traffic arrives
+ * on, and the warmer's effect is observable with a plain curl.
+ *
+ * Set `PUBLIC_ORIGIN` in wrangler.jsonc; it must change at DNS cutover.
+ */
+function loopbackOrigin(): string {
+  return readEnv('PUBLIC_ORIGIN') ?? 'https://stripes.energy';
+}
 
 export function loopbackUrl(path: string): string {
-  return `${LOOPBACK_ORIGIN}${path}`;
+  return `${loopbackOrigin()}${path}`;
 }
 
 /** Fetch one of our own routes through Workers Cache. */
 export function loopback(path: string): Promise<Response> {
-  return self.default.fetch(new Request(loopbackUrl(path)));
+  return selfFetch(new Request(loopbackUrl(path)));
 }
 
 /** One year's payload, from cache when warm. `null` if the route errored. */

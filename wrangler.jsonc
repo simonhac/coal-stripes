@@ -32,6 +32,11 @@
 
   "observability": { "enabled": true },
 
+  // The hostname real traffic arrives on. The cache warmer loops back through
+  // this origin, so it must match what visitors use or the warmer populates
+  // entries nobody reads. CHANGE THIS AT DNS CUTOVER to https://stripes.energy.
+  "vars": { "PUBLIC_ORIGIN": "https://coal-stripes.simon-8e9.workers.dev" },
+
   // Every 10 minutes, as on Vercel. This is NOT optional: Workers Cache does not
   // honour stale-while-revalidate, so a lapsed entry blocks the next visitor for
   // a full OpenElectricity fetch. The interval must stay well under the shortest
