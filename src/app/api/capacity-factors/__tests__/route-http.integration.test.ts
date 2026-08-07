@@ -83,70 +83,76 @@ describe('Capacity Factors API HTTP Integration Tests', () => {
   });
 
   describe('Caching Behaviour', () => {
+    // Browser and edge lifetimes are set by SEPARATE headers, on purpose: the
+    // browser cache is the one layer a purge can never reach, so it is capped at
+    // 60 s, while the edge keeps the year's full freshness-tier window. See
+    // docs/caching-and-diagnostics.md.
+    const BROWSER_CACHE_CONTROL = 'public, max-age=60';
+
+    // `x-cf-cold` is the honest "did this request pay an OpenElectricity fetch?"
+    // signal, and is what these tests assert on. Wall-clock thresholds were
+    // flaky: a warm Data Cache read still has to deserialise ~230 KB from disk.
+    const paidColdFetch = (res: Response): boolean =>
+      res.headers.get('x-cf-cold') === 'true';
+
     test('should cache current year requests for 1 hour', async () => {
       const currentYear = getTodayAEST().year;
-      
-      // First request - should hit the API
-      const start1 = Date.now();
+
       const response1 = await fetch(`${BASE_URL}?year=${currentYear}`);
-      const time1 = Date.now() - start1;
       const data1 = await response1.json();
-      
+
       expect(response1.status).toBe(200);
-      expect(response1.headers.get('Cache-Control')).toBe(
-        'public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400'
+      expect(response1.headers.get('Cache-Control')).toBe(BROWSER_CACHE_CONTROL);
+      expect(response1.headers.get('Vercel-CDN-Cache-Control')).toBe(
+        'public, s-maxage=3600, stale-while-revalidate=86400'
       );
       expect(data1.data).toBeDefined();
       expect(data1.data.length).toBeGreaterThan(0);
-      
-      console.log(`Current year first request: ${time1}ms`);
-      
-      // Second request - should be cached
-      const start2 = Date.now();
+
+      // Second request must come from the Data Cache, whatever the first did.
       const response2 = await fetch(`${BASE_URL}?year=${currentYear}`);
-      const time2 = Date.now() - start2;
       const data2 = await response2.json();
-      
+
       expect(response2.status).toBe(200);
+      expect(paidColdFetch(response2)).toBe(false);
       expect(data2).toEqual(data1);
-      
-      console.log(`Current year cached request: ${time2}ms (${Math.round(time1/time2)}x faster)`);
-      
-      // Cached request should be faster
-      expect(time2).toBeLessThan(time1 / 2);
     }, 30000);
 
     test('should cache recent past years for a day (NEM data is subject to revision)', async () => {
       const previousYear = getTodayAEST().year - 1;
 
-      // First request
-      const start1 = Date.now();
       const response1 = await fetch(`${BASE_URL}?year=${previousYear}`);
-      const time1 = Date.now() - start1;
       const data1 = await response1.json();
 
       expect(response1.status).toBe(200);
-      expect(response1.headers.get('Cache-Control')).toBe(
-        'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
+      expect(response1.headers.get('Cache-Control')).toBe(BROWSER_CACHE_CONTROL);
+      expect(response1.headers.get('Vercel-CDN-Cache-Control')).toBe(
+        'public, s-maxage=86400, stale-while-revalidate=604800'
       );
-      
-      console.log(`Previous year first request: ${time1}ms`);
-      
-      // Second request - should be cached
-      const start2 = Date.now();
+
       const response2 = await fetch(`${BASE_URL}?year=${previousYear}`);
-      const time2 = Date.now() - start2;
       const data2 = await response2.json();
-      
+
       expect(response2.status).toBe(200);
+      expect(paidColdFetch(response2)).toBe(false);
       expect(data2).toEqual(data1);
-      
-      console.log(`Previous year cached request: ${time2}ms`);
-      
-      // For already cached data, the difference might be small
-      // Just verify both are reasonably fast
-      expect(time2).toBeLessThan(100);
     }, 30000);
+
+    test('should serve concurrent requests for the same cold year identically', async () => {
+      // Single-flight collapses these into ONE upstream fan-out, so every
+      // response carries the same payload built at the same instant. (Note
+      // x-cf-cold is true for all of them, and rightly so: each of these
+      // requests really did wait on OpenElectricity. That the wait was shared
+      // is asserted directly in cf-cache-single-flight.test.ts.)
+      const year = 2021;
+      const responses = await Promise.all(
+        Array.from({ length: 4 }, () => fetch(`${BASE_URL}?year=${year}`))
+      );
+
+      for (const res of responses) expect(res.status).toBe(200);
+      const builtAt = responses.map((r) => r.headers.get('x-cf-built-at'));
+      expect(new Set(builtAt).size).toBe(1);
+    }, 60000);
 
     test('should handle future year appropriately', async () => {
       const futureYear = getTodayAEST().year + 1;
@@ -175,24 +181,18 @@ describe('Capacity Factors API HTTP Integration Tests', () => {
       // Warm up both caches
       await fetch(`${BASE_URL}?year=${year1}`);
       await fetch(`${BASE_URL}?year=${year2}`);
-      
-      // Now test that both are cached
-      const start1 = Date.now();
+
+      // Now test that both are cached — one year's entry must not evict or
+      // shadow the other's.
       const response1 = await fetch(`${BASE_URL}?year=${year1}`);
-      const time1 = Date.now() - start1;
       const data1 = await response1.json();
-      
-      const start2 = Date.now();
+
       const response2 = await fetch(`${BASE_URL}?year=${year2}`);
-      const time2 = Date.now() - start2;
       const data2 = await response2.json();
-      
-      console.log(`Cached ${year1}: ${time1}ms, Cached ${year2}: ${time2}ms`);
-      
-      // Both should be fast (cached)
-      expect(time1).toBeLessThan(100);
-      expect(time2).toBeLessThan(100);
-      
+
+      expect(paidColdFetch(response1)).toBe(false);
+      expect(paidColdFetch(response2)).toBe(false);
+
       // Data should be different
       expect(data1.data[0]?.history?.start).toContain(year1.toString());
       expect(data2.data[0]?.history?.start).toContain(year2.toString());

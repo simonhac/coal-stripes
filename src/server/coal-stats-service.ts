@@ -36,6 +36,7 @@ import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getAESTDateTimeString, getDaysBetween, getQuarter } from '@/shared/date-utils';
 import { formatPeriodLabel, type Granularity } from '@/shared/energy-format';
 import { getBaseUrl, currentDataYear, earliestDataYear, yearRange } from '@/server/cache-warmer';
+import { mapPool } from '@/server/map-pool';
 
 const STATS_VERSION = '1.0';
 
@@ -87,20 +88,6 @@ async function fetchYear(
   });
   if (!res.ok) return null;
   return (await res.json()) as GeneratingUnitCapFacHistoryDTO;
-}
-
-/** Run `fn` over `items` with bounded concurrency, preserving order. */
-async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
 
 export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationStatsDTO> {

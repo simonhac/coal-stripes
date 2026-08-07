@@ -1,16 +1,15 @@
 import { NextResponse } from "next/server";
-import { unstable_cache } from "next/cache";
-import { getCapFacDataService } from "@/server/cap-fac-data-service";
-import { initializeRequestLogger } from "@/server/request-logger";
-import { getTodayAEST, getAESTDateTimeString } from "@/shared/date-utils";
 import {
-	yearCachePolicy,
-	YEAR_CACHE_TIERS,
-	type YearCacheTier,
-} from "@/shared/config";
+	cachePolicyForYear,
+	coldFetchCount,
+	getCachedCapacityFactors,
+	lastColdFetch,
+} from "@/server/cf-cache";
+import { initializeRequestLogger } from "@/server/request-logger";
+import { getTodayAEST } from "@/shared/date-utils";
 import type { FleetMode } from "@/shared/types";
 
-// Opt-in verbose logging: set DEBUG_OE=1 to trace requests/cache misses locally.
+// Opt-in verbose logging: set DEBUG_OE=1 to trace requests locally.
 const debug = (...args: unknown[]): void => {
 	if (process.env.DEBUG_OE) console.log(...args);
 };
@@ -31,77 +30,10 @@ export const dynamic = "force-dynamic";
 const port = Number.parseInt(process.env.PORT || "3000");
 initializeRequestLogger(port);
 
-// Per-instance record of genuine cold fetches. `fetchCapacityFactors` (below)
-// is the function wrapped by unstable_cache, so it ONLY runs on a Data-Cache
-// miss — i.e. a real, rate-limited OpenElectricity fetch. We record each such
-// miss so GET can emit an `x-cf-cold` header telling the diagnostics probe
-// whether THIS request paid a cold fetch. Module-level ⇒ per-serverless-instance
-// and ephemeral: the per-request header (which travels on the same response) is
-// authoritative; the historical fields are best-effort.
-interface ColdFetchRecord {
-	lastColdFetchAt: string;
-	lastColdFetchMs: number;
-	count: number;
-}
-const coldFetches = new Map<string, ColdFetchRecord>();
-
-// Diagnostics key: cold fetches are tracked per (mode, year) since the two
-// fleet modes are cached separately.
-const coldKey = (year: number, mode: FleetMode): string => `${mode}:${year}`;
-
-async function fetchCapacityFactors(year: number, mode: FleetMode) {
-	debug(`🔄 Cache miss - fetching data for year ${year} (${mode})`);
-	const service = getCapFacDataService();
-	const started = performance.now();
-	const result = await service.getCapacityFactors(year, mode);
-	const key = coldKey(year, mode);
-	const prev = coldFetches.get(key);
-	coldFetches.set(key, {
-		lastColdFetchAt: getAESTDateTimeString(),
-		lastColdFetchMs: Math.round(performance.now() - started),
-		count: (prev?.count ?? 0) + 1,
-	});
-	return result;
-}
-
-const FLEET_MODES: FleetMode[] = ["full", "current"];
-
-// Bump to invalidate every cached CF tile in one deploy-atomic step (it changes
-// the unstable_cache key, so all tiers/modes/years recompute on the fixed code
-// with fresh facilities metadata). Bumped for the retired-unit colouring fix:
-// future days are now null (not 0) for retired units, so tiles frozen under the
-// old logic must be discarded rather than served stale.
-const CF_CACHE_VERSION = "v2";
-
-// One unstable_cache wrapper per (freshness tier, fleet mode). Revalidate is
-// static per wrapper, so the tiers can't share one; and the mode is baked into
-// the cache key parts so the two rosters (full vs current) never share a Data
-// Cache entry. Freshness windows live in yearCachePolicy — see @/shared/config.
-// A year crossing a tier boundary (current→recent at New Year, recent→archive
-// at N-6) changes wrapper and hence Data Cache key, costing one cache miss that
-// the next cron warmer run absorbs.
-//
-// Tags are kept so a tier/mode can be busted on demand via revalidateTag() if
-// we ever need instant propagation.
-const tierCaches = Object.fromEntries(
-	(Object.keys(YEAR_CACHE_TIERS) as YearCacheTier[]).map((tier) => [
-		tier,
-		Object.fromEntries(
-			FLEET_MODES.map((mode) => [
-				mode,
-				unstable_cache(
-					fetchCapacityFactors,
-					["capacity-factors", CF_CACHE_VERSION, tier, mode],
-					{
-						revalidate: YEAR_CACHE_TIERS[tier].revalidateSeconds,
-						tags: ["capacity-factors", tier, mode],
-					},
-				),
-			]),
-		) as Record<FleetMode, typeof fetchCapacityFactors>,
-	]),
-) as Record<YearCacheTier, Record<FleetMode, typeof fetchCapacityFactors>>;
-
+// This route is a thin HTTP wrapper. The Data Cache itself — the unstable_cache
+// wrappers, the tier/mode key layout and the cold-fetch bookkeeping — lives in
+// @/server/cf-cache, because the cron warmer calls the very same wrappers
+// in-process and the two must share one set of instances to share cache keys.
 export async function GET(request: Request) {
 	try {
 		const { searchParams } = new URL(request.url);
@@ -140,15 +72,13 @@ export async function GET(request: Request) {
 		// Pick the freshness tier for this year. NEM data is subject to revision
 		// (January can revise the December just past), so no tier is immutable.
 		const currentYear = getTodayAEST().year;
-		const policy = yearCachePolicy(year, currentYear);
+		const policy = cachePolicyForYear(year);
 
 		// Detect whether THIS request triggered a cold fetch, by watching the
 		// cold-fetch counter across the (possibly cached) await.
-		const cKey = coldKey(year, mode);
-		const coldBefore = coldFetches.get(cKey)?.count ?? 0;
-		const data = await tierCaches[policy.tier][mode](year, mode);
-		const coldAfter = coldFetches.get(cKey);
-		const didColdFetch = (coldAfter?.count ?? 0) > coldBefore;
+		const coldBefore = coldFetchCount(year, mode);
+		const data = await getCachedCapacityFactors(year, mode);
+		const didColdFetch = coldFetchCount(year, mode) > coldBefore;
 
 		debug(`🌐 API: Returning data for year ${year}`);
 
@@ -158,8 +88,11 @@ export async function GET(request: Request) {
 		// Diagnostics marker: did this request pay a cold OpenElectricity fetch?
 		// Read back by probeYears() in @/server/cache-warmer.
 		response.headers.set("x-cf-cold", String(didColdFetch));
-		if (didColdFetch && coldAfter) {
-			response.headers.set("x-cf-cold-ms", String(coldAfter.lastColdFetchMs));
+		if (didColdFetch) {
+			const record = lastColdFetch(year, mode);
+			if (record) {
+				response.headers.set("x-cf-cold-ms", String(record.lastColdFetchMs));
+			}
 		}
 
 		// When this payload was actually assembled from OpenElectricity — NOT when

@@ -19,11 +19,13 @@ interface TileDiagnostic {
   ms: number;
   status: number;
   ok: boolean;
-  xVercelCache: string | null;
-  age: number | null;
-  coldFetch: boolean | null;
-  coldFetchMs: number | null;
-  builtAt: string | null;
+  edge: { xVercelCache: string | null; age: number | null; ms: number };
+  dataCache: {
+    coldFetch: boolean | null;
+    coldFetchMs: number | null;
+    builtAt: string | null;
+    ms: number;
+  };
   classification: TileClassification;
 }
 
@@ -33,6 +35,7 @@ interface DiagnosticsSummary {
   cold: number;
   uncertain: number;
   failed: number;
+  edgeHits: number;
   slowestYear: number | null;
   slowestMs: number | null;
   totalMs: number;
@@ -69,19 +72,24 @@ const headCell: React.CSSProperties = {
 };
 const numCell: React.CSSProperties = { ...cell, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
 
-// The "Cold fetch?" column echoes the raw x-cf-cold header. On a CDN edge HIT the
-// header is replayed from when the entry was first built, so `x-cf-cold: true` on
-// a warm row is *historical* telemetry (the entry was born from a cold fetch), not
-// a cost this probe paid. Only a `cold` classification is a live cold fetch — see
-// classifyProbe in src/server/cache-warmer.ts, which trusts the edge signal first.
+// The "Cold fetch?" column is now unambiguous: the probe it comes from bypasses
+// the CDN, so `x-cf-cold` always describes what that request actually paid,
+// never a value replayed from an edge entry built minutes or hours ago.
 function coldFetchCell(t: TileDiagnostic): { text: string; colour: string } {
-  if (t.coldFetch === null) return { text: '—', colour: '#555' };
-  if (!t.coldFetch) return { text: 'no', colour: '#1a1a1a' };
-  const ms = t.coldFetchMs ? ` (${t.coldFetchMs} ms)` : '';
-  // Classified cold → no edge hit, so THIS request paid the upstream fetch.
-  if (t.classification === 'cold') return { text: `yes${ms}`, colour: CLASS_COLOUR.cold };
-  // Warm row with a cold header → replayed historical telemetry from the edge.
-  return { text: `was cold${ms}`, colour: '#888' };
+  if (t.dataCache.coldFetch === null) return { text: '—', colour: '#555' };
+  if (!t.dataCache.coldFetch) return { text: 'no', colour: '#1a1a1a' };
+  const ms = t.dataCache.coldFetchMs ? ` (${t.dataCache.coldFetchMs} ms)` : '';
+  return { text: `yes${ms}`, colour: CLASS_COLOUR.cold };
+}
+
+// The edge either answered on its own (what a visitor wants) or didn't. An
+// edge MISS is not a failure — the origin's Data Cache is right behind it — but
+// it does mean that visitor pays an origin round-trip instead of ~0.3 s.
+function edgeCell(t: TileDiagnostic): { text: string; colour: string } {
+  const raw = t.edge.xVercelCache;
+  if (raw === null) return { text: '—', colour: '#555' };
+  const hit = raw.toUpperCase() === 'HIT' || (t.edge.age ?? 0) > 0;
+  return { text: raw.toLowerCase(), colour: hit ? CLASS_COLOUR.warm : '#b06000' };
 }
 
 // Mirrors the /api/admin/purge response.
@@ -96,6 +104,8 @@ interface WarmResult {
   ok: boolean;
   status: number;
   ms: number;
+  cold: boolean;
+  skipped: boolean;
 }
 interface PurgeResponse {
   mode: 'purge' | 'rewarm';
@@ -299,16 +309,17 @@ function ServerCacheHealth() {
         </button>
       </div>
       <p style={{ margin: '0 0 12px', color: '#555', fontSize: '13px', maxWidth: '760px' }}>
-        Each year is probed by self-fetching <code>/api/capacity-factors</code>. Latency and the{' '}
-        <code>x-cf-cold</code> marker reveal whether a warm Next.js Data Cache served it or a cold
-        OpenElectricity fetch was paid. <code>x-vercel-cache</code> reflects only the regional CDN
-        edge (a <code>MISS</code> can still be warm at the origin). A <code>was cold</code> value on
-        a <strong>warm</strong> row is telemetry replayed from the CDN edge — the entry was
-        originally built by a cold fetch, not a cost paid now; only a <strong>cold</strong> Status
-        means a live upstream fetch was paid just now. <strong>Built at</strong> is when that
-        year&rsquo;s data was last assembled from OpenElectricity — it travels with the body, so it
-        stays honest no matter which cache replayed it. That is the column to read when asking
-        whether an upstream data fix has reached us yet.
+        There are two caches between a visitor and OpenElectricity, and each year is probed twice so
+        they can be read separately. <strong>Data cache</strong> is the origin&rsquo;s own store —
+        probed with the CDN deliberately bypassed, so <code>x-cf-cold</code> always says what{' '}
+        <em>that</em> request paid rather than replaying an old value. This is the layer the
+        every-10-minute warmer is responsible for. <strong>Edge</strong> is the Vercel CDN in
+        Sydney: a <code>hit</code> means a visitor gets the year in ~0.3 s without the server
+        running at all; a <code>miss</code> is not a failure, it just costs them one origin
+        round-trip. Only a <strong>cold</strong> Data cache means somebody would have waited on
+        OpenElectricity. <strong>Built at</strong> is when that year&rsquo;s data was last assembled
+        upstream — it travels with the body, so it stays honest no matter which cache replayed it,
+        and it is the column to read when asking whether an upstream data fix has reached us yet.
       </p>
 
       {isLoading && <p style={{ color: '#555' }}>Probing every year… this can take a while if a tile is cold.</p>}
@@ -322,8 +333,10 @@ function ServerCacheHealth() {
             >
               {data.summary.allWarm ? '✓ All tiles warm' : '✗ Not all tiles warm'}
             </strong>{' '}
-            — {data.summary.warm} warm, {data.summary.cold} cold, {data.summary.uncertain} uncertain
-            {data.summary.failed > 0 ? `, ${data.summary.failed} failed` : ''} · slowest{' '}
+            — data cache: {data.summary.warm} warm, {data.summary.cold} cold,{' '}
+            {data.summary.uncertain} uncertain
+            {data.summary.failed > 0 ? `, ${data.summary.failed} failed` : ''} · edge:{' '}
+            {data.summary.edgeHits}/{data.summary.yearsProbed} hit · slowest{' '}
             {data.summary.slowestYear ?? '—'} ({data.summary.slowestMs ?? '—'} ms) · probed{' '}
             {data.generatedAt}
           </p>
@@ -333,18 +346,21 @@ function ServerCacheHealth() {
                 <tr>
                   <th style={headCell}>Year</th>
                   <th style={headCell}>Tier</th>
-                  <th style={headCell}>Status</th>
+                  <th style={headCell}>Data cache</th>
                   <th style={numCell}>Latency</th>
                   <th style={headCell}>Cold fetch?</th>
                   <th style={headCell}>Built at</th>
                   <th style={headCell}>Data age</th>
-                  <th style={headCell}>x-vercel-cache</th>
+                  <th style={headCell}>Edge</th>
                   <th style={numCell}>Edge age (s)</th>
+                  <th style={numCell}>Edge latency</th>
                 </tr>
               </thead>
               <tbody>
                 {data.tiles.map((t) => {
                   const cf = coldFetchCell(t);
+                  const eg = edgeCell(t);
+                  const builtAt = t.dataCache.builtAt;
                   return (
                     <tr key={t.year}>
                       <td style={cell}>{t.year}</td>
@@ -353,12 +369,13 @@ function ServerCacheHealth() {
                         {t.classification}
                         {!t.ok ? ` (${t.status})` : ''}
                       </td>
-                      <td style={numCell}>{t.ms} ms</td>
+                      <td style={numCell}>{t.dataCache.ms} ms</td>
                       <td style={{ ...cell, color: cf.colour }}>{cf.text}</td>
-                      <td style={cell}>{t.builtAt ? t.builtAt.replace('T', ' ').slice(0, 16) : '—'}</td>
-                      <td style={cell}>{(t.builtAt && formatAgeFromAEST(t.builtAt)) ?? '—'}</td>
-                      <td style={cell}>{t.xVercelCache ?? '—'}</td>
-                      <td style={numCell}>{t.age ?? '—'}</td>
+                      <td style={cell}>{builtAt ? builtAt.replace('T', ' ').slice(0, 16) : '—'}</td>
+                      <td style={cell}>{(builtAt && formatAgeFromAEST(builtAt)) ?? '—'}</td>
+                      <td style={{ ...cell, color: eg.colour, fontWeight: 600 }}>{eg.text}</td>
+                      <td style={numCell}>{t.edge.age ?? '—'}</td>
+                      <td style={numCell}>{t.edge.ms} ms</td>
                     </tr>
                   );
                 })}

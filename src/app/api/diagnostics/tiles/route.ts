@@ -15,6 +15,12 @@ import { getAESTDateTimeString } from "@/shared/date-utils";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+// Probing is deliberately more expensive than it looks: each year is fetched
+// twice (once with the edge bypassed to read the Data Cache honestly, once
+// plainly to read the edge), and a genuinely cold year pays the upstream fetch
+// rather than hiding behind an edge HIT. That is the point — this endpoint is
+// the only place that state is visible.
+//
 // Cap the probe fan-out. This endpoint only re-exercises the already-public,
 // CDN-cached /api/capacity-factors route — it adds no attack surface a caller
 // doesn't already have — so it is left PUBLIC, which also lets the /diagnostics
@@ -22,12 +28,18 @@ export const maxDuration = 300;
 // guard against an absurdly wide range.
 const MAX_YEARS = 30;
 
+// Warm/cold/uncertain describe the origin's Data Cache — the layer the cron
+// warmer is responsible for. `edgeHits` is the separate, visitor-facing signal:
+// how many years the CDN edge in this region could answer on its own. A year
+// can be warm in one and not the other, and conflating them is what used to
+// make a hollow cache read as healthy.
 interface DiagnosticsSummary {
   yearsProbed: number;
   warm: number;
   cold: number;
   uncertain: number;
   failed: number; // count of !ok responses (also counted in `uncertain`)
+  edgeHits: number;
   slowestYear: number | null;
   slowestMs: number | null;
   totalMs: number;
@@ -97,6 +109,9 @@ function summarise(tiles: ProbeResult[]): DiagnosticsSummary {
     cold,
     uncertain,
     failed: tiles.filter((t) => !t.ok).length,
+    edgeHits: tiles.filter(
+      (t) => t.edge.xVercelCache?.toUpperCase() === "HIT" || (t.edge.age ?? 0) > 0,
+    ).length,
     slowestYear: slowest?.year ?? null,
     slowestMs: slowest?.ms ?? null,
     totalMs: tiles.reduce((sum, t) => sum + t.ms, 0),
