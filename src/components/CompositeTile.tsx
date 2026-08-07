@@ -17,7 +17,7 @@
  * "no data" colour.
  */
 import React, { useEffect, useRef, useCallback, useMemo } from 'react';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { FacilityYearTile } from '@/client/facility-year-tile';
 import { getDayIndex, isLeapYear, getDaysBetween, getDateFromIndex } from '@/shared/date-utils';
@@ -84,6 +84,7 @@ const CompositeTileComponent = ({
   
   // Calculate which tiles we need synchronously
   const mode = useFleetMode();
+  const queryClient = useQueryClient();
   const startYear = dateRange.start.year;
   const endYear = dateRange.end.year;
   const rightNeeded = startYear !== endYear;
@@ -98,12 +99,12 @@ const CompositeTileComponent = ({
   const [leftResult, rightResult] = useQueries({
     queries: [
       {
-        ...yearQueryOptions(mode, startYear),
+        ...yearQueryOptions(queryClient, mode, startYear),
         enabled: leftValid,
         notifyOnChangeProps: ['data', 'status'] as const,
       },
       {
-        ...yearQueryOptions(mode, endYear),
+        ...yearQueryOptions(queryClient, mode, endYear),
         enabled: rightNeeded && rightValid,
         notifyOnChangeProps: ['data', 'status'] as const,
       },

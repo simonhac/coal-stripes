@@ -51,10 +51,17 @@ Two things follow, and they explain most of this document:
   miss from becoming a layer-4 bill. It is best-effort storage — Vercel can and
   does evict entries early — so it needs actively keeping alive.
 
-A year is the unit everything is keyed on, together with the **fleet mode**
-(`full` = every unit that ever operated, `current` = operating units only). The
-two modes are cached entirely separately. Earliest year is 1999, where
-facility-level NEM data begins.
+A year is the unit everything is keyed on — one payload per year, at every
+layer. Earliest year is 1999, where facility-level NEM data begins.
+
+The **fleet mode** (`full` = every unit that ever operated, `current` =
+operating units only) is *not* part of that key. It used to be, and every year
+was fetched, cached and warmed twice. It no longer is: the server sends one
+roster with a per-unit `status`, and the browser derives the `current` view by
+filtering (`src/shared/fleet-filter.ts`). So switching the toggle costs no
+request, and there is nothing mode-specific to warm or purge. `/api/stats` is
+the exception — its two modes are genuinely different aggregates, not two views
+of one result — but both are computed from the same per-year payloads.
 
 ---
 
@@ -95,11 +102,11 @@ host/port**: the client fetches `/api/capacity-factors` same-origin, and that
 route calls OE prod directly through `CapFacDataService`. So:
 
 - **Dev and prod share the same upstream data.** An anomaly you see in dev will
-  also be in prod — confirm with `curl "https://stripes.energy/api/capacity-factors?year=2010&fleet=full"`.
+  also be in prod — confirm with `curl "https://stripes.energy/api/capacity-factors?year=2010"`.
 - **The only dev↔prod difference is the cache.** Dev has layers 1, 3 and 4 but no
   layer 2 (there is no CDN in front of `localhost`), and its Data Cache is on
   disk in `.next/cache` rather than Vercel's. A fresh dev instance therefore pays
-  a cold fetch on the first request for each (year, fleet), then serves it from
+  a cold fetch on the first request for each year, then serves it from
   disk.
 - **To force a re-fetch in dev** (e.g. after changing server-side data shaping),
   `rm -rf .next/cache` and restart, or the stale cached body will keep coming
@@ -148,13 +155,20 @@ client:
 game.
 
 The edge is purgeable: both data routes emit a `Vercel-Cache-Tag` header
-(`capacity-factors,cf-<tier>,cf-<mode>,cf-year-<year>` and
-`coal-stats,stats-<mode>`) that the purge endpoint invalidates by tag.
+(`capacity-factors,cf-<tier>,cf-year-<year>` and `coal-stats,stats-<mode>`)
+that the purge endpoint invalidates by tag. Only the stats tag still carries a
+fleet mode; capacity factors are one entry per year.
+
+Every internal caller builds its URL with `capacityFactorsPath`
+(`src/shared/capacity-factors-url.ts`), including the `&v=<build id>` the
+browser sends. The CDN keys on the whole query string, so a caller that omits it
+is warming, probing or reading a *different* edge entry from the one visitors
+use — which is exactly what the warmer and the diagnostics probe used to do.
 
 ### Layer 3 — the Data Cache
 
 `src/server/cf-cache.ts` owns this: one `unstable_cache` wrapper per
-(freshness tier, fleet mode), with the tier's lifetime as its `revalidate`.
+freshness tier, with the tier's lifetime as its `revalidate`.
 
 It lives in its own module rather than inside the route for a specific reason.
 `unstable_cache` derives its key from the wrapper's key parts plus the call
@@ -179,7 +193,7 @@ per year, through `OEClientQueued` — a queue (`p-queue`) plus retries
 - **Single-flight.** `unstable_cache` does *not* collapse concurrent misses, so
   without help a visitor and the cron sweep landing on the same cold year would
   each fire an identical pair of upstream requests. `cf-cache.ts` keeps a promise
-  per `mode:year` for the life of the fetch, so the second caller joins the
+  per year for the life of the fetch, so the second caller joins the
   first. It lives there, next to the cold-fetch counter, so the two agree: a
   caller that *joins* a fetch paid nothing and is not counted as cold — otherwise
   the `rebuilt` figure below would count wrappers rather than upstream fetches.
@@ -199,8 +213,8 @@ schedule via `src/server/cache-warmer.ts`:
 
 | Cron | Schedule | Warms |
 |------|----------|-------|
-| `warm-all` | every 10 min | every year back to 1999, both fleet modes |
-| `warm-stats` | daily, 15:30 UTC (01:30 AEST) | `/api/stats` for both fleet modes |
+| `warm-all` | every 10 min | every year back to 1999 (one payload each) |
+| `warm-stats` | daily, 15:30 UTC (01:30 AEST) | `/api/stats` for both fleet modes (see below) |
 
 `warm-all` sweeps the whole span every 10 minutes so **no year stays cold longer
 than the cron interval**, whether it went cold from eviction or a fresh deploy.
@@ -215,9 +229,9 @@ respond to different things:**
 2. **Then, for some years, one plain HTTP self-fetch** of the public URL, which
    re-enters the CDN and keeps the Sydney edge entry from ageing out.
 
-   Not every year, every sweep: a payload is ~230 KB, so refreshing all 56
-   (year, mode) entries every 10 minutes would move ~13 MB a sweep — roughly
-   57 GB a month — to keep alive entries that already have a 7-day edge
+   Not every year, every sweep: a payload is ~230 KB, so refreshing all ~28
+   year entries every 10 minutes would move ~6.5 MB a sweep — roughly
+   28 GB a month — to keep alive entries that already have a 7-day edge
    lifetime. With the origin in Sydney an edge miss now costs a visitor one
    local round-trip, not a cold fetch, so that is a poor trade for the archive.
    The sweep therefore refreshes the edge for `current` and `recent` years —
@@ -238,7 +252,7 @@ Sweeps fan out `WARM_CONCURRENCY` (4) years at a time — see the next section f
 why 4 — and each run logs a line like:
 
 ```
-warm-all: 56 entries, 3 rebuilt (2007 full, 2013 full/current), 4210 ms
+warm-all: 28 entries, 3 rebuilt (2007, 2013, 2019), 4210 ms
 ```
 
 `rebuilt` is the number that matters. It is the **only** visibility we have into
@@ -246,8 +260,10 @@ how often the Data Cache really evicts entries. Steady state should be 0; a
 persistent trickle means eviction is outpacing the sweep, and the answer would be
 a durable store (Vercel Blob or KV) behind layer 3 rather than a faster sweep.
 
-A **fully cold** sweep — every year, both modes, all from OpenElectricity — is
-the slow case, measured at ~220 s locally over a mobile link. That is close
+A **fully cold** sweep — every year, all from OpenElectricity — is the slow
+case, measured at ~220 s locally over a mobile link back when the sweep covered
+twice as many entries (two rosters per year); it has roughly twice that headroom
+now. That is close
 enough to the 300 s `maxDuration` to matter, so the sweep carries a 240 s
 deadline: past that it stops starting new years and reports them as `skipped`
 rather than being killed mid-flight. It self-heals, because the years it did warm
@@ -339,7 +355,7 @@ the **`x-cf-built-at`** response header, so the age can be read without parsing
 the body:
 
 ```bash
-curl -sI "https://stripes.energy/api/capacity-factors?year=2011&fleet=full" \
+curl -sI "https://stripes.energy/api/capacity-factors?year=2011" \
   | grep -i 'x-cf-built-at\|x-cf-cold\|x-vercel-cache'
 ```
 
@@ -396,7 +412,7 @@ curl -sX POST -H "Authorization: Bearer $CACHE_SECRET" -H 'Content-Type: applica
 ```
 
 Re-warming is capped at 10 years per call: after a purge every year is cold, and
-warming all ~28 in both fleet modes would blow the 300 s function limit. Years
+warming all ~28 would blow the 300 s function limit. Years
 outside the range refill on the next `warm-all` run (≤ 10 min).
 
 Locally there is no CDN, so the `cdn-edge` step reports *skipped* (gated on
@@ -566,6 +582,6 @@ prevent.
   that served the purge request; other warm instances keep their roster until the
   24 h TTL expires. Unit metadata (capacities, retirements) can therefore lag a
   purge by up to a day.
-- **Purging is not free.** It discards ~28 years × 2 fleet modes, and everything
+- **Purging is not free.** It discards ~28 years, and everything
   outside the re-warm range is cold until `warm-all` catches up. Loading `/stats`
   in that window recomputes from ~28 cold upstream fetches.

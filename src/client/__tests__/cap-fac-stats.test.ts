@@ -51,6 +51,7 @@ const makeDTO = (units: UnitSpec[]): GeneratingUnitCapFacHistoryDTO => ({
     facility_code: unit.facilityCode,
     facility_name: `${unit.facilityCode} Station`,
     fueltech: 'coal_black',
+    status: 'operating' as const,
     history: {
       data: Array(365).fill(unit.capacityFactor),
       start: `${YEAR}-01-01`,
@@ -64,7 +65,10 @@ describe('cap-fac-stats', () => {
   let queryClient: QueryClient;
 
   const seedYear = (year: number, dto: GeneratingUnitCapFacHistoryDTO) => {
-    queryClient.setQueryData(yearQueryOptions(MODE, year).queryKey, createCapFacYear(year, dto));
+    queryClient.setQueryData(
+      yearQueryOptions(queryClient, MODE, year).queryKey,
+      createCapFacYear(year, dto),
+    );
   };
 
   beforeEach(() => {

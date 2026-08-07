@@ -28,7 +28,7 @@ describe('CapFacDataService - Facility Filtering', () => {
 
   test('should only return facilities with coal units', async () => {
     // Access the private method through reflection for testing
-    const coalFacilities = await (service as any).getAllCoalFacilities('current');
+    const coalFacilities = await (service as any).getAllCoalFacilities();
     
     console.log(`Facility filter test: Found ${coalFacilities.length} coal facilities`);
     
@@ -43,7 +43,7 @@ describe('CapFacDataService - Facility Filtering', () => {
   });
 
   test('should analyse facility data', async () => {
-    const coalFacilities = await (service as any).getAllCoalFacilities('current');
+    const coalFacilities = await (service as any).getAllCoalFacilities();
     
     // Group by region
     const regionGroups: Record<string, any[]> = {};
