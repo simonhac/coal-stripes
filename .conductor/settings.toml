@@ -1,13 +1,13 @@
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 
 [scripts]
-# `npm install` bootstraps deps (incl. @simon/workspace-env) before the wrapper
-# imports it; then the identical wrapper runs env/workspace.config.yaml's phases.
-setup = "npm install && npx tsx env/setup.mts"
+# `npm install` bootstraps deps (incl. @simon/workspace-env) before the wrapper imports it.
+# `npx --yes tsx` avoids the install-prompt deadlock in a fresh worktree (LiveOne#355).
+setup = "npm install && npx --yes tsx env/setup.mts"
 run_mode = "concurrent"
 
 [scripts.run.dev]
-command = "npx tsx env/run.mts"
+command = "npx --yes tsx env/run.mts"
 default = true
 icon = "play"
 
