@@ -10,6 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DiagnosticsRouteImport } from './routes/diagnostics'
+import { Route as StatsRouteImport } from './routes/stats'
 import { Route as ApiCapacityFactorsRouteImport } from './routes/api.capacity-factors'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiStatsRouteImport } from './routes/api.stats'
@@ -18,6 +20,16 @@ import { Route as ApiAdminPurgeRouteImport } from './routes/api.admin.purge'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DiagnosticsRoute = DiagnosticsRouteImport.update({
+  id: '/diagnostics',
+  path: '/diagnostics',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StatsRoute = StatsRouteImport.update({
+  id: '/stats',
+  path: '/stats',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiCapacityFactorsRoute = ApiCapacityFactorsRouteImport.update({
@@ -43,6 +55,8 @@ const ApiAdminPurgeRoute = ApiAdminPurgeRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/diagnostics': typeof DiagnosticsRoute
+  '/stats': typeof StatsRoute
   '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
   '/api/stats': typeof ApiStatsRoute
@@ -50,6 +64,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/diagnostics': typeof DiagnosticsRoute
+  '/stats': typeof StatsRoute
   '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
   '/api/stats': typeof ApiStatsRoute
@@ -58,6 +74,8 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/diagnostics': typeof DiagnosticsRoute
+  '/stats': typeof StatsRoute
   '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
   '/api/stats': typeof ApiStatsRoute
@@ -67,6 +85,8 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/diagnostics'
+    | '/stats'
     | '/api/capacity-factors'
     | '/api/health'
     | '/api/stats'
@@ -74,6 +94,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/diagnostics'
+    | '/stats'
     | '/api/capacity-factors'
     | '/api/health'
     | '/api/stats'
@@ -81,6 +103,8 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/diagnostics'
+    | '/stats'
     | '/api/capacity-factors'
     | '/api/health'
     | '/api/stats'
@@ -89,6 +113,8 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DiagnosticsRoute: typeof DiagnosticsRoute
+  StatsRoute: typeof StatsRoute
   ApiCapacityFactorsRoute: typeof ApiCapacityFactorsRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiStatsRoute: typeof ApiStatsRoute
@@ -102,6 +128,20 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/diagnostics': {
+      id: '/diagnostics'
+      path: '/diagnostics'
+      fullPath: '/diagnostics'
+      preLoaderRoute: typeof DiagnosticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stats': {
+      id: '/stats'
+      path: '/stats'
+      fullPath: '/stats'
+      preLoaderRoute: typeof StatsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/capacity-factors': {
@@ -137,6 +177,8 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DiagnosticsRoute: DiagnosticsRoute,
+  StatsRoute: StatsRoute,
   ApiCapacityFactorsRoute: ApiCapacityFactorsRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiStatsRoute: ApiStatsRoute,

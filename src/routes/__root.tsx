@@ -6,9 +6,9 @@ import {
   createRootRoute,
 } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
-import { Providers } from '@/app/providers';
-import globalsCss from '@/app/globals.css?url';
-import opennemCss from '@/app/opennem.css?url';
+import { Providers } from '@/client/providers';
+import globalsCss from '@/styles/globals.css?url';
+import opennemCss from '@/styles/opennem.css?url';
 
 const TITLE = 'Coal Availability';
 const DESCRIPTION = 'Australian coal power plant capacity factor visualisation';

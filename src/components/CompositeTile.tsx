@@ -1,5 +1,3 @@
-'use client';
-
 /**
  * One facility's stripe row: a canvas showing the trailing 365-day window of
  * daily capacity factors, one pixel column per day.

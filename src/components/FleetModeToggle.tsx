@@ -1,5 +1,3 @@
-'use client';
-
 import type { FleetMode } from '@/shared/types';
 
 interface FleetModeToggleProps {

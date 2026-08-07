@@ -1,13 +1,11 @@
-'use client';
-
 import { useState } from 'react';
+import { createFileRoute } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { OpenElectricityHeader } from '@/components/OpenElectricityHeader';
 import { statsQueryOptions } from '@/client/stats-queries';
 import { formatEnergy, formatPercent, type Granularity } from '@/shared/energy-format';
 import { formatAgeFromAEST } from '@/shared/date-utils';
 import type { CoalGenerationStatsDTO, GranularityStat, StatRow, StatValue } from '@/shared/types';
-import '../opennem.css';
 
 const GAP_PREVIEW_LIMIT = 20;
 
@@ -287,7 +285,9 @@ function DataRecency({ data }: { data: CoalGenerationStatsDTO }) {
   );
 }
 
-export default function StatsPage() {
+export const Route = createFileRoute('/stats')({ component: StatsPage });
+
+function StatsPage() {
   const { data, isLoading, isError, error } = useQuery(statsQueryOptions('full'));
 
   return (

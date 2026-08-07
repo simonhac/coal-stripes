@@ -1,5 +1,3 @@
-'use client';
-
 import React, { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';

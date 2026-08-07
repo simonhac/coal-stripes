@@ -4,6 +4,12 @@
   // Wraps @tanstack/react-start/server-entry to add the `scheduled` handler.
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-01",
+  // Deliberately NOT setting no_handle_cross_request_promise_resolution.
+  // Cloudflare suggests it when promise continuations cross request contexts,
+  // which the OpenElectricity queue used to do — but it suppresses the warning
+  // without fixing the cause, and the underlying deadlock (timers stop advancing
+  // once their creating request ends) survives it. The queue is scoped per
+  // request instead; see src/server/queued-oeclient.ts.
   "compatibility_flags": ["nodejs_compat"],
 
   // Workers Cache replaces the whole Vercel stack: the Sydney CDN edge, the

@@ -1,6 +1,4 @@
-'use client';
-
-import Link from 'next/link';
+import { Link } from '@tanstack/react-router';
 import type { FleetMode } from '@/shared/types';
 import { FleetModeToggle } from './FleetModeToggle';
 
@@ -22,7 +20,7 @@ export function OpenElectricityHeader({ onOpenHelp, fleetMode, onFleetModeChange
           {/* Wordmark — this is an independent project, not an official Open
               Electricity site, so we use our own "Coal ⚡ Stripes" wordmark while
               keeping the bolt motif from the OE mark (an associated project). */}
-          <Link href="/" className="opennem-brand" aria-label="Coal Stripes — home">
+          <Link to="/" className="opennem-brand" aria-label="Coal Stripes — home">
             <span className="opennem-wordmark">Coal</span>
             <svg
               className="opennem-wordmark-bolt"

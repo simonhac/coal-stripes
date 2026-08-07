@@ -27,6 +27,41 @@ type IFacilityParams = NonNullable<Parameters<OpenElectricityClient['getFaciliti
 const QUEUE_OPTIONS = { concurrency: 10, interval: 100, intervalCap: 1 } as const;
 
 /**
+ * The queue is scoped to one fan-out, NOT to the isolate.
+ *
+ * On Vercel this was a single module-level PQueue, one rate limiter shared by
+ * every request the instance served. That cannot work on workerd, for two
+ * compounding reasons:
+ *
+ *   1. Timers only advance while the request that created them is alive. The
+ *      `interval`/`intervalCap` pacing is driven by `setTimeout`, so a queue
+ *      created during request A simply stops ticking once A finishes — and the
+ *      next request waits on it forever. Observed directly: "your Worker's code
+ *      had hung and would never generate a response".
+ *   2. workerd cancels promise continuations that resolve in a different
+ *      request context than the one that created them, which takes out the
+ *      queue's internal concurrency gating the same way.
+ *
+ * Neither is caught by testing p-queue inside a single request, which is why
+ * the spike passed and this only appeared under real page load.
+ *
+ * So: one queue per `withRequestQueue` scope, created inside the request that
+ * uses it. Pacing is preserved where it matters — across the several OE calls a
+ * single year's build fans out into. What is lost is pacing *between*
+ * concurrent requests; that is now bounded instead by Workers Cache collapsing
+ * duplicate misses and by the warmer's own concurrency limit.
+ */
+const queueStore = new AsyncLocalStorage<PQueue>();
+
+/**
+ * Run `fn` with a fresh queue shared by every OpenElectricity request it makes.
+ * Wrap each unit of work that fans out — see CapFacDataService.
+ */
+export function withRequestQueue<T>(fn: () => Promise<T>): Promise<T> {
+  return queueStore.run(new PQueue(QUEUE_OPTIONS), fn);
+}
+
+/**
  * Queue priority, carried on the async context rather than threaded through
  * every call site.
  *
@@ -86,9 +121,19 @@ function attachRequestDetails(error: unknown, details: OERequestDetails): void {
  */
 export class OEClientQueued {
   private client: OpenElectricityClient;
-  // One queue shared by both endpoints, so their requests are rate-limited
-  // together.
-  private queue = new PQueue(QUEUE_OPTIONS);
+
+  /**
+   * The queue for the current fan-out. One queue shared by both endpoints, so
+   * their requests are rate-limited together — but scoped to the request rather
+   * than the isolate (see queueStore above).
+   *
+   * Outside a `withRequestQueue` scope each call gets its own queue: correct,
+   * just unpaced relative to its siblings. That path is only taken by callers
+   * that make a single OE request anyway.
+   */
+  private get queue(): PQueue {
+    return queueStore.getStore() ?? new PQueue(QUEUE_OPTIONS);
+  }
 
   constructor(apiKey: string) {
     this.client = new OpenElectricityClient({ apiKey });
@@ -214,9 +259,12 @@ export class OEClientQueued {
   }
 
   /**
-   * Drop any queued (not yet started) requests.
+   * Drop any queued (not yet started) requests in the current scope.
+   *
+   * A no-op outside a `withRequestQueue` scope: there is no isolate-wide queue
+   * left to drain, and each unscoped call owns a queue nobody else can see.
    */
   clearQueue() {
-    this.queue.clear();
+    queueStore.getStore()?.clear();
   }
 }
