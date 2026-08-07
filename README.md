@@ -15,7 +15,8 @@ Each horizontal stripe is one coal generating unit; each pixel column is one day
 This is the part the repo exists to demonstrate. The server (never the browser) talks to OpenElectricity via the official [`openelectricity`](https://www.npmjs.com/package/openelectricity) npm package, using two endpoints:
 
 1. **Facilities** — fetch all operating coal units:
-   `getFacilities({ status_id: ['operating'], fueltech_id: ['coal_black', 'coal_brown'] })`
+   `getFacilities({ status_id: ['operating', 'retired'], fueltech_id: ['coal_black', 'coal_brown'] })`
+   (retired units are included so the historical fleet is complete; the client filters them out for the "current fleet" view)
 2. **Facility time series** — fetch daily energy per unit, one calendar year per request:
    `getFacilityData(network, facilityCodes, ['energy'], { interval: '1d', dateStart, dateEnd })`
 
@@ -61,7 +62,7 @@ Suggested reading order:
    npm run dev
    ```
 
-5. Open [http://localhost:3000](http://localhost:3000)
+5. Open [http://localhost:3010](http://localhost:3010) (Vite picks up `PORT` if set)
 
 ## Architecture
 
@@ -69,11 +70,15 @@ There is a strict separation of concerns: the server holds the API key and talks
 
 ```
 src/
-├── app/                  # Next.js App Router
-│   ├── page.tsx          # Main visualisation page
-│   └── api/
-│       ├── capacity-factors/  # The one data route the client uses
-│       └── cron/              # Vercel Cron cache-warming endpoints
+├── routes/               # TanStack Start file routes (pages + server routes)
+│   ├── index.tsx         # Main visualisation page
+│   ├── stats.tsx         # Whole-of-history records
+│   ├── diagnostics.tsx   # Cache + render diagnostics
+│   ├── api.capacity-factors.ts  # The one data route the client uses
+│   ├── api.stats.ts
+│   └── api.admin.purge.ts
+├── worker.ts             # Worker entry: Start's fetch handler + the cron
+│                         #   `scheduled` handler
 ├── server/               # Server-only: OpenElectricity client, data service,
 │                         #   cache warming, request logging
 ├── client/               # Client-only: year data vendor, pre-rendered
@@ -86,11 +91,11 @@ src/
 
 Data flows through three layers of caching so users (almost) never wait on OpenElectricity — see **[Caching & tile-render diagnostics](docs/caching-and-diagnostics.md)** for the full picture, including how to confirm the caches are warm:
 
-1. **Server**: each calendar year is cached via Next's data cache (`unstable_cache`) on a freshness tier — the current year revalidates hourly, recent years daily, the deep archive weekly (NEM data is revisable, so no year is treated as immutable) — plus CDN `Cache-Control` headers with stale-while-revalidate.
-2. **Cron warming**: Vercel Cron (see `vercel.json`) re-warms the current year (hourly), recent years (daily), and the archive (weekly) via `src/server/cache-warmer.ts`, so an evicted entry is refilled before a user hits it.
+1. **Server**: Cloudflare **Workers Cache** sits in front of the Worker, configured entirely by the `Cache-Control` and `Cache-Tag` headers each route sets (`src/server/cache-headers.ts`). Years are cached on a freshness tier — current hourly, recent daily, deep archive weekly (NEM data is revisable, so no year is treated as immutable). Concurrent misses for the same year are collapsed into one origin call.
+2. **Cron warming**: a `scheduled` handler sweeps every year plus both stats modes every 10 minutes (`src/server/cache-warmer.ts`), reaching the cache by looping back into the Worker's own fetch entrypoint. This is **not** optional: Workers Cache does not honour `stale-while-revalidate`, so a lapsed entry blocks the next visitor for a full OpenElectricity fetch.
 3. **Client**: each year is cached with [TanStack Query](https://tanstack.com/query) (`src/client/year-queries.ts`) — the cached value is the fully pre-rendered set of canvas tiles — with adjacent years prefetched in the background.
 
-Cache health can be inspected at any time from the **`/diagnostics`** page or `GET /api/diagnostics/tiles` — see the [caching doc](docs/caching-and-diagnostics.md).
+Cache health can be inspected at any time from the **`/diagnostics`** page, which probes each year and reports Cloudflare's own `cf-cache-status` — see the [caching doc](docs/caching-and-diagnostics.md).
 
 Dates use `@internationalized/date` (not the built-in `Date`) throughout, with helpers in `src/shared/date-utils.ts` handling the NEM (AEST) and WEM (AWST) network timezones.
 
@@ -106,24 +111,39 @@ Dates use `@internationalized/date` (not the built-in `Date`) throughout, with h
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `OPENELECTRICITY_API_KEY` | Your OpenElectricity API key | Yes |
-| `CRON_SECRET` | Shared secret authorising the `/api/cron/warm-*` endpoints; Vercel Cron sends it automatically once set in the project's env vars | For deployed cron |
 | `CACHE_SECRET` | Shared secret authorising `POST /api/admin/purge` and the purge button on `/diagnostics`. Deliberately separate from `CRON_SECRET` — it gets typed by hand, so it must not double as the cron token | For the purge button |
-| `ENABLE_FILE_LOGGING` | Write request logs to `logs/` (default: on in development, off in production; keep off on serverless) | No |
+| `ENABLE_FILE_LOGGING` | Historical name; now just toggles structured request logging to the console. Set `false` to silence | No |
 | `DEBUG_OE` | Set to `1` for verbose server logging of fetches and cache hits | No |
 
 ## Testing
 
 ```bash
-npm test                  # unit tests (offline, fast)
+npm test                  # unit + workerd tests (offline, fast)
+npm run test:workers      # just the workerd suite, run inside the real runtime
 npm run test:integration  # hits the real OpenElectricity API — requires
                           #   OPENELECTRICITY_API_KEY in .env.local
 npm run test:e2e          # Playwright browser tests of the gesture navigation
                           #   (starts the dev server; also needs the API key)
 ```
 
+Tests run under [Vitest](https://vitest.dev). Most run in Node, but the `workers`
+project runs inside **workerd** via `@cloudflare/vitest-pool-workers` — that is
+where runtime-specific behaviour (timers, per-request promise contexts) is
+pinned, and Node cannot substitute for it.
+
 ## Deployment
 
-The app deploys to Vercel as-is (`vercel.json` configures the cron schedules and function timeouts). Set `OPENELECTRICITY_API_KEY`, `CRON_SECRET` and `CACHE_SECRET` in the project's environment variables, and leave `ENABLE_FILE_LOGGING` unset or `false`. A newly added variable only reaches the running app on the next deploy.
+The app deploys to **Cloudflare Workers**:
+
+```bash
+npm run deploy            # vite build && wrangler deploy
+```
+
+`wrangler.jsonc` configures Workers Cache, the 10-minute warming cron and the
+raised CPU limit. `OPENELECTRICITY_API_KEY` and `CACHE_SECRET` are Worker
+secrets (`wrangler secret put …`), not environment variables. Workers Paid is
+required: the free plan caps CPU at 10 ms and subrequests at 50, and `/api/stats`
+needs more of both.
 
 ## Contributing
 

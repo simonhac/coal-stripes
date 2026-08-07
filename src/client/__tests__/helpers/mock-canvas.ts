@@ -1,3 +1,4 @@
+import { vi } from 'vitest';
 // Shared mock canvas implementation for tests
 export class MockCanvas {
   width: number = 0;
@@ -16,14 +17,14 @@ export class MockCanvas {
       font: '',
       textAlign: '',
       textBaseline: '',
-      fillRect: jest.fn(),
-      strokeRect: jest.fn(),
-      fillText: jest.fn(),
-      beginPath: jest.fn(),
-      moveTo: jest.fn(),
-      lineTo: jest.fn(),
-      stroke: jest.fn(),
-      createImageData: jest.fn((width: number, height: number) => {
+      fillRect: vi.fn(),
+      strokeRect: vi.fn(),
+      fillText: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      createImageData: vi.fn((width: number, height: number) => {
         // Create a properly aligned buffer
         const byteLength = width * height * 4;
         const buffer = new ArrayBuffer(byteLength);
@@ -35,7 +36,7 @@ export class MockCanvas {
           height
         };
       }),
-      putImageData: jest.fn()
+      putImageData: vi.fn()
     };
   }
 }

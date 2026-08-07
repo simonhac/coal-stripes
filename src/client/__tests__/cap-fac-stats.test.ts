@@ -1,3 +1,5 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MockedFunction } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
@@ -16,12 +18,12 @@ import {
 global.OffscreenCanvas = MockCanvas as unknown as typeof OffscreenCanvas;
 
 // Mock the date utilities so "today" (and hence the valid year range) is fixed
-jest.mock('@/shared/date-utils', () => ({
-  ...jest.requireActual('@/shared/date-utils'),
-  getTodayAEST: jest.fn()
+vi.mock('@/shared/date-utils', async () => ({
+  ...(await vi.importActual<typeof import('@/shared/date-utils')>('@/shared/date-utils')),
+  getTodayAEST: vi.fn()
 }));
 
-const mockGetTodayAEST = dateUtils.getTodayAEST as jest.MockedFunction<typeof dateUtils.getTodayAEST>;
+const mockGetTodayAEST = dateUtils.getTodayAEST as MockedFunction<typeof dateUtils.getTodayAEST>;
 
 // 2023: a non-leap year, so every unit history is 365 days.
 const YEAR = 2023;
@@ -72,7 +74,7 @@ describe('cap-fac-stats', () => {
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockGetTodayAEST.mockReturnValue(new CalendarDate(2024, 7, 15));
     queryClient = new QueryClient();
   });

@@ -1,3 +1,5 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MockedFunction } from 'vitest';
 import { CalendarDate } from '@internationalized/date';
 import { QueryClient } from '@tanstack/react-query';
 import * as dateUtils from '@/shared/date-utils';
@@ -11,16 +13,16 @@ import {
 import { CF_DTO_VERSION, YEAR_CACHE_TIERS } from '@/shared/config';
 
 // Mock the date utilities so "today" is deterministic
-jest.mock('@/shared/date-utils', () => ({
-  ...jest.requireActual('@/shared/date-utils'),
-  getTodayAEST: jest.fn()
+vi.mock('@/shared/date-utils', async () => ({
+  ...(await vi.importActual<typeof import('@/shared/date-utils')>('@/shared/date-utils')),
+  getTodayAEST: vi.fn()
 }));
 
-const mockGetTodayAEST = dateUtils.getTodayAEST as jest.MockedFunction<typeof dateUtils.getTodayAEST>;
+const mockGetTodayAEST = dateUtils.getTodayAEST as MockedFunction<typeof dateUtils.getTodayAEST>;
 
 describe('year-queries', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockGetTodayAEST.mockReturnValue(new CalendarDate(2024, 7, 15));
   });
 
@@ -148,7 +150,7 @@ describe('year-queries', () => {
     it('fetches once for both fleet views of a year', async () => {
       // The point of the two-layer split: switching the fleet toggle must not
       // hit the network. Both views resolve through one shared payload query.
-      const fetchMock = jest.fn().mockResolvedValue(payloadResponse());
+      const fetchMock = vi.fn().mockResolvedValue(payloadResponse());
       global.fetch = fetchMock as unknown as typeof fetch;
 
       await queryClient.fetchQuery(yearQueryOptions(queryClient, 'full', 2023));
@@ -171,7 +173,7 @@ describe('year-queries', () => {
       // Panning fast across cold years: the payload lands long after the tile
       // that asked for it has gone. Painting ~33 canvases per abandoned year,
       // and caching them for gcTime, is pure waste.
-      const fetchMock = jest.fn().mockResolvedValue(payloadResponse());
+      const fetchMock = vi.fn().mockResolvedValue(payloadResponse());
       global.fetch = fetchMock as unknown as typeof fetch;
 
       const controller = new AbortController();
@@ -197,7 +199,7 @@ describe('year-queries', () => {
       // old (ensureQueryData does exactly that). Revalidation would then be
       // dead: the view would keep re-rendering the same stale data. NEM figures
       // are revised, so this must genuinely go back to the network.
-      const fetchMock = jest.fn().mockResolvedValue(payloadResponse());
+      const fetchMock = vi.fn().mockResolvedValue(payloadResponse());
       global.fetch = fetchMock as unknown as typeof fetch;
 
       await queryClient.fetchQuery(yearQueryOptions(queryClient, 'full', 2023));

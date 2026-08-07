@@ -14,6 +14,8 @@
  * to global fetch, which is what these tests stub. The aggregation itself is
  * exercised elsewhere.
  */
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import { computeCoalStats } from '@/server/coal-stats-service';
 import { earliestDataYear, currentDataYear } from '@/server/data-years';
 import type { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
@@ -36,8 +38,8 @@ const stampFor = (year: number): string =>
  * Mock the per-year self-fetch. `failYears` return a non-ok response, which
  * fetchYear maps to null.
  */
-function mockFetch(failYears: number[] = []): jest.Mock {
-  const fn = jest.fn(async (url: string) => {
+function mockFetch(failYears: number[] = []): Mock {
+  const fn = vi.fn(async (url: string) => {
     const year = Number.parseInt(new URL(url).searchParams.get('year') ?? '', 10);
     // arrayBuffer: the loopback drains a failed response before discarding it,
     // so the subrequest doesn't stay open.
@@ -64,7 +66,7 @@ describe('computeCoalStats — data provenance', () => {
   const originalFetch = global.fetch;
   afterEach(() => {
     global.fetch = originalFetch;
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('records a builtAt for every year it fetched', async () => {
