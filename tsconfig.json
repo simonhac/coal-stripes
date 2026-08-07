@@ -40,6 +40,17 @@
     "forks",
     "env",
     "e2e",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    ".context",
+    "dist",
+    ".wrangler",
+    // The Worker half is checked by tsconfig.worker.json instead. Its
+    // `worker-configuration.d.ts` replaces the DOM globals (Response.json()
+    // returns unknown, not any), which breaks client code if applied here.
+    "src/routes",
+    "src/router.tsx",
+    "src/routeTree.gen.ts",
+    "worker-configuration.d.ts",
+    "vite.config.ts"
   ]
 }

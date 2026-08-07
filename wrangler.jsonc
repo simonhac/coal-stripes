@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "coal-stripes",
+  "main": "@tanstack/react-start/server-entry",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Workers Cache replaces the whole Vercel stack: the Sydney CDN edge, the
+  // Data Cache, `unstable_cache`, the single-flight map and `&v=BUILD_ID`.
+  // See docs/caching-and-diagnostics.md.
+  //
+  // cross_version_cache: the cache key includes the Worker version by default,
+  // so every deploy would start cold. This app deploys often for client/CSS
+  // changes while the year JSON almost never changes shape, so sharing entries
+  // across versions is the right trade. Invalidation is by Cache-Tag instead
+  // (see CF_DTO_VERSION in src/shared/config.ts).
+  "cache": {
+    "enabled": true,
+    "cross_version_cache": true
+  },
+
+  // /api/stats folds 28 years of daily series into whole-of-history stats.
+  // The default 30s of CPU is not enough; Paid allows up to 5 minutes.
+  "limits": { "cpu_ms": 300000 },
+
+  "observability": { "enabled": true }
+}

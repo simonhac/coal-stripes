@@ -1,4 +1,4 @@
-const baseConfig = require('./jest.config.js');
+const baseConfig = require('./jest.config.cjs');
 
 module.exports = {
   ...baseConfig,
@@ -6,7 +6,7 @@ module.exports = {
   testPathIgnorePatterns: [
     '/node_modules/',
     // Integration tests hit the live server / real API — they run via
-    // jest.config.integration.js, not in the fast parallel unit suite.
+    // jest.config.integration.cjs, not in the fast parallel unit suite.
     '\\.integration\\.test\\.ts$',
     '/helpers/'
   ],

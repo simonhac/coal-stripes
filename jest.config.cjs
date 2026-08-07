@@ -1,5 +1,5 @@
-// Shared Jest base config. Not run directly — extended by jest.config.unit.js
-// (npm test) and jest.config.integration.js (npm run test:integration).
+// Shared Jest base config. Not run directly — extended by jest.config.unit.cjs
+// (npm test) and jest.config.integration.cjs (npm run test:integration).
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
@@ -15,7 +15,7 @@ module.exports = {
   ],
   moduleFileExtensions: ['ts', 'js', 'json'],
   testTimeout: 60000, // 60 seconds for API calls
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.cjs'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1'
   }

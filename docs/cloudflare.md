@@ -1,8 +1,20 @@
 # Moving coal-stripes to TanStack Start on Cloudflare Workers
 
-> **Status: proposal / handoff.** Nothing here has been implemented. This document is
-> written to be read cold — a fresh agent or a future you should be able to execute from it
-> without the conversation that produced it.
+> **Status: in progress.** The spike (§6) has been run against a live Worker and the
+> scaffold has landed. **Three claims below were disproved by measurement — read this
+> box before acting on §2, §3 or §6.**
+>
+> | Claim in this doc | Measured, 2026-08-07 |
+> |---|---|
+> | §3: a Worker cannot warm its own cache; a warmer must run from outside | **Wrong.** `ctx.exports.default.fetch()` populates the *same* key public requests read (warmed → HIT 304 ms; control → MISS 892 ms), **including from a cron `scheduled` handler**. |
+> | §3: `stale-while-revalidate` means only the first-ever request is slow, so start with no warmer | **Wrong, and it inverts the conclusion.** swr is **not honoured** — every expiry returns `EXPIRED` and blocks for the full origin time. Tested on three header shapes, on both Free and Paid. **A warmer is mandatory.** |
+> | §6 spike 1: `openelectricity` resolves the browser ESM build via `import`/`default` | **Right, but for the wrong reason** — `"node"` precedes `"import"` in its exports map. Wrangler resolves `dist/browser/index.js` anyway. Neither build imports a Node builtin, so this was never a go/no-go. |
+>
+> Also measured: `p-queue` interval pacing is exact on workerd (the one real blocker —
+> cleared); `AsyncLocalStorage` passes; Workers Cache does MISS→HIT, keys on the query
+> string, purges by tag, and `cross_version_cache` survives a redeploy. A response with
+> **no** `Cache-Control` is cached anyway, so every must-not-cache route needs explicit
+> `no-store`. Full evidence and a reproduction script: `.context/spike/RESULTS.md`.
 
 ## Why this exists
 
