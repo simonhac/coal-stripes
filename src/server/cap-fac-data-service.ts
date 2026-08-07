@@ -68,11 +68,13 @@ const isNoData = (err: unknown): boolean => err instanceof NoDataFound;
  *      null-vs-zero distinction: 0 = the unit generated nothing, null = no
  *      data (future dates, or gaps in the collection infrastructure).
  *
- * Year results are NOT cached here — the route's unstable_cache (Vercel Data
- * Cache) owns that, with revision-aware freshness tiers (see yearCachePolicy
- * in @/shared/config). An in-process copy would silently defeat revalidation
- * on a warm instance. Only the facilities list is memoised, with a TTL so new
- * or retired units appear within a day.
+ * Year results are NOT cached or deduplicated here — @/server/cf-cache owns
+ * both, with revision-aware freshness tiers (see yearCachePolicy in
+ * @/shared/config). An in-process copy would silently defeat revalidation on a
+ * warm instance. Every call to getCapacityFactors below is therefore a real
+ * upstream fan-out, which is what lets cf-cache count cold fetches honestly.
+ * Only the facilities list is memoised, with a TTL so new or retired units
+ * appear within a day.
  */
 const FACILITIES_TTL_MS = 24 * 60 * 60 * 1000;
 

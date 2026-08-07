@@ -20,6 +20,18 @@
   change). Because dev and prod share the same upstream, a data anomaly seen in
   dev will match prod (see `curl https://stripes.energy/api/capacity-factors?...`).
 
+- **Caching, in one breath:** four layers stand between a reader and
+  OpenElectricity — (1) their browser, 60 s; (2) the **Sydney CDN edge**, the
+  fast one, which answers without our server running; (3) the **Data Cache** at
+  the origin (also Sydney — `vercel.json` pins functions to `syd1`); (4)
+  **OpenElectricity itself, ~3–9 s, which no reader should ever reach.** The
+  `warm-all` cron sweeps every year every 10 minutes and warms layers 2 and 3 by
+  *different* means: an in-process call for the Data Cache, then a plain HTTP
+  self-fetch for the edge. Warming by self-fetch alone silently fails — if the
+  edge already has a copy the CDN answers and the origin never runs, so the Data
+  Cache goes untouched and gets evicted. Full explanation:
+  `docs/caching-and-diagnostics.md`.
+
 - When a generating unit is inoperable (due to maintenance or outages) its capacity factor will be zero, not null/undefined.
 - When a capacity factor is unknown — either because the associated date is in the future or, for dates in the past, the data collection infrastructure is faulty — this is always represented as null.
 - Never interpret null as zero or vice versa. Null means "no data"; zero is a zero quantity. These are distinct concepts and must never be swapped.

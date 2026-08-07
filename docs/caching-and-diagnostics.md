@@ -1,26 +1,84 @@
 # Caching & tile-render diagnostics
 
-This app should (almost) never make a user wait on OpenElectricity. Upstream
-fetches are slow — rate-limited, retried, and fanned out across the NEM and WEM
-networks — so a genuinely cold request can take several seconds. Several layers
-of caching keep that cost off the critical path, and a small diagnostic surface
-lets you confirm they are doing their job.
+The whole point of this document: **nobody looking at the site should ever wait
+on OpenElectricity.** Asking them for a year of coal data takes several seconds.
+Everything below exists so that a person never pays that, and so that we can
+check, at any moment, whether it is working.
 
+- [What happens when you load a year](#what-happens-when-you-load-a-year)
+- [Why the server lives in Sydney](#why-the-server-lives-in-sydney)
 - [Where the data comes from (dev and prod)](#where-the-data-comes-from-dev-and-prod)
-- [Caching layers](#caching-layers)
-  - [1. Server — Next.js Data Cache + CDN](#1-server--nextjs-data-cache--cdn)
-  - [2. Cron warming](#2-cron-warming)
-  - [3. Client — TanStack Query](#3-client--tanstack-query)
-  - [4. The stats layer](#4-the-stats-layer)
+- [The layers in detail](#the-layers-in-detail)
+  - [Layer 1 — your browser](#layer-1--your-browser)
+  - [Layer 2 — the Sydney edge cache](#layer-2--the-sydney-edge-cache)
+  - [Layer 3 — the Data Cache](#layer-3--the-data-cache)
+  - [Layer 4 — OpenElectricity](#layer-4--openelectricity)
+- [Keeping it all warm: the cron warmer](#keeping-it-all-warm-the-cron-warmer)
+- [Why we don't just ask OpenElectricity faster](#why-we-dont-just-ask-openelectricity-faster)
+- [The client-side cache (TanStack Query)](#the-client-side-cache-tanstack-query)
+- [The stats layer](#the-stats-layer)
 - [How old is the data?](#how-old-is-the-data)
 - [Purging the caches](#purging-the-caches)
 - [Tile-render diagnostics](#tile-render-diagnostics)
-  - [`GET /api/diagnostics/tiles`](#get-apidiagnosticstiles)
-  - [The `x-cf-cold` marker](#the-x-cf-cold-marker)
-  - [The `/diagnostics` page](#the-diagnostics-page)
-  - [Client tile-timing recorder & the Shift+P overlay](#client-tile-timing-recorder--the-shiftp-overlay)
 - [Confirming caching works on prod](#confirming-caching-works-on-prod)
 - [Known limitations](#known-limitations)
+
+---
+
+## What happens when you load a year
+
+You ask for 2010. **Four** places might already have the answer, and we try them
+in that order. Each one further down costs more.
+
+| # | Where | What it costs | Who fills it |
+|---|-------|---------------|--------------|
+| 1 | **Your own browser** | nothing — it never leaves your laptop | you, a minute ago |
+| 2 | **The Sydney edge cache** — a copy sitting in Vercel's Sydney data centre | one hop to Sydney; our server never even runs | the cron warmer, or the previous visitor |
+| 3 | **The Data Cache** — our own server's store, also in Sydney | ~20–130 ms of server work | the cron warmer |
+| 4 | **OpenElectricity** — the real source | **~3–9 seconds** | nobody; this is the bill |
+
+Layer 4 is slow because it is genuinely a lot of work: we ask for a whole year
+of daily generation for every coal unit, twice (once for the eastern grid, once
+for WA), through a queue that paces our requests. **A robot asks for every year
+every 10 minutes precisely so that a person never has to.**
+
+Two things follow, and they explain most of this document:
+
+- **Layer 2 is the one that matters to a visitor**, because it answers without
+  our server running at all. But an edge cache is per-region: a copy in Sydney
+  does nothing for a reader in London, and vice versa.
+- **Layer 3 is the one that matters to us**, because it is what stops a layer-2
+  miss from becoming a layer-4 bill. It is best-effort storage — Vercel can and
+  does evict entries early — so it needs actively keeping alive.
+
+A year is the unit everything is keyed on, together with the **fleet mode**
+(`full` = every unit that ever operated, `current` = operating units only). The
+two modes are cached entirely separately. Earliest year is 1999, where
+facility-level NEM data begins.
+
+---
+
+## Why the server lives in Sydney
+
+`vercel.json` pins the functions with `"regions": ["syd1"]`. Without it Vercel
+puts them in `iad1` — Washington DC — and three things go wrong at once for an
+Australian audience:
+
+1. Every request that misses the edge crosses the Pacific twice.
+2. The Data Cache lives wherever the functions live, so it is in Washington too.
+3. **The cron warmer's own request re-enters the CDN wherever it is sent from.**
+   Running in Washington, it lovingly refreshed a Washington edge cache that no
+   Australian visitor ever touches, while the Sydney edge — the only one that
+   gives layer 2's speed — was left to be filled by real visitors and to empty
+   out again whenever traffic was thin.
+
+Point 3 is the one that bites. Pinning to `syd1` means the every-10-minute sweep
+keeps hot the exact cache our readers hit.
+
+Measured from Sydney with the server still in Washington, an edge hit came back
+about three times faster than an origin round-trip, and a cold OpenElectricity
+fetch was roughly fifteen times slower again. (Those absolute figures were taken
+over a high-latency link, so read the ratios, not the seconds.)
 
 ---
 
@@ -38,113 +96,226 @@ route calls OE prod directly through `CapFacDataService`. So:
 
 - **Dev and prod share the same upstream data.** An anomaly you see in dev will
   also be in prod — confirm with `curl "https://stripes.energy/api/capacity-factors?year=2010&fleet=full"`.
-- **The only dev↔prod difference is the cache.** Dev caches in the local Next
-  Data Cache (`.next/cache`); prod uses the Vercel Data Cache kept warm by the
-  cron warmer. A fresh dev instance therefore pays a cold, rate-limited OE fetch
-  on the first request for each (year, fleet), then serves it from disk.
+- **The only dev↔prod difference is the cache.** Dev has layers 1, 3 and 4 but no
+  layer 2 (there is no CDN in front of `localhost`), and its Data Cache is on
+  disk in `.next/cache` rather than Vercel's. A fresh dev instance therefore pays
+  a cold fetch on the first request for each (year, fleet), then serves it from
+  disk.
 - **To force a re-fetch in dev** (e.g. after changing server-side data shaping),
   `rm -rf .next/cache` and restart, or the stale cached body will keep coming
-  back. Note the client's own `fetch()` also respects the response
-  `Cache-Control: max-age=…`, so an already-open browser tab can serve a stale
-  API body for up to a day even after a hard document reload — use a fresh
-  browser context (or clear browser cache) to see server-side data changes.
+  back. Note the browser also respects the response `Cache-Control: max-age=…`,
+  so an already-open tab can serve a stale body even after a hard reload — use a
+  fresh browser context to see server-side data changes.
 
 To inspect OE directly (bypassing our app entirely), a small script using
 `OpenElectricityClient` with the `.env.local` key can call `getFacilities` /
 `getFacilityData` — useful for telling "OE has no data" apart from "our fetch
 dropped it".
 
-## Caching layers
+---
 
-Data is fetched, cached, and rendered one **calendar year per request** — a
-year is the unit everything is keyed on (together with the fleet mode: `full`
-or `current`). The earliest year is 1999 (the start of facility-level NEM data).
+## The layers in detail
 
-### 1. Server — Next.js Data Cache + CDN
+### Layer 1 — your browser
 
-`src/app/api/capacity-factors/route.ts` is the only data route the browser
-calls. It wraps the upstream fetch in Next's Data Cache (`unstable_cache`) and
-also sets CDN `Cache-Control` headers, so a warm year is served either from the
-regional CDN edge or from the origin's Data Cache without touching
-OpenElectricity.
+`Cache-Control: public, max-age=60`, set by the data routes.
 
-NEM data is revisable (January can revise the December just past), so **no year
-is treated as immutable**. Instead each year sits in one of three freshness
-**tiers**, defined once in `src/shared/config.ts` (`yearCachePolicy`) and shared
-by both the server route (`revalidate` + `Cache-Control`) and the client
-(`staleTime`):
+Deliberately short. The browser cache is **the one layer no purge can reach**, so
+a data fix must never be masked by a copy sitting on someone's laptop. Sixty
+seconds costs at most one edge round-trip per year per page load, and TanStack
+Query dedupes within a session anyway (see below).
 
-| Tier | Years (today) | `revalidate` | `stale-while-revalidate` |
-|------|---------------|--------------|--------------------------|
+### Layer 2 — the Sydney edge cache
+
+`Vercel-CDN-Cache-Control: s-maxage=… , stale-while-revalidate=…`, set per
+freshness tier. This header is stripped before it reaches the browser, which is
+why the edge and browser lifetimes can differ so wildly.
+
+NEM data is revisable — January can revise the December just past — so **no year
+is treated as immutable**. Each year sits in one of three tiers, defined once in
+`src/shared/config.ts` (`yearCachePolicy`) and shared by the server route and the
+client:
+
+| Tier | Years (today) | Edge lifetime | Serve-stale window |
+|------|---------------|---------------|--------------------|
 | `current` | the current year | 1 hour | 1 day |
 | `recent` | the last 5 past years | 1 day | 7 days |
 | `archive` | everything older | 7 days | 30 days |
 
-`stale-while-revalidate` means a warmed entry is served **instantly, even when
-stale**, while it refreshes in the background — so users never feel a cold
-fetch as long as an entry exists.
+`stale-while-revalidate` means an edge entry past its lifetime is still served
+**instantly** while it refreshes behind the scenes. So as long as an entry
+*exists*, nobody waits — which is why keeping entries in existence is the whole
+game.
 
-**Browser and edge lifetimes are set separately**, because they are not equally
-controllable:
-
-| Header | Audience | Value |
-|--------|----------|-------|
-| `Cache-Control` | the browser | `public, max-age=60` |
-| `Vercel-CDN-Cache-Control` | the Vercel edge | the tier's `s-maxage` + `stale-while-revalidate` (stripped before it reaches the browser) |
-
-The browser's HTTP cache is the **one layer no purge can reach**, so it is kept
-deliberately short — a data fix must never be masked by a copy sitting in
-someone's browser. The edge keeps the full tier window: it is fast, and it *is*
-purgeable, because both data routes also emit a `Vercel-Cache-Tag` header
+The edge is purgeable: both data routes emit a `Vercel-Cache-Tag` header
 (`capacity-factors,cf-<tier>,cf-<mode>,cf-year-<year>` and
-`coal-stats,stats-<mode>`). Within a session TanStack Query dedupes anyway, so
-the short browser `max-age` costs at most one edge round-trip per year per page
-load.
+`coal-stats,stats-<mode>`) that the purge endpoint invalidates by tag.
 
-### 2. Cron warming
+### Layer 3 — the Data Cache
 
-The Data Cache is per-deployment and can be evicted, so an entry can go missing
-after a deploy (which wipes it) or under memory pressure. Rather than let an
-unlucky user pay the cold fetch, Vercel Cron (`vercel.json`) re-warms every year
-on a frequent schedule via `src/server/cache-warmer.ts` (`warmYears`):
+`src/server/cf-cache.ts` owns this: one `unstable_cache` wrapper per
+(freshness tier, fleet mode), with the tier's lifetime as its `revalidate`.
+
+It lives in its own module rather than inside the route for a specific reason.
+`unstable_cache` derives its key from the wrapper's key parts plus the call
+arguments, so two separately constructed wrappers write two separate entries.
+The HTTP route and the cron warmer must therefore share one set of module-level
+singletons, or the warmer would be filling a cache nobody reads.
+
+`CF_CACHE_VERSION` in that file is a manual kill switch: bumping it changes every
+key at once, so a deploy can discard every tile built by older, buggier code
+rather than serving it stale.
+
+A year crossing a tier boundary (current→recent at New Year, recent→archive at
+N-6) moves to a different wrapper and hence a different key, costing one cache
+miss that the next warmer run absorbs.
+
+### Layer 4 — OpenElectricity
+
+`src/server/cap-fac-data-service.ts` fans out one request per network (NEM, WEM)
+per year, through `OEClientQueued` — a queue (`p-queue`) plus retries
+(`p-retry`). Two guards keep a fan-out from becoming a stampede:
+
+- **Single-flight.** `unstable_cache` does *not* collapse concurrent misses, so
+  without help a visitor and the cron sweep landing on the same cold year would
+  each fire an identical pair of upstream requests. `cf-cache.ts` keeps a promise
+  per `mode:year` for the life of the fetch, so the second caller joins the
+  first. It lives there, next to the cold-fetch counter, so the two agree: a
+  caller that *joins* a fetch paid nothing and is not counted as cold — otherwise
+  the `rebuilt` figure below would count wrappers rather than upstream fetches.
+- **Priority.** The warmer runs its requests at background priority
+  (`withQueuePriority`), so a visitor who lands on a cold year mid-sweep jumps
+  ahead of the sweep's remaining work instead of queueing behind it.
+
+---
+
+## Keeping it all warm: the cron warmer
+
+The Data Cache is per-deployment and best-effort: a deploy wipes it, and Vercel
+evicts entries under memory pressure — **well inside their nominal lifetime**, as
+the built-at timestamps on `/diagnostics` show. Rather than let an unlucky
+visitor pay the cold fetch, Vercel Cron re-warms everything on a frequent
+schedule via `src/server/cache-warmer.ts`:
 
 | Cron | Schedule | Warms |
 |------|----------|-------|
-| `warm-all` | every 10 min | every year back to 1999, for both fleet modes |
+| `warm-all` | every 10 min | every year back to 1999, both fleet modes |
 | `warm-stats` | daily, 15:30 UTC (01:30 AEST) | `/api/stats` for both fleet modes |
 
-`warm-all` sweeps the whole span every 10 minutes so **no year — in any tier —
-stays cold for longer than the cron interval**, whether it went cold from
-eviction or a fresh deploy. That is cheap: warming an already-warm year is just a
-Data-Cache read (no OpenElectricity call), so only genuinely cold years do real
-work — a full warm sweep is ~21 Data-Cache reads. The frequent cadence does not
-make data fresher (that is set by `revalidate`); it only shrinks the post-deploy
-cold window, which is exactly when a visitor could hit a cold fetch. A single
-warmer covers the current year too, so no separate `warm-current` is needed.
-Each warm self-fetches the **public** route (no `Authorization` header) so it
-populates both the Data Cache and the CDN edge. The cron route is gated by
-`CRON_SECRET` (`isAuthorisedCronRequest`), which Vercel Cron attaches
-automatically — **if `CRON_SECRET` is unset in the Vercel project, every cron
-fails closed (401) and nothing is warmed.**
+`warm-all` sweeps the whole span every 10 minutes so **no year stays cold longer
+than the cron interval**, whether it went cold from eviction or a fresh deploy.
+In steady state that is cheap: an already-warm year is a Data-Cache read plus one
+edge round-trip, no OpenElectricity call.
 
-### 3. Client — TanStack Query
+**Each year is warmed twice, by different means, because the two cache layers
+respond to different things:**
+
+1. **In-process** — the warmer calls `getCachedCapacityFactors` directly, with no
+   HTTP involved. This is the only way to *guarantee* the Data Cache is touched.
+2. **Then, for some years, one plain HTTP self-fetch** of the public URL, which
+   re-enters the CDN and keeps the Sydney edge entry from ageing out.
+
+   Not every year, every sweep: a payload is ~230 KB, so refreshing all 56
+   (year, mode) entries every 10 minutes would move ~13 MB a sweep — roughly
+   57 GB a month — to keep alive entries that already have a 7-day edge
+   lifetime. With the origin in Sydney an edge miss now costs a visitor one
+   local round-trip, not a cold fetch, so that is a poor trade for the archive.
+   The sweep therefore refreshes the edge for `current` and `recent` years —
+   where visitors actually land, and whose edge lifetimes lapse between sweeps
+   anyway — plus any year it just rebuilt, whose edge copy is stale by
+   definition. Archive years rely on the Data Cache, which the sweep guarantees
+   is warm, plus real traffic.
+
+Step 1 exists because of a trap worth remembering: **warming by self-fetching the
+public URL does not reliably warm the Data Cache.** If the edge already holds a
+copy, the CDN answers, the function never runs, and the Data Cache entry is left
+unread — which also makes it first in line for eviction. `cache: 'no-store'` does
+not save you; it disables *Next's* fetch cache, not *Vercel's* CDN. This is
+exactly the failure this app had: every sweep was absorbed by the edge, so the
+layer the sweep existed to protect was quietly starving.
+
+Sweeps fan out `WARM_CONCURRENCY` (4) years at a time — see the next section for
+why 4 — and each run logs a line like:
+
+```
+warm-all: 56 entries, 3 rebuilt (2007 full, 2013 full/current), 4210 ms
+```
+
+`rebuilt` is the number that matters. It is the **only** visibility we have into
+how often the Data Cache really evicts entries. Steady state should be 0; a
+persistent trickle means eviction is outpacing the sweep, and the answer would be
+a durable store (Vercel Blob or KV) behind layer 3 rather than a faster sweep.
+
+A **fully cold** sweep — every year, both modes, all from OpenElectricity — is
+the slow case, measured at ~220 s locally over a mobile link. That is close
+enough to the 300 s `maxDuration` to matter, so the sweep carries a 240 s
+deadline: past that it stops starting new years and reports them as `skipped`
+rather than being killed mid-flight. It self-heals, because the years it did warm
+are cheap on the next run, so each sweep reaches further than the last. A warm
+sweep is far quicker (~37 s locally, and most of that is the edge-refresh
+round-trips, which on prod are edge hits rather than full origin responses).
+
+The cron route is gated by `CRON_SECRET` (`isAuthorisedCronRequest`), which Vercel
+Cron attaches automatically — **if `CRON_SECRET` is unset in the Vercel project,
+every cron fails closed (401) and nothing is warmed.**
+
+---
+
+## Why we don't just ask OpenElectricity faster
+
+Short version: they aren't the ones holding us back, but they can only do about
+one heavy request per second, so piling on more parallel requests just makes
+everyone queue.
+
+Measured against the live API — bursts of full-year NEM queries, ~644 KB of JSON
+each:
+
+| Requests at once | Wall time | Median latency | Errors | Throughput |
+|---|---|---|---|---|
+| 4, cold at their end | 5.0 s | 4.7 s | **0** | 0.80/s |
+| 8, cold at their end | 8.6 s | 8.0 s | **0** | 0.93/s |
+| 12, cold at their end | 11.5 s | 10.4 s | **0** | 1.04/s |
+| 12, warm in their own 15-min cache | 2.4–2.9 s | 1.8–2.6 s | **0** | 4.1–5.1/s |
+
+Read the last two columns together. **Nothing rate-limits us** — not one 429 at
+any level. But going from 4 parallel requests to 12 more than doubled how long
+each one took and bought almost no extra throughput: their server is simply doing
+the work one at a time. Asking for four years at once is roughly four times
+quicker than one at a time; asking for twelve at once is not, it just means
+whoever is behind you in the queue waits longer.
+
+So the client-side limits in `src/server/queued-oeclient.ts` (10 in flight, one
+start per 100 ms) are a **ceiling, not a target**, and the lever that actually
+matters is how many years a caller asks for at once. Four years — eight requests,
+since each year is NEM + WEM — is where the curve flattens. That is
+`WARM_CONCURRENCY`, and the stats computation uses a similar bound.
+
+(Caveat on the table: measured over a high-latency link, so the ratios between
+rows are the signal, not the absolute seconds.)
+
+---
+
+## The client-side cache (TanStack Query)
 
 `src/client/year-queries.ts` (`yearQueryOptions`) caches each year in TanStack
-Query, keyed `['capFacYear', year]`. The cached value is **not** raw JSON — it
-is the fully pre-rendered `CapFacYear`, including the offscreen canvas tiles
+Query, keyed `['capFacYear', year]`. The cached value is **not** raw JSON — it is
+the fully pre-rendered `CapFacYear`, including the offscreen canvas tiles
 (`createCapFacYear` → one `FacilityYearTile` per facility). `staleTime` matches
 the server tier, and adjacent years are prefetched in the background
-(`usePrefetchAdjacentYears`). The browser only ever talks to our own route,
-never to OpenElectricity.
+(`usePrefetchAdjacentYears`). The browser only ever talks to our own route, never
+to OpenElectricity.
 
-### 4. The stats layer
+---
+
+## The stats layer
 
 `/stats` (the coal-generation records page) sits **on top of** everything above.
 `computeCoalStats` (`src/server/coal-stats-service.ts`) self-fetches
-`/api/capacity-factors` once per year, 1999→current, and reconstructs MWh from
-capacity factor × capacity × 24. The whole result is then cached for a day by
-`/api/stats` (`unstable_cache`, tagged `coal-stats`), and `warm-stats` triggers
-the daily recompute so it never lands on a user.
+`/api/capacity-factors` once per year, 1999→current (bounded concurrency via the
+shared `mapPool`), and reconstructs MWh from capacity factor × capacity × 24. The
+whole result is then cached for a day by `/api/stats` (`unstable_cache`, tagged
+`coal-stats`), and `warm-stats` triggers the daily recompute so it never lands on
+a user.
 
 Two consequences worth remembering:
 
@@ -191,20 +362,20 @@ counted in the line rather than silently dropped.
 Authorised with `CACHE_SECRET`, because a purge forces cold, rate-limited
 upstream fetches. That is a **different** secret from the `CRON_SECRET` the
 `/api/cron/warm-*` routes use: the cron token is machine-only and never leaves
-Vercel, while this one is typed by hand into the `/diagnostics` field, so
-keeping them apart means the convenient one can't impersonate cron and either
-can be rotated alone. Both fail closed — an unset secret authorises nobody.
+Vercel, while this one is typed by hand into the `/diagnostics` field, so keeping
+them apart means the convenient one can't impersonate cron and either can be
+rotated alone. Both fail closed — an unset secret authorises nobody.
 
 | Layer | Cleared by |
 |-------|-----------|
-| Next.js Data Cache | `revalidateTag('capacity-factors' / 'coal-stats')` |
-| Vercel CDN edge | `invalidateByTag()` from `@vercel/functions`, against the `Vercel-Cache-Tag` headers |
+| Data Cache (layer 3) | `revalidateTag('capacity-factors' / 'coal-stats')` |
+| Vercel CDN edge (layer 2) | `invalidateByTag()` from `@vercel/functions`, against the `Vercel-Cache-Tag` headers |
 | Facilities roster memo (24 h) | `clearFacilitiesCache()` — **this instance only** |
-| Browser HTTP cache | nothing; hence the 60 s browser `max-age` |
+| Browser HTTP cache (layer 1) | nothing; hence the 60 s browser `max-age` |
 
-`revalidateTag` alone is not enough: it never touches the CDN entry, because
-these routes are `force-dynamic` and set their own `Cache-Control`, so Next
-never sees the cached response.
+`revalidateTag` alone is not enough: it never touches the edge, because these
+routes are `force-dynamic` and set their own `Cache-Control`, so Next never sees
+the cached response.
 
 **The purge and the re-warm are two separate requests, deliberately.**
 `revalidateTag` invalidates everything carrying that tag *including entries
@@ -237,28 +408,39 @@ local option.
 
 ## Tile-render diagnostics
 
-Two questions motivated this tooling: *is cron caching actually working on
-prod?*, and *how long does each tile take to render?* The pieces below answer
-both.
+Two questions motivated this tooling: *are the caches actually doing their job on
+prod?*, and *how long does each tile take to render?*
 
 ### `GET /api/diagnostics/tiles`
 
-Probes each year in a range (default 1999→current) and reports, per year, how it
-was served. Implemented as a read-only sibling of the cache warmer
+Probes each year in a range (default 1999→current) and reports **each cache layer
+separately**. Implemented as a read-only sibling of the cache warmer
 (`probeYears` in `src/server/cache-warmer.ts`).
 
-Parameters:
+Parameters: `?years=1999-2026` (max 30), `?year=2024`, or no params for the full
+span. It is left **public** — it only re-exercises the already-public
+`/api/capacity-factors` route, so it adds no attack surface a caller doesn't
+already have, and that lets the `/diagnostics` page read it without a secret.
 
-- `?years=1999-2026` — inclusive range (max 30 years).
-- `?year=2024` — a single year.
-- no params — the full span.
+**Each year is probed twice, in this order:**
 
-It is left **public** (no bearer token): it only re-exercises the already-public,
-CDN-cached `/api/capacity-factors` route, so it adds no attack surface a caller
-doesn't already have — and that lets the `/diagnostics` page read it without a
-secret in the browser.
+1. A **cache-busted** fetch (`&probe=…`, a parameter the route ignores). No edge
+   entry exists for that URL, so the request always reaches the function and its
+   `x-cf-cold` header describes the **Data Cache** honestly. This runs *first* on
+   purpose — a plain fetch that missed the edge would warm the Data Cache and
+   hide the very thing we are asking about.
+2. A **plain** fetch of the real URL, reporting the **edge** (`x-vercel-cache`,
+   `age`) exactly as a visitor would experience it.
 
-Example:
+The `classification` (`warm` | `cold` | `uncertain`) comes from probe 1 alone.
+The earlier single-probe version trusted an edge hit first, which meant a year
+could read `warm` while the Data Cache behind it was empty — precisely the state
+that produces a surprise cold fetch once the edge entry expires. If you are
+reading old screenshots: that is why rows could say `warm` and `was cold` at the
+same time.
+
+This honesty has a price: the probe now *pays* the cold fetches it used to hide.
+That is intended.
 
 ```bash
 curl -s "https://stripes.energy/api/diagnostics/tiles?years=2024-2026" | jq '.summary'
@@ -268,47 +450,31 @@ curl -s "https://stripes.energy/api/diagnostics/tiles?years=2024-2026" | jq '.su
 {
   "yearsProbed": 3,
   "warm": 3, "cold": 0, "uncertain": 0, "failed": 0,
+  "edgeHits": 3,           // how many a visitor would get straight from Sydney
   "slowestYear": 2025, "slowestMs": 620,
   "totalMs": 1541,
-  "allWarm": true          // the one-line "is cron caching working?" verdict
+  "allWarm": true          // the one-line "is the Data Cache healthy?" verdict
 }
 ```
 
-Each `tiles[]` entry carries `tier`, `ms`, `classification`
-(`warm` | `cold` | `uncertain`), the raw cache signals (`xVercelCache`, `age`,
-`coldFetch`, `coldFetchMs`), and `builtAt` (from `x-cf-built-at`).
-
-Note the difference: the cache signals describe **how this response was served**,
-while `builtAt` describes **how old the data in it is**. A year can be perfectly
-warm and still hold week-old data — that combination is the one that makes an
-upstream fix look like it never landed.
-
-**How a year is classified** (honest, in order of trust):
-
-1. `x-vercel-cache: HIT` or `age > 0` → **warm** (the CDN edge served a cached
-   copy). Trusted first, because an edge HIT replays whatever `x-cf-cold` was
-   cached with the original response, which may be stale.
-2. `x-cf-cold` header (below) → **cold** if `true`, **warm** if `false`. This is
-   the definitive per-request signal whenever the request reached the function.
-3. Latency fallback (no CDN / no marker, e.g. local dev): `≤ 1500 ms` → warm,
-   `≥ 3000 ms` → cold, otherwise `uncertain`.
+Note the difference between the cache signals and `builtAt`: the first describe
+**how this response was served**, the second **how old the data in it is**. A
+year can be perfectly warm and still hold week-old data — that combination is the
+one that makes an upstream fix look like it never landed.
 
 ### The `x-cf-cold` marker
 
-`src/app/api/capacity-factors/route.ts` records, per instance, every time its
-wrapped fetch runs — which only happens on a Data-Cache **miss**, i.e. a genuine
-cold OpenElectricity fetch. It then emits two headers on each response:
+`src/server/cf-cache.ts` records, per instance, every time its wrapped fetch runs
+— which only happens on a Data-Cache **miss**, i.e. a genuine cold
+OpenElectricity fetch. The route emits two headers on each response:
 
 - `x-cf-cold: true|false` — did **this** request pay a cold fetch?
 - `x-cf-cold-ms: <n>` — how long that cold fetch took (when `true`).
 
-Because the marker travels on the same response, it is robust to Vercel's
-per-instance memory (unlike aggregate counts) and correctly reports "warm" for
-`stale-while-revalidate` background refreshes (the user was served instantly).
-
-```bash
-curl -sI "https://stripes.energy/api/capacity-factors?year=2006" | grep -i 'x-cf-cold\|x-vercel-cache'
-```
+Because the marker travels on the same response it is robust to Vercel's
+per-instance memory. Do remember it is cached *with* the body, so a copy replayed
+from an edge or a browser reports the value from when the entry was built — which
+is exactly why the probe bypasses the edge before reading it.
 
 ### The `/diagnostics` page
 
@@ -318,17 +484,17 @@ tables:
 - **Purge server caches** — the one-click purge described above. The secret is
   held in React state only, never `localStorage`, so it lives no longer than the
   tab.
-- **Server cache health** — a per-year view of `GET /api/diagnostics/tiles`,
-  with a headline warm/cold verdict, **Built at** / **Data age** columns, and a
+- **Server cache health** — a per-year view of `GET /api/diagnostics/tiles`, with
+  separate **Data cache** and **Edge** columns, **Built at** / **Data age**, and a
   "Re-probe" button.
 - **Client tile renders** — every tile render in this browser session, with its
   duration and an AEST timestamp.
 
 Client render times live **only** in the browser's heap (there is no server
-persistence), so the client table populates as you navigate the visualisation
-and is only visible in the same tab: `<Link>`-navigate from `/` to `/diagnostics`
-and the timings carry over; a hard refresh or a new tab starts empty (the page
-shows a note explaining this). The server table loads regardless.
+persistence), so that table populates as you navigate the visualisation and is
+only visible in the same tab: `<Link>`-navigate from `/` to `/diagnostics` and the
+timings carry over; a hard refresh or a new tab starts empty. The server table
+loads regardless.
 
 ### Client tile-timing recorder & the Shift+P overlay
 
@@ -342,53 +508,60 @@ ring buffer with pub/sub) that records three kinds of render:
 | `fetch-build` | end-to-end: network fetch + parse + build | `yearQueryOptions` queryFn |
 
 Network overhead ≈ `fetch-build − year-build`. The same records feed the
-**Shift+P** debug overlay's *Timing* tab (a live in-session view), while
-`/diagnostics` is the shareable, side-by-side view — both read the same
-singleton.
+**Shift+P** debug overlay's *Timing* tab, while `/diagnostics` is the shareable,
+side-by-side view — both read the same singleton.
 
 ---
 
 ## Confirming caching works on prod
 
 ```bash
-# Headline verdict — expect "allWarm": true shortly after the crons run.
+# Headline verdict — expect "allWarm": true, and edgeHits == yearsProbed.
 curl -s https://stripes.energy/api/diagnostics/tiles | jq '.summary'
 
-# Spot-check the start year by hand.
+# What a Sydney visitor actually gets. Expect a HIT, and syd1 in BOTH id fields
+# (the first is the PoP that received it, the second the region that ran it).
 curl -sI "https://stripes.energy/api/capacity-factors?year=2006" \
-  | grep -i 'x-vercel-cache\|x-cf-cold\|age'
+  | grep -i 'x-vercel-cache\|x-vercel-id\|age'
+
+# Is the Data Cache holding? Bypass the edge and read the honest marker.
+curl -sI "https://stripes.energy/api/capacity-factors?year=2006&probe=1" \
+  | grep -i 'x-cf-cold\|x-cf-built-at'
 ```
 
-Note that `x-vercel-cache: MISS` on a first hit is **not** a cache failure — it
-only means the CDN edge in *your* region was cold. If the response still returns
-in well under a second (and `x-cf-cold: false`), a warm origin Data Cache served
-it, which is exactly what the crons maintain.
+A plain `x-vercel-cache: MISS` on a first hit is not automatically a failure — it
+means the edge in *your* region was cold, and the origin's Data Cache is right
+behind it. But repeated misses on the real URL mean layer 2 isn't being kept
+warm, which is the thing the syd1 pinning and the warmer's second step exist to
+prevent.
 
 ---
 
 ## Known limitations
 
+- **The Data Cache is best-effort.** Vercel evicts entries well inside their
+  nominal `revalidate` window; we have observed archive years, nominally good for
+  seven days, being rebuilt several times a day. The `rebuilt` count in the
+  `warm-all` log is how we measure it. If it stays persistently non-zero, the fix
+  is a durable store (Vercel Blob or KV) behind layer 3, so a miss costs a ~50 ms
+  read instead of an upstream fetch.
 - **`maxDuration`**: `vercel.json` applies a 60 s default to all `src/app/api/**`
-  functions, and the two long-running routes (`warm-all`, `/api/diagnostics/tiles`)
-  need the full 300 s for a fully-cold all-years run (e.g. the first sweep after a
-  deploy). Both the route-segment exports (`maxDuration = 300`) *and* explicit
-  per-route `functions` entries in `vercel.json` declare 300 s, so the resolved
-  limit does not depend on route-segment-vs-glob precedence.
+  functions; the long-running routes (`warm-all`, `/api/diagnostics/tiles`,
+  `/api/stats`, `warm-stats`, `purge`) declare 300 s both as route-segment
+  exports and as explicit `functions` entries, so the resolved limit does not
+  depend on route-segment-vs-glob precedence.
 - **Post-deploy cold window**: a deploy wipes the Data Cache, so years stay cold
   until the next `warm-all` run — up to the cron interval (≤ 10 min), plus the
-  sweep itself: a fully-cold ~21-year sweep runs sequentially and takes ~60–90 s,
-  so the tail years clear a little after the earlier ones. A user hitting a year in
-  that window pays one cold fetch (now ~3–4 s after the shortened retry backoff, not
-  ~15 s). Closing this fully would need deploy-triggered warming.
+  sweep itself. Closing this fully would need deploy-triggered warming.
 - **Start-edge prefetch**: adjacent-year prefetch tries `startYear-2..-1`, which
   at 1999 are out of range and skipped — so a jump straight to the start year is
   always an on-demand fetch with no prefetch overlap.
-- **Per-instance history**: the `x-cf-cold` *per-request* signal is authoritative,
-  but any aggregate cold-fetch counts kept in module memory are per-serverless
-  instance and best-effort.
+- **Single-flight has one rough edge**: if a background (warmer) fetch is already
+  running and a visitor joins it, the visitor inherits background queue priority.
+  Sharing one fetch still beats duplicating it.
 - **The browser cache cannot be purged.** A purge clears every server-side layer,
-  but a visitor's own HTTP cache is beyond reach. This is why both data routes
-  cap the browser at `max-age=60` rather than relying on it.
+  but a visitor's own HTTP cache is beyond reach. Hence the 60 s browser
+  `max-age`.
 - **The facilities memo is per-instance.** A purge clears it only on the instance
   that served the purge request; other warm instances keep their roster until the
   24 h TTL expires. Unit metadata (capacities, retirements) can therefore lag a

@@ -253,11 +253,23 @@ export function initializeRequestLogger(port: number): void {
   }
 }
 
+/**
+ * The logger used by the OpenElectricity client, initialising itself on first
+ * use if nobody has done so explicitly.
+ *
+ * This used to throw instead, which made it a trap: the only explicit
+ * initialisation lives at module scope in the capacity-factors route, so any
+ * code path that reached the OE client without that module having been loaded
+ * died. The cron warmer hit exactly this when it started calling the data path
+ * in-process instead of over HTTP — every year in the sweep failed on a logging
+ * concern. The port is only ever used to name the log file, and the same
+ * fallback the route used works fine.
+ */
 export function getRequestLogger(): RequestLogger {
   if (!loggerInstance) {
-    throw new Error('Request logger not initialized. Call initializeRequestLogger(port) first.');
+    initializeRequestLogger(Number.parseInt(process.env.PORT || '3000', 10));
   }
-  return loggerInstance;
+  return loggerInstance!;
 }
 
 export function cleanupRequestLogger(): void {
