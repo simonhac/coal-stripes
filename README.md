@@ -8,7 +8,7 @@ A reference app demonstrating the [OpenElectricity](https://openelectricity.org.
 
 ## Overview
 
-Each horizontal stripe is one coal generating unit; each pixel column is one day of the displayed 365-day window. Shading encodes the unit's daily capacity factor — light grey (25%) to black (100%) — with red marking days below 25% (effectively offline) and pale blue marking days with no data. Drag, scroll, or use the keyboard to slide the window across ~19 years of history.
+Each horizontal stripe is one coal generating unit; each pixel column is one day of the displayed 365-day window. Shading encodes the unit's daily capacity factor — light grey (20%) to black (100%) — with red marking days below 20% (effectively offline) and pale blue marking days with no data. Drag, scroll, or use the keyboard to slide the window across ~19 years of history.
 
 ## How this app uses the OpenElectricity API
 
@@ -97,7 +97,7 @@ Dates use `@internationalized/date` (not the built-in `Date`) throughout, with h
 ## Visualisation details
 
 - **Capacity factor**: daily energy generation divided by the unit's theoretical maximum (registered capacity × 24 h), as a percentage.
-- **Colour mapping** (`src/shared/capacity-factor-color-map.ts`): below 25% → red; 25–100% → linear light-grey-to-black ramp; no data → pale blue.
+- **Colour mapping** (`src/shared/capacity-factor-color-map.ts`): below 20% → red; 20–100% → linear light-grey-to-black ramp; no data → pale blue.
 - **Rendering**: each year is painted once into an offscreen canvas (one pixel per unit-day); scrolling just re-slices those tiles, so navigation stays smooth.
 - **Navigation**: drag or trackpad-scroll the stripes; arrow keys move by month (Shift = 6 months, Cmd/Ctrl = year boundaries); `T`/Home jumps to the present, `S` to the start of data; click a month label to jump there.
 

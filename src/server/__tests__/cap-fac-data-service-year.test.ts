@@ -15,27 +15,29 @@ afterAll(() => {
 // Mock the OpenElectricityClient
 jest.mock('openelectricity', () => ({
   OpenElectricityClient: jest.fn().mockImplementation(() => ({
+    // The service reads the response envelope (units nested under their
+    // facility), not the SDK's flattened `table` — only the envelope carries
+    // each unit's commencement_date.
     getFacilities: jest.fn().mockResolvedValue({
-      response: {},
-      table: {
-        getRecords: () => [
+      response: {
+        data: [
           {
-            facility_code: 'ERARING',
-            facility_name: 'Eraring Power Station',
-            facility_network: 'NEM',
-            facility_region: 'NSW1',
-            unit_code: 'ER01',
-            unit_fueltech: 'coal_black',
-            unit_capacity: 720
+            code: 'ERARING',
+            name: 'Eraring Power Station',
+            network_id: 'NEM',
+            network_region: 'NSW1',
+            units: [
+              { code: 'ER01', fueltech_id: 'coal_black', status_id: 'operating', capacity_registered: 720 }
+            ]
           },
           {
-            facility_code: 'BAYSW',
-            facility_name: 'Bayswater Power Station',
-            facility_network: 'NEM',
-            facility_region: 'NSW1',
-            unit_code: 'BW01',
-            unit_fueltech: 'coal_black',
-            unit_capacity: 660
+            code: 'BAYSW',
+            name: 'Bayswater Power Station',
+            network_id: 'NEM',
+            network_region: 'NSW1',
+            units: [
+              { code: 'BW01', fueltech_id: 'coal_black', status_id: 'operating', capacity_registered: 660 }
+            ]
           }
         ]
       }

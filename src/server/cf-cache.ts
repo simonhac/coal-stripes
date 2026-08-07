@@ -38,10 +38,13 @@ const debug = (...args: unknown[]): void => {
 
 // Bump to invalidate every cached CF tile in one deploy-atomic step (it changes
 // the unstable_cache key, so all tiers/years recompute on the fixed code with
-// fresh facilities metadata). Bumped to v3 for the single-roster change: every
-// payload now carries a per-unit `status`, and what used to be the `current`
-// roster is derived from it client-side, so entries built under the old
-// two-roster scheme must be discarded rather than served stale.
+// fresh facilities metadata). Bumped to v3 for two changes at once: the
+// single-roster payload, where every unit carries a `status` and what used to be
+// the `current` roster is derived from it client-side; and the unit-lifecycle
+// payload, where rows carry commenced/first_seen/last_seen, Playford B's
+// superseded DUIDs are merged into their aggregate, and pre-commissioning zeros
+// are null. Entries built under either older scheme must be discarded rather
+// than served stale.
 export const CF_CACHE_VERSION = 'v3';
 
 // Per-instance record of genuine cold fetches. `fetchCapacityFactors` (below)

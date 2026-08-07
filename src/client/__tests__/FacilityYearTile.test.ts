@@ -77,6 +77,67 @@ describe('FacilityYearTile', () => {
 
   });
 
+  describe('Cross-year gap colouring', () => {
+    // Captures the pixels the tile writes, so we can assert what a null day is
+    // actually painted rather than only that rendering did not throw.
+    class CapturingCanvas extends MockCanvas {
+      static last: { data: Uint8ClampedArray; width: number } | null = null;
+      getContext() {
+        const ctx = super.getContext();
+        ctx.putImageData = jest.fn((image: { data: Uint8ClampedArray; width: number }) => {
+          CapturingCanvas.last = image;
+        }) as never;
+        return ctx;
+      }
+    }
+
+    const rgbAt = (x: number): [number, number, number] => {
+      const { data, width } = CapturingCanvas.last!;
+      const i = (0 * width + x) * 4;
+      return [data[i], data[i + 1], data[i + 2]];
+    };
+
+    const PAGE_BACKGROUND = [0xfa, 0xf9, 0xf6];
+    const NO_DATA_BLUE = [0xe6, 0xf3, 0xff];
+
+    // LD01 in 2000: missing until 30 March because a gap that began in October
+    // 1999 ran over New Year. The year's own values cannot tell that apart from
+    // a unit commissioned in April.
+    const gapOverNewYear = [...Array(89).fill(null), ...Array(276).fill(50)];
+
+    beforeEach(() => {
+      CapturingCanvas.last = null;
+      global.OffscreenCanvas = CapturingCanvas as never;
+    });
+
+    afterEach(() => {
+      global.OffscreenCanvas = MockCanvas as never;
+    });
+
+    it('paints a cross-year gap as "no data" when the unit was commissioned earlier', () => {
+      const unit = { ...mockUnit('LD01', 500, gapOverNewYear), commenced: '1970-12-31' };
+      new FacilityYearTile(createFacility('LIDDELL', [unit]), 2023);
+
+      expect(rgbAt(0)).toEqual(NO_DATA_BLUE);
+      expect(rgbAt(88)).toEqual(NO_DATA_BLUE);
+    });
+
+    it('still paints a genuine pre-commission run as page background', () => {
+      const unit = { ...mockUnit('MPP_1', 426, gapOverNewYear), commenced: '2023-03-31' };
+      new FacilityYearTile(createFacility('MILLMERN', [unit]), 2023);
+
+      expect(rgbAt(0)).toEqual(PAGE_BACKGROUND);
+    });
+
+    it('falls back to inferring the span when the payload predates the field', () => {
+      // Browser and edge caches keep older payloads for a while; those units
+      // have no lifecycle dates and must render exactly as they did before.
+      new FacilityYearTile(createFacility('LIDDELL', [mockUnit('LD01', 500, gapOverNewYear)]), 2023);
+
+      expect(rgbAt(0)).toEqual(PAGE_BACKGROUND);
+    });
+  });
+
   describe('Performance Tests', () => {
     it('should render a single tile quickly', () => {
       const units = Array(4).fill(null).map((_, i) => 
@@ -202,9 +263,9 @@ describe('FacilityYearTile', () => {
     it('should round capacity factors correctly', () => {
       const units = [
         mockUnit('UNIT1', 500, [
-          24.4,  // Should round to 24 (red)
-          24.5,  // Should round to 25 (grey)
-          24.6,  // Should round to 25 (grey)
+          19.4,  // Should round to 19 (red)
+          19.5,  // Should round to 20 (grey)
+          19.6,  // Should round to 20 (grey)
           99.4,  // Should round to 99
           99.5,  // Should round to 100
           100.1, // Should clamp to 100
