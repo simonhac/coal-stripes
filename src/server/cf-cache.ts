@@ -38,10 +38,11 @@ const debug = (...args: unknown[]): void => {
 
 // Bump to invalidate every cached CF tile in one deploy-atomic step (it changes
 // the unstable_cache key, so all tiers/modes/years recompute on the fixed code
-// with fresh facilities metadata). Bumped for the retired-unit colouring fix:
-// future days are now null (not 0) for retired units, so tiles frozen under the
-// old logic must be discarded rather than served stale.
-export const CF_CACHE_VERSION = 'v2';
+// with fresh facilities metadata). Bumped for the unit-lifecycle payload: rows
+// now carry commenced/first_seen/last_seen, Playford B's superseded DUIDs are
+// merged into their aggregate, and pre-commissioning zeros are null — so tiles
+// built under the old logic must be discarded rather than served stale.
+export const CF_CACHE_VERSION = 'v3';
 
 // Per-instance record of genuine cold fetches. `fetchCapacityFactors` (below)
 // is the function wrapped by unstable_cache, so it ONLY runs on a Data-Cache

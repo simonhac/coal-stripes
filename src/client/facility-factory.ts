@@ -18,6 +18,8 @@ export function createFacility(facilityCode: string, dtoUnits: GeneratingUnitDTO
     unitId: dto.duid,
     unitName: dto.duid, // Keep original DUID as unitName - formatting will be done in CompositeTile
     capacity: dto.capacity,
+    commenced: dto.commenced,
+    lastSeen: dto.last_seen,
     history: dto.history
   }));
   

@@ -36,8 +36,24 @@ export interface GeneratingUnitDTO {
   facility_code: string;
   facility_name: string;
   fueltech: string; // 'coal_black' or 'coal_brown'
+  // When this unit existed, from OpenElectricity's unit metadata — NOT inferred
+  // from the year in `history`, which is what lets a gap straddling 31 Dec be
+  // told apart from a commissioning. `commenced` is the pre-commission boundary
+  // and is the field to trust; `first_seen`/`last_seen` are the data frontier
+  // and may lag it badly (`data_first_seen` reports the start of the later
+  // contiguous run for units with early gaps), so they may only widen an
+  // observed span, never narrow it. Optional: payloads cached before these
+  // fields existed still satisfy the contract, and consumers fall back to
+  // inferring the span from the values.
+  commenced?: string | null; // ISO date
+  commenced_specificity?: UnitDateSpecificity | null;
+  first_seen?: string | null; // ISO date
+  last_seen?: string | null; // ISO date
   history: UnitHistoryDTO;
 }
+
+/** How precisely OpenElectricity knows a lifecycle date. */
+export type UnitDateSpecificity = 'year' | 'quarter' | 'month' | 'day';
 
 /** The full payload for one calendar year: every coal unit's history. */
 export interface GeneratingUnitCapFacHistoryDTO {
@@ -149,6 +165,10 @@ export interface GeneratingUnit {
   unitId: string;  // This is the DUID
   unitName: string; // This could be formatted differently from unitId
   capacity: number;
+  // Lifecycle dates as carried on the DTO — see GeneratingUnitDTO. The stripe
+  // renderer needs them to tell a cross-year gap from a commissioning.
+  commenced?: string | null;
+  lastSeen?: string | null;
   history: UnitHistoryDTO;
 }
 

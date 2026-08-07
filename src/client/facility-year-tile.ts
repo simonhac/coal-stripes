@@ -2,7 +2,7 @@ import { Facility, GeneratingUnit } from '@/shared/types';
 import { TILE_CONFIG, PAGE_BACKGROUND_ABGR } from '@/shared/config';
 import { getDateFromIndex } from '@/shared/date-utils';
 import { capacityFactorColorMap } from '@/shared/capacity-factor-color-map';
-import { aliveSpan, classifyNull, type AliveSpan } from '@/shared/data-gaps';
+import { aliveSpan, classifyNull, lifecycleBounds, type AliveSpan } from '@/shared/data-gaps';
 import { featureFlags } from '@/shared/feature-flags';
 import { TooltipData } from '@/components/CapFacTooltip';
 
@@ -49,6 +49,19 @@ export class FacilityYearTile {
     
     // Render the canvas immediately
     this.renderCanvas();
+  }
+
+  /**
+   * The unit's alive span within this year's window. A year tile only holds one
+   * slice of the unit's life, so the span is widened by the lifecycle dates the
+   * server carries on the DTO — otherwise a gap straddling New Year reads as a
+   * commissioning and gets painted as page background ("never existed") instead
+   * of pale blue ("no data"). Units from a payload cached before those fields
+   * existed simply fall back to inferring the span from the values.
+   */
+  private spanFor(unit: GeneratingUnit): AliveSpan {
+    const { data, start } = unit.history;
+    return aliveSpan(data, lifecycleBounds(start, data.length, unit.commenced, unit.lastSeen));
   }
 
   private calculateUnitHeights(): number[] {
@@ -106,7 +119,7 @@ export class FacilityYearTile {
       let yOffset = 0;
       this.facility.units.forEach((unit, unitIndex) => {
         const unitHeight = unitHeights[unitIndex];
-        const span = aliveSpan(unit.history.data);
+        const span = this.spanFor(unit);
 
         for (let dayIndex = 0; dayIndex < unit.history.data.length; dayIndex++) {
           const color = unitDayColor(unit.history.data[dayIndex], dayIndex, span);
@@ -138,7 +151,7 @@ export class FacilityYearTile {
       let yOffset = 0;
       this.facility.units.forEach((unit, unitIndex) => {
         const unitHeight = unitHeights[unitIndex];
-        const span = aliveSpan(unit.history.data);
+        const span = this.spanFor(unit);
 
         for (let dayIndex = 0; dayIndex < unit.history.data.length; dayIndex++) {
           const color = unitDayColor(unit.history.data[dayIndex], dayIndex, span);

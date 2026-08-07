@@ -69,8 +69,10 @@ export const DATE_BOUNDARIES = {
   // The earliest date we have data from. Although the NEM commenced on 13 Dec
   // 1998, OpenElectricity's *facility-level* (per-unit) daily energy series only
   // begins on 1 January 1999 (a whole-year or December-1998 request returns
-  // NoDataFound — verified against the API). The WEM series only starts in 2006,
-  // so 1999–2005 render WEM as "no data" (pale blue).
+  // NoDataFound — verified against the API). The WEM series only starts on
+  // 20 September 2006, so 1999–2005 render WEM as blank page background, not
+  // pale blue: with no data at all in the year, every day of those tiles
+  // classifies as pre-commission (see @/shared/data-gaps).
   EARLIEST_START_DATE: new CalendarDate(1999, 1, 1),
 
   // Buffer months to allow beyond data boundaries for UI flexibility
