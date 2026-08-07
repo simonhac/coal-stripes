@@ -40,6 +40,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@simon/workspace-env": "github:simonhac/workspace-env#v0.1.0",
     "@tailwindcss/postcss": "^4",
     "@tanstack/react-query-devtools": "^5.101.2",
     "@types/jest": "^30.0.0",

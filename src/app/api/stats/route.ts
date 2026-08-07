@@ -9,7 +9,10 @@ export const dynamic = 'force-dynamic';
 // Bump when the computation or DTO shape changes (busts the Data Cache key).
 // v5: the DTO gained `sources` (per-year provenance for the recency line on
 // /stats); a v4 payload predates the field and would render without it.
-const STATS_CACHE_VERSION = 'v5';
+// v6: the fleet roster moved from the upstream query to a filter over a single
+// payload. The output should be identical, so this is belt-and-braces — it
+// guarantees a clean recompute rather than trusting the equivalence.
+const STATS_CACHE_VERSION = 'v6';
 const DAY_SECONDS = 60 * 60 * 24;
 const SWR_SECONDS = 60 * 60 * 24 * 7;
 

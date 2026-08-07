@@ -17,6 +17,7 @@ describe('FacilityYearTile', () => {
     facility_code: 'TESTFAC',
     facility_name: 'Test Facility',
     fueltech: 'black_coal',
+    status: 'operating',
     history: {
       start: '2023-01-01',
       last: '2023-12-31',

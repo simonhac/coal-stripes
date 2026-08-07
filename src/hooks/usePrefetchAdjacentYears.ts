@@ -25,7 +25,7 @@ export function usePrefetchAdjacentYears(
 
     for (const year of [startYear - 2, startYear - 1, endYear + 1, endYear + 2]) {
       if (isValidYear(year)) {
-        void queryClient.prefetchQuery(yearQueryOptions(mode, year));
+        void queryClient.prefetchQuery(yearQueryOptions(queryClient, mode, year));
       }
     }
   }, [queryClient, mode, startYear, endYear]);

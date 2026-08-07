@@ -43,7 +43,7 @@ export function getRegionNames(regionCode: string): { long: string; short: strin
  * loaded their data.
  */
 function getCachedYear(queryClient: QueryClient, mode: FleetMode, year: number): CapFacYear | null {
-  return queryClient.getQueryData(yearQueryOptions(mode, year).queryKey) ?? null;
+  return queryClient.getQueryData(yearQueryOptions(queryClient, mode, year).queryKey) ?? null;
 }
 
 /**

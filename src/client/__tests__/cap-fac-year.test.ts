@@ -73,6 +73,7 @@ describe('cap-fac-year', () => {
             facility_code: 'FAC1',
             facility_name: 'Facility 1',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -90,6 +91,7 @@ describe('cap-fac-year', () => {
             facility_code: 'FAC1',
             facility_name: 'Facility 1',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -129,6 +131,7 @@ describe('cap-fac-year', () => {
             facility_code: 'WEM_FAC1',
             facility_name: 'WEM Facility 1',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -167,6 +170,7 @@ describe('cap-fac-year', () => {
             facility_code: 'FAC1',
             facility_name: 'Facility 1',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -184,6 +188,7 @@ describe('cap-fac-year', () => {
             facility_code: 'FAC2',
             facility_name: 'Facility 2',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -231,6 +236,7 @@ describe('cap-fac-year', () => {
             facility_code: 'FAC1',
             facility_name: 'Facility 1',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -264,6 +270,7 @@ describe('cap-fac-year', () => {
             facility_code: 'NSW_FAC1',
             facility_name: 'NSW Facility',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -281,6 +288,7 @@ describe('cap-fac-year', () => {
             facility_code: 'VIC_FAC1',
             facility_name: 'VIC Facility',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -297,6 +305,7 @@ describe('cap-fac-year', () => {
             facility_code: 'WEM_FAC1',
             facility_name: 'WEM Facility',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',
@@ -337,6 +346,7 @@ describe('cap-fac-year', () => {
             facility_code: 'FAC1',
             facility_name: 'Facility 1',
             fueltech: 'coal_black',
+            status: 'operating',
             history: {
               start: '2024-01-01',
               last: '2024-12-31',

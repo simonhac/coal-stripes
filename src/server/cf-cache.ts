@@ -29,7 +29,7 @@ import {
   type YearCachePolicy,
   type YearCacheTier,
 } from '@/shared/config';
-import type { FleetMode, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
+import type { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 
 // Opt-in verbose logging: set DEBUG_OE=1 to trace cache misses locally.
 const debug = (...args: unknown[]): void => {
@@ -37,11 +37,14 @@ const debug = (...args: unknown[]): void => {
 };
 
 // Bump to invalidate every cached CF tile in one deploy-atomic step (it changes
-// the unstable_cache key, so all tiers/modes/years recompute on the fixed code
-// with fresh facilities metadata). Bumped for the unit-lifecycle payload: rows
-// now carry commenced/first_seen/last_seen, Playford B's superseded DUIDs are
-// merged into their aggregate, and pre-commissioning zeros are null — so tiles
-// built under the old logic must be discarded rather than served stale.
+// the unstable_cache key, so all tiers/years recompute on the fixed code with
+// fresh facilities metadata). Bumped to v3 for two changes at once: the
+// single-roster payload, where every unit carries a `status` and what used to be
+// the `current` roster is derived from it client-side; and the unit-lifecycle
+// payload, where rows carry commenced/first_seen/last_seen, Playford B's
+// superseded DUIDs are merged into their aggregate, and pre-commissioning zeros
+// are null. Entries built under either older scheme must be discarded rather
+// than served stale.
 export const CF_CACHE_VERSION = 'v3';
 
 // Per-instance record of genuine cold fetches. `fetchCapacityFactors` (below)
@@ -56,22 +59,16 @@ interface ColdFetchRecord {
   lastColdFetchMs: number;
   count: number;
 }
-const coldFetches = new Map<string, ColdFetchRecord>();
+const coldFetches = new Map<number, ColdFetchRecord>();
 
-/** Cold fetches are tracked per (mode, year) since the modes cache separately. */
-const coldKey = (year: number, mode: FleetMode): string => `${mode}:${year}`;
-
-/** How many cold fetches this instance has paid for a (year, mode) so far. */
-export function coldFetchCount(year: number, mode: FleetMode): number {
-  return coldFetches.get(coldKey(year, mode))?.count ?? 0;
+/** How many cold fetches this instance has paid for a year so far. */
+export function coldFetchCount(year: number): number {
+  return coldFetches.get(year)?.count ?? 0;
 }
 
-/** The most recent cold fetch for a (year, mode) on this instance, if any. */
-export function lastColdFetch(
-  year: number,
-  mode: FleetMode,
-): ColdFetchRecord | undefined {
-  return coldFetches.get(coldKey(year, mode));
+/** The most recent cold fetch for a year on this instance, if any. */
+export function lastColdFetch(year: number): ColdFetchRecord | undefined {
+  return coldFetches.get(year);
 }
 
 // In-flight upstream fetches, keyed the same way. `unstable_cache` does NOT
@@ -85,32 +82,29 @@ export function lastColdFetch(
 // counter agree: only the caller that actually starts an upstream fetch records
 // one. Callers that join it are not cold — they paid nothing — and counting them
 // would inflate the `rebuilt` figure the warm-all sweep reports.
-const inFlight = new Map<string, Promise<GeneratingUnitCapFacHistoryDTO>>();
+const inFlight = new Map<number, Promise<GeneratingUnitCapFacHistoryDTO>>();
 
 async function fetchCapacityFactors(
   year: number,
-  mode: FleetMode,
 ): Promise<GeneratingUnitCapFacHistoryDTO> {
-  const key = coldKey(year, mode);
-
-  const joined = inFlight.get(key);
+  const joined = inFlight.get(year);
   if (joined) {
-    debug(`🤝 Cache miss - joining in-flight fetch for year ${year} (${mode})`);
+    debug(`🤝 Cache miss - joining in-flight fetch for year ${year}`);
     return joined;
   }
 
-  debug(`🔄 Cache miss - fetching data for year ${year} (${mode})`);
+  debug(`🔄 Cache miss - fetching data for year ${year}`);
   const started = performance.now();
   const promise = getCapFacDataService()
-    .getCapacityFactors(year, mode)
+    .getCapacityFactors(year)
     .finally(() => {
-      inFlight.delete(key);
+      inFlight.delete(year);
     });
-  inFlight.set(key, promise);
+  inFlight.set(year, promise);
 
   const result = await promise;
-  const prev = coldFetches.get(key);
-  coldFetches.set(key, {
+  const prev = coldFetches.get(year);
+  coldFetches.set(year, {
     lastColdFetchAt: getAESTDateTimeString(),
     lastColdFetchMs: Math.round(performance.now() - started),
     count: (prev?.count ?? 0) + 1,
@@ -118,36 +112,31 @@ async function fetchCapacityFactors(
   return result;
 }
 
-const FLEET_MODES: FleetMode[] = ['full', 'current'];
-
-// One unstable_cache wrapper per (freshness tier, fleet mode). Revalidate is
-// static per wrapper, so the tiers can't share one; and the mode is baked into
-// the cache key parts so the two rosters (full vs current) never share a Data
-// Cache entry. Freshness windows live in yearCachePolicy — see @/shared/config.
-// A year crossing a tier boundary (current→recent at New Year, recent→archive
-// at N-6) changes wrapper and hence Data Cache key, costing one cache miss that
-// the next cron warmer run absorbs.
+// One unstable_cache wrapper per freshness tier. Revalidate is static per
+// wrapper, so the tiers can't share one. Freshness windows live in
+// yearCachePolicy — see @/shared/config. A year crossing a tier boundary
+// (current→recent at New Year, recent→archive at N-6) changes wrapper and hence
+// Data Cache key, costing one cache miss that the next cron warmer run absorbs.
 //
-// Tags are kept so a tier/mode can be busted on demand via revalidateTag() if
-// we ever need instant propagation.
+// There is one entry per year, not two: the `current` fleet view is derived
+// from this payload downstream (@/shared/fleet-filter) rather than fetched and
+// cached separately.
+//
+// Tags are kept so a tier can be busted on demand via revalidateTag() if we
+// ever need instant propagation.
 const tierCaches = Object.fromEntries(
   (Object.keys(YEAR_CACHE_TIERS) as YearCacheTier[]).map((tier) => [
     tier,
-    Object.fromEntries(
-      FLEET_MODES.map((mode) => [
-        mode,
-        unstable_cache(
-          fetchCapacityFactors,
-          ['capacity-factors', CF_CACHE_VERSION, tier, mode],
-          {
-            revalidate: YEAR_CACHE_TIERS[tier].revalidateSeconds,
-            tags: ['capacity-factors', tier, mode],
-          },
-        ),
-      ]),
-    ) as Record<FleetMode, typeof fetchCapacityFactors>,
+    unstable_cache(
+      fetchCapacityFactors,
+      ['capacity-factors', CF_CACHE_VERSION, tier],
+      {
+        revalidate: YEAR_CACHE_TIERS[tier].revalidateSeconds,
+        tags: ['capacity-factors', tier],
+      },
+    ),
   ]),
-) as Record<YearCacheTier, Record<FleetMode, typeof fetchCapacityFactors>>;
+) as Record<YearCacheTier, typeof fetchCapacityFactors>;
 
 /** The freshness tier a year currently falls in (today, in NEM time). */
 export function cachePolicyForYear(year: number): YearCachePolicy {
@@ -159,13 +148,12 @@ export function cachePolicyForYear(year: number): YearCachePolicy {
  * only on a miss.
  *
  * To find out whether a given call paid that cold fetch, compare
- * `coldFetchCount(year, mode)` either side of the await — the counter only
- * moves when the wrapped function actually ran.
+ * `coldFetchCount(year)` either side of the await — the counter only moves when
+ * the wrapped function actually ran.
  */
 export function getCachedCapacityFactors(
   year: number,
-  mode: FleetMode,
 ): Promise<GeneratingUnitCapFacHistoryDTO> {
   const { tier } = cachePolicyForYear(year);
-  return tierCaches[tier][mode](year, mode);
+  return tierCaches[tier](year);
 }

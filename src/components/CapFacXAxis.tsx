@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { getDaysBetween, getMonthName, getDateFromIndex } from '@/shared/date-utils';
 import { getProportionColorHex } from '@/shared/capacity-factor-color-map';
@@ -34,17 +34,18 @@ export function CapFacXAxis({
   // Subscribe to the year(s) the visible range spans; months without loaded
   // data render in the "no data" colour until the query resolves.
   const mode = useFleetMode();
+  const queryClient = useQueryClient();
   const startYear = dateRange.start.year;
   const endYear = dateRange.end.year;
   const [leftResult, rightResult] = useQueries({
     queries: [
       {
-        ...yearQueryOptions(mode, startYear),
+        ...yearQueryOptions(queryClient, mode, startYear),
         enabled: isValidYear(startYear),
         notifyOnChangeProps: ['data', 'status'] as const,
       },
       {
-        ...yearQueryOptions(mode, endYear),
+        ...yearQueryOptions(queryClient, mode, endYear),
         enabled: startYear !== endYear && isValidYear(endYear),
         notifyOnChangeProps: ['data', 'status'] as const,
       },

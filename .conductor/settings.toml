@@ -1,25 +1,16 @@
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 
-# Shared Conductor config for coal-stripes (Next.js + npm), applied to every
-# workspace once merged to the default branch.
-# Setup and run are thin wrappers around env/setup.ts and env/run.ts (run via tsx).
-
 [scripts]
-# Runs once when a workspace is created: npm install + Vercel link (deploys only)
-# + `op inject` .env.local from .env.tpl (1Password coal-stripes-dev vault, via
-# the Keychain SA token op-sa-coal-stripes-dev).
-setup = "npx tsx env/setup.ts"
-
-# Each workspace gets its own CONDUCTOR_PORT, so multiple can run at once.
+# `npm install` bootstraps deps (incl. @simon/workspace-env) before the wrapper imports it.
+# `npx --yes tsx` avoids the install-prompt deadlock in a fresh worktree (LiveOne#355).
+setup = "npm install && npx --yes tsx env/setup.mts"
 run_mode = "concurrent"
 
 [scripts.run.dev]
-# Next.js dev server, bound to CONDUCTOR_PORT (falls back to a free port from 3000).
-command = "npx tsx env/run.ts"
+command = "npx --yes tsx env/run.mts"
 default = true
 icon = "play"
 
 [scripts.run.test]
-# Jest unit tests in watch mode.
 command = "npm run test:watch"
 icon = "test-tube"
