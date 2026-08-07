@@ -9,7 +9,7 @@ interface OpenElectricityHeaderProps {
    *  devices that have no keyboard. */
   onOpenHelp?: () => void;
   /** Active fleet roster mode; when provided (with onFleetModeChange) the
-   *  header shows the Full history / Today's fleet toggle. */
+   *  header shows the All Units / Current Fleet toggle. */
   fleetMode?: FleetMode;
   onFleetModeChange?: (mode: FleetMode) => void;
 }
@@ -43,11 +43,6 @@ export function OpenElectricityHeader({ onOpenHelp, fleetMode, onFleetModeChange
           </Link>
 
           <div className="opennem-header-actions">
-            {/* Cross-link to the generation records / stats page. */}
-            <Link href="/stats" className="opennem-nav-link">
-              Records
-            </Link>
-
             {/* Fleet roster toggle — full historical fleet vs today's fleet. */}
             {fleetMode && onFleetModeChange && (
               <FleetModeToggle mode={fleetMode} onChange={onFleetModeChange} />

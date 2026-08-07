@@ -10,12 +10,12 @@ interface FleetModeToggleProps {
 const OPTIONS: { value: FleetMode; label: string; title: string }[] = [
   {
     value: 'full',
-    label: 'Full history',
+    label: 'All Units',
     title: 'Every coal unit that ever operated, including retired plants'
   },
   {
     value: 'current',
-    label: "Today's fleet",
+    label: 'Current Fleet',
     title: 'Only units operating in the present year'
   }
 ];
