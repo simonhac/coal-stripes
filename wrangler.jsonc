@@ -1,7 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "coal-stripes",
-  "main": "@tanstack/react-start/server-entry",
+  // Wraps @tanstack/react-start/server-entry to add the `scheduled` handler.
+  "main": "src/worker.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
 
@@ -23,5 +24,12 @@
   // The default 30s of CPU is not enough; Paid allows up to 5 minutes.
   "limits": { "cpu_ms": 300000 },
 
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+
+  // Every 10 minutes, as on Vercel. This is NOT optional: Workers Cache does not
+  // honour stale-while-revalidate, so a lapsed entry blocks the next visitor for
+  // a full OpenElectricity fetch. The interval must stay well under the shortest
+  // tier window (`current`, 1 hour). A sweep of already-warm years is a handful
+  // of cache hits, so this is cheap.
+  "triggers": { "crons": ["*/10 * * * *"] }
 }

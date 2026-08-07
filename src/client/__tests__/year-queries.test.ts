@@ -8,7 +8,7 @@ import {
   yearDataQueryOptions,
   yearQueryOptions,
 } from '../year-queries';
-import { YEAR_CACHE_TIERS } from '@/shared/config';
+import { CF_DTO_VERSION, YEAR_CACHE_TIERS } from '@/shared/config';
 
 // Mock the date utilities so "today" is deterministic
 jest.mock('@/shared/date-utils', () => ({
@@ -81,25 +81,27 @@ describe('year-queries', () => {
       queryClient = new QueryClient();
     });
 
-    it('keys queries by mode and year, plus the build id', () => {
-      // The build id (NEXT_PUBLIC_BUILD_ID, 'dev' when unset) is part of the key
-      // so a deploy invalidates every cached year — see year-queries.ts.
+    it('keys queries by mode and year, plus the DTO version', () => {
+      // CF_DTO_VERSION is part of the key so a payload-shape change invalidates
+      // every cached year — see year-queries.ts. It replaced the per-deploy
+      // build id, which no longer exists: deploys deliberately keep their cache
+      // now (cross_version_cache), and only a shape change should bust it.
       expect(yearQueryOptions(queryClient, 'full', 2023).queryKey).toEqual([
         'capFacYear',
         'full',
         2023,
-        'dev',
+        CF_DTO_VERSION,
       ]);
       expect(yearQueryOptions(queryClient, 'current', 2023).queryKey).toEqual([
         'capFacYear',
         'current',
         2023,
-        'dev',
+        CF_DTO_VERSION,
       ]);
     });
 
     it('keys the shared payload by year alone — no mode', () => {
-      expect(yearDataQueryOptions(2023).queryKey).toEqual(['capFacYearData', 2023, 'dev']);
+      expect(yearDataQueryOptions(2023).queryKey).toEqual(['capFacYearData', 2023, CF_DTO_VERSION]);
     });
 
     it('gives the current year the short (hourly) staleTime', () => {
@@ -154,7 +156,7 @@ describe('year-queries', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       // ...and the request carries no fleet parameter.
-      expect(fetchMock.mock.calls[0][0]).toBe('/api/capacity-factors?year=2023&v=dev');
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/capacity-factors?year=2023');
     });
 
     it('leaves retries to the payload query alone', () => {
@@ -185,8 +187,8 @@ describe('year-queries', () => {
       // The shared payload still resolved — one view giving up must not deny
       // the other view (or a later revisit) the download it already paid for.
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(queryClient.getQueryData(['capFacYearData', 2023, 'dev'])).toBeDefined();
-      expect(queryClient.getQueryData(['capFacYear', 'full', 2023, 'dev'])).toBeUndefined();
+      expect(queryClient.getQueryData(['capFacYearData', 2023, CF_DTO_VERSION])).toBeDefined();
+      expect(queryClient.getQueryData(['capFacYear', 'full', 2023, CF_DTO_VERSION])).toBeUndefined();
     });
 
     it('refetches the payload once it goes stale, rather than rebuilding from the old one', async () => {

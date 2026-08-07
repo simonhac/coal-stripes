@@ -10,15 +10,21 @@ import { env } from 'cloudflare:workers';
 export const Route = createFileRoute('/api/health')({
   server: {
     handlers: {
-      GET: () =>
-        Response.json(
+      GET: ({ request }) => {
+        const cf = (request as Request & { cf?: Record<string, unknown> }).cf;
+        return Response.json(
           {
             ok: true,
             runtime: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
             hasOpenElectricityKey: Boolean(env.OPENELECTRICITY_API_KEY),
+            // `cf` is populated by Cloudflare's edge and absent in local dev —
+            // which is how we tell whether a self-loopback is possible.
+            hasCf: Boolean(cf),
+            colo: cf?.colo ?? null,
           },
           { headers: { 'Cache-Control': 'no-store' } },
-        ),
+        );
+      },
     },
   },
 });

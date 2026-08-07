@@ -7,6 +7,7 @@ import {
 import { CalendarDate, parseDate } from '@internationalized/date';
 import { getAESTDateTimeString, networkDayFromInterval, getTodayAEST } from '@/shared/date-utils';
 import { NoDataFound, type NetworkCode } from 'openelectricity';
+import { envFlag, readEnv } from '@/server/runtime-env';
 
 // A single coal generating unit as returned by the facilities endpoint.
 interface UnitRecord {
@@ -104,7 +105,7 @@ interface EnergyRow {
 
 // Opt-in verbose logging: set DEBUG_OE=1 to trace fetches/caching locally.
 const debug = (...args: unknown[]): void => {
-  if (process.env.DEBUG_OE) console.log(...args);
+  if (envFlag('DEBUG_OE')) console.log(...args);
 };
 
 // The OpenElectricity SDK throws NoDataFound (HTTP 404) when a query's date
@@ -589,7 +590,7 @@ let serviceInstance: CapFacDataService | null = null;
 
 export function getCapFacDataService(): CapFacDataService {
   if (!serviceInstance) {
-    const apiKey = process.env.OPENELECTRICITY_API_KEY;
+    const apiKey = readEnv('OPENELECTRICITY_API_KEY');
     if (!apiKey) {
       throw new Error('API key not configured');
     }

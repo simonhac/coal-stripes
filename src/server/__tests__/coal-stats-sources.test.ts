@@ -9,11 +9,13 @@
  * failed to load is reported as null rather than silently dropped, and the
  * oldest/newest extremes are correct.
  *
- * `computeCoalStats` self-fetches /api/capacity-factors, so global fetch is
- * mocked; the aggregation itself is exercised elsewhere.
+ * `computeCoalStats` reads each year back through Workers Cache via a loopback
+ * into our own entrypoint; the Jest mock for `cloudflare:workers` forwards that
+ * to global fetch, which is what these tests stub. The aggregation itself is
+ * exercised elsewhere.
  */
 import { computeCoalStats } from '@/server/coal-stats-service';
-import { earliestDataYear, currentDataYear } from '@/server/cache-warmer';
+import { earliestDataYear, currentDataYear } from '@/server/data-years';
 import type { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 
 /** A minimal, unit-free payload: enough shape for the fetch/provenance path. */
@@ -37,13 +39,21 @@ const stampFor = (year: number): string =>
 function mockFetch(failYears: number[] = []): jest.Mock {
   const fn = jest.fn(async (url: string) => {
     const year = Number.parseInt(new URL(url).searchParams.get('year') ?? '', 10);
+    // arrayBuffer: the loopback drains a failed response before discarding it,
+    // so the subrequest doesn't stay open.
     if (failYears.includes(year)) {
-      return { ok: false, status: 500, json: async () => ({}) } as unknown as Response;
+      return {
+        ok: false,
+        status: 500,
+        json: async () => ({}),
+        arrayBuffer: async () => new ArrayBuffer(0),
+      } as unknown as Response;
     }
     return {
       ok: true,
       status: 200,
       json: async () => payload(stampFor(year)),
+      arrayBuffer: async () => new ArrayBuffer(0),
     } as unknown as Response;
   });
   global.fetch = fn as unknown as typeof fetch;

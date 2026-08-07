@@ -17,6 +17,9 @@ module.exports = {
   testTimeout: 60000, // 60 seconds for API calls
   setupFilesAfterEnv: ['<rootDir>/jest.setup.cjs'],
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1'
+    '^@/(.*)$': '<rootDir>/src/$1',
+    // Jest runs in Node, which has no `cloudflare:workers`. See the mock's
+    // header — this goes away with the move to vitest-pool-workers.
+    '^cloudflare:workers$': '<rootDir>/test/mocks/cloudflare-workers.cjs'
   }
 };

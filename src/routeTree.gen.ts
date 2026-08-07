@@ -10,11 +10,19 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiCapacityFactorsRouteImport } from './routes/api.capacity-factors'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
+import { Route as ApiStatsRouteImport } from './routes/api.stats'
+import { Route as ApiAdminPurgeRouteImport } from './routes/api.admin.purge'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCapacityFactorsRoute = ApiCapacityFactorsRouteImport.update({
+  id: '/api/capacity-factors',
+  path: '/api/capacity-factors',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -22,31 +30,69 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiStatsRoute = ApiStatsRouteImport.update({
+  id: '/api/stats',
+  path: '/api/stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminPurgeRoute = ApiAdminPurgeRouteImport.update({
+  id: '/api/admin/purge',
+  path: '/api/admin/purge',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/stats': typeof ApiStatsRoute
+  '/api/admin/purge': typeof ApiAdminPurgeRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/stats': typeof ApiStatsRoute
+  '/api/admin/purge': typeof ApiAdminPurgeRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/stats': typeof ApiStatsRoute
+  '/api/admin/purge': typeof ApiAdminPurgeRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/health'
+  fullPaths:
+    | '/'
+    | '/api/capacity-factors'
+    | '/api/health'
+    | '/api/stats'
+    | '/api/admin/purge'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/health'
-  id: '__root__' | '/' | '/api/health'
+  to:
+    | '/'
+    | '/api/capacity-factors'
+    | '/api/health'
+    | '/api/stats'
+    | '/api/admin/purge'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/capacity-factors'
+    | '/api/health'
+    | '/api/stats'
+    | '/api/admin/purge'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiCapacityFactorsRoute: typeof ApiCapacityFactorsRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiStatsRoute: typeof ApiStatsRoute
+  ApiAdminPurgeRoute: typeof ApiAdminPurgeRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -58,6 +104,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/capacity-factors': {
+      id: '/api/capacity-factors'
+      path: '/api/capacity-factors'
+      fullPath: '/api/capacity-factors'
+      preLoaderRoute: typeof ApiCapacityFactorsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/health': {
       id: '/api/health'
       path: '/api/health'
@@ -65,12 +118,29 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/stats': {
+      id: '/api/stats'
+      path: '/api/stats'
+      fullPath: '/api/stats'
+      preLoaderRoute: typeof ApiStatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/purge': {
+      id: '/api/admin/purge'
+      path: '/api/admin/purge'
+      fullPath: '/api/admin/purge'
+      preLoaderRoute: typeof ApiAdminPurgeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiCapacityFactorsRoute: ApiCapacityFactorsRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiStatsRoute: ApiStatsRoute,
+  ApiAdminPurgeRoute: ApiAdminPurgeRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

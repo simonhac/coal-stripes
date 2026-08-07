@@ -31,8 +31,6 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
-    ".next/types/**/*.ts",
-    "next-env.d.ts",
     ".next-build/types/**/*.ts"
   ],
   "exclude": [
@@ -44,13 +42,7 @@
     ".context",
     "dist",
     ".wrangler",
-    // The Worker half is checked by tsconfig.worker.json instead. Its
-    // `worker-configuration.d.ts` replaces the DOM globals (Response.json()
-    // returns unknown, not any), which breaks client code if applied here.
-    "src/routes",
-    "src/router.tsx",
-    "src/routeTree.gen.ts",
-    "worker-configuration.d.ts",
-    "vite.config.ts"
+    ".next",
+    ".next-build"
   ]
 }

@@ -143,7 +143,7 @@ function PurgeCaches() {
       },
       body: JSON.stringify(body),
     });
-    const json = await res.json();
+    const json = (await res.json()) as { error?: string } | null;
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${json?.error ?? res.statusText}`);
     return json as PurgeResponse;
   }

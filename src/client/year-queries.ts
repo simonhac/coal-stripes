@@ -5,7 +5,8 @@ import { filterFleet } from '@/shared/fleet-filter';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getTodayAEST } from '@/shared/date-utils';
 import { yearCachePolicy } from '@/shared/config';
-import { BUILD_ID, capacityFactorsPath } from '@/shared/capacity-factors-url';
+import { capacityFactorsPath } from '@/shared/capacity-factors-url';
+import { CF_DTO_VERSION } from '@/shared/config';
 import { tileTimingRecorder } from './tile-timing-recorder';
 
 /**
@@ -58,7 +59,7 @@ export interface YearPayload {
  */
 export function yearDataQueryOptions(year: number) {
   return queryOptions({
-    queryKey: ['capFacYearData', year, BUILD_ID] as const,
+    queryKey: ['capFacYearData', year, CF_DTO_VERSION] as const,
     queryFn: async ({ signal }): Promise<YearPayload> => {
       const response = await fetch(capacityFactorsPath(year), { signal });
 
@@ -93,7 +94,7 @@ export function yearDataQueryOptions(year: number) {
  */
 export function yearQueryOptions(queryClient: QueryClient, mode: FleetMode, year: number) {
   return queryOptions({
-    queryKey: ['capFacYear', mode, year, BUILD_ID] as const,
+    queryKey: ['capFacYear', mode, year, CF_DTO_VERSION] as const,
     queryFn: async ({ signal }): Promise<CapFacYear> => {
       // Time the whole fetch + parse + build as `fetch-build` — the latency a
       // user feels per tile. Network overhead ≈ fetch-build − year-build. On a

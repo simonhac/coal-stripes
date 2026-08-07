@@ -108,17 +108,31 @@ export const TILE_CONFIG = {
 } as const;
 
 
-// Cache freshness policy, shared by the server route (unstable_cache
-// revalidate + Cache-Control headers) and the client (TanStack Query
-// staleTime).
+// Bump to invalidate every cached capacity-factor payload — the replacement for
+// the old CF_CACHE_VERSION + `&v=BUILD_ID` pair.
+//
+// It rides on the Cache-Tag header (`cf-dto-<version>`), so a change is applied
+// by purging that one tag rather than by forking every URL. Bump it whenever the
+// DTO's *shape* changes in a way the client can't tolerate — e.g. when per-unit
+// `status` was added and the `current` fleet view began depending on it. Deploys
+// alone do NOT need a bump: wrangler.jsonc sets cross_version_cache so entries
+// deliberately survive them.
+export const CF_DTO_VERSION = 'v1';
+
+// Cache freshness policy, shared by the server route (Cache-Control headers)
+// and the client (TanStack Query staleTime).
 //
 // NEM data is subject to revision — in January we can easily see revisions to
 // data from the December just past — so no tier treats past years as
-// immutable. These windows set how often a warmed entry revalidates; the cron
-// warmer (warm-all, every 10 minutes over every year back to 1999, for both
-// fleet modes) keeps every tier permanently warm, and stale-while-revalidate
-// means a warmed entry is served stale instantly while it refreshes in the
-// background, so users never feel a cold fetch regardless of these windows.
+// immutable. These windows set how long Workers Cache serves an entry before it
+// must be rebuilt.
+//
+// These windows are only comfortable because the cron warmer sweeps every year
+// every 10 minutes and so refills entries long before they lapse. Do NOT assume
+// stale-while-revalidate covers the gap: it is set on the response but Workers
+// Cache does not honour it — a lapsed entry blocks the next visitor for the full
+// OpenElectricity fetch (3–9 s). Measured on both Free and Paid,
+// .context/spike/RESULTS.md.
 export type YearCacheTier = 'current' | 'recent' | 'archive';
 
 export interface YearCachePolicy {

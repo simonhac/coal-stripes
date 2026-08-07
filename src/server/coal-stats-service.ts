@@ -13,10 +13,10 @@
  * were alive are counted as holes and surfaced so no total is presented as
  * solid when it isn't (see @/shared/data-gaps and PeriodCoverage).
  *
- * Data is pulled by self-fetching the cached /api/capacity-factors route once
- * per year — reusing the warm Data Cache rather than re-hitting OpenElectricity
- * — exactly as the cache warmer does. The whole result is cached daily by the
- * /api/stats route.
+ * Data is pulled by looping back into the cached /api/capacity-factors route
+ * once per year — reusing the warm cache rather than re-hitting OpenElectricity
+ * — exactly as the cache warmer does. The whole result is cached for a day by
+ * the /api/stats route's own response headers.
  */
 
 import { CalendarDate, parseDate } from '@internationalized/date';
@@ -32,12 +32,13 @@ import type {
   StatValue,
 } from '@/shared/types';
 import { DATE_BOUNDARIES } from '@/shared/config';
-import { capacityFactorsPath } from '@/shared/capacity-factors-url';
 import { isInFleet } from '@/shared/fleet-filter';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getAESTDateTimeString, getDaysBetween, getQuarter } from '@/shared/date-utils';
 import { formatPeriodLabel, type Granularity } from '@/shared/energy-format';
-import { getBaseUrl, currentDataYear, earliestDataYear, yearRange } from '@/server/cache-warmer';
+import { getCapFacDataService } from '@/server/cap-fac-data-service';
+import { currentDataYear, earliestDataYear, yearRange } from '@/server/data-years';
+import { loopbackAvailable, loopbackYear } from '@/server/loopback';
 import { mapPool } from '@/server/map-pool';
 
 const STATS_VERSION = '1.0';
@@ -80,32 +81,62 @@ interface RowAccum {
 }
 
 /**
- * One year's full-roster payload. The fleet view is applied afterwards, by
- * filterFleet — so computing both modes reads the same cached payloads rather
- * than fetching each year twice.
+ * How each year's full-roster payload is obtained. The fleet view is applied
+ * afterwards, by isInFleet — so computing both modes reads the same payloads
+ * rather than fetching each year twice.
  *
- * The URL carries the build id (capacityFactorsPath) and that is load-bearing,
- * not cosmetic. `cache: 'no-store'` governs Next's own fetch cache; it does
- * NOT stop the Vercel edge answering, so an unversioned URL could hand this a
- * payload built by a previous deploy. That matters now the fleet view is
- * derived from a per-unit `status`: a pre-status payload would fail every
- * `current` test, and the day-long stats cache would then store an empty
- * current-fleet result.
+ * Normally this loops back into our own entrypoint, reading through Workers
+ * Cache: a warm year costs a few milliseconds and only a genuine miss reaches
+ * OpenElectricity. Where a loopback is impossible (miniflare — see
+ * @/server/loopback) it falls back to building each year here instead. That path
+ * is only *slower*, never wrong: same DTO, same service, just no cache in front.
+ * Locally there is no Workers Cache to miss, so nothing is lost; in production
+ * it would mean ~28 cold OE fetches, which is why it is never chosen there.
+ *
+ * The decision is made once per rebuild rather than per year, deliberately: a
+ * failed loopback cannot be caught and retried, because miniflare cancels the
+ * whole request when it sees one.
+ *
+ * The old version fetched an absolute URL carrying `&v=BUILD_ID`, because the
+ * Vercel edge could otherwise hand back a payload built by a previous deploy —
+ * which mattered once the fleet view came to depend on each unit's `status`, as
+ * a pre-status payload fails every `current` test and the day-long stats cache
+ * would then store an empty current-fleet result. That whole hazard is gone:
+ * there is one cache, and shape changes are invalidated by the
+ * `cf-dto-<version>` tag instead of by forking the URL.
  */
-async function fetchYear(
-  baseUrl: string,
-  year: number,
-): Promise<GeneratingUnitCapFacHistoryDTO | null> {
-  const res = await fetch(`${baseUrl}${capacityFactorsPath(year)}`, {
-    headers: { 'user-agent': 'coal-stripes-stats' },
-    cache: 'no-store',
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as GeneratingUnitCapFacHistoryDTO;
+function yearReader(): (year: number) => Promise<GeneratingUnitCapFacHistoryDTO | null> {
+  if (loopbackAvailable()) {
+    return (year) => loopbackYear<GeneratingUnitCapFacHistoryDTO>(year);
+  }
+
+  console.warn(
+    JSON.stringify({
+      log: 'coal-stats:no-loopback',
+      detail: 'reading years directly from CapFacDataService (uncached) — expected under vite dev / wrangler dev',
+    }),
+  );
+  return async (year) => {
+    try {
+      return await getCapFacDataService().getCapacityFactors(year);
+    } catch (error) {
+      // Never swallow this. A year that fails becomes `null`, which the DTO
+      // reports honestly as "no data" — but silently returning 28 nulls looks
+      // exactly like a successful build of an empty fleet, and /stats would
+      // render zeros as though they were real.
+      console.error(
+        JSON.stringify({
+          log: 'coal-stats:year-failed',
+          year,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return null;
+    }
+  };
 }
 
 export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationStatsDTO> {
-  const baseUrl = getBaseUrl();
   const bounds = getDateBoundaries();
   const latestDataDay = bounds.latestDataDay;
 
@@ -124,7 +155,8 @@ export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationS
 
   // 1. Fetch every year (bounded concurrency; cached upstream) and assemble each
   //    unit's whole-of-history daily series.
-  const dtos = await mapPool(years, 5, (y) => fetchYear(baseUrl, y));
+  const readYear = yearReader();
+  const dtos = await mapPool(years, 5, readYear);
 
   // Record where the data came from. Each year's payload carries its own
   // `created_at` — when it was last built from OpenElectricity — which survives
