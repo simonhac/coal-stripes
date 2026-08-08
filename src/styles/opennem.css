@@ -111,6 +111,11 @@ header a {
   position: fixed;
 }
 
+.sticky {
+  position: -webkit-sticky; /* For Safari */
+  position: sticky;
+}
+
 .top-0 {
   top: 0;
 }
@@ -217,8 +222,28 @@ header a {
   max-width: 1200px;
   margin: 0 auto;
   padding: var(--app-padding);
-  padding-top: calc(var(--app-padding) + 65px); /* Account for fixed header with proper spacing */
   position: relative; /* Ensure sticky children work */
+}
+
+/* Sticky scope for the page header. The header is `position: sticky` inside
+   this wrapper, so it unpins exactly when the wrapper's bottom edge reaches the
+   top of the viewport — and the wrapper's bottom edge IS the top of the first
+   `.opennem-region`, which is where that region's sticky header starts pinning.
+   The two edges therefore travel together: the region header pushes the page
+   header out of view rather than sliding over it, with no magic offsets and no
+   scroll listener.
+
+   Do not give this wrapper `overflow`, `transform`, `filter` or `contain` — any
+   of them would create a new containing block and break the descendant sticky. */
+.opennem-page-head > .opennem-stripes-container {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* The viz must start flush against the wrapper's bottom edge for the handover
+   to land on the pixel. */
+.opennem-page-head + .opennem-stripes-container {
+  padding-top: 0;
 }
 
 .opennem-stripes-header {
@@ -587,16 +612,18 @@ a.opennem-facility-label:focus-visible {
   color: #444;
   border-radius: 1px;
   flex-shrink: 0;
+  padding: 3px 6px 2px; /* 6px each side — date sits 6px in from the chip's RHS */
 }
 
 /* Reserve exactly the widest single date ("28 May 2026" ≈ 67px at this font) so the
-   date area never changes width as you scrub across days. tabular-nums keeps digits
-   equal-advance; a date range (region/facility hover) exceeds this and expands rather
-   than clips. */
+   date area never changes width as you scrub across days. Right-aligned with
+   tabular-nums, so the date's right edge stays pinned and shorter dates grow leftward
+   into the reserved space; a date range (region/facility hover) exceeds this and
+   expands rather than clips. */
 .hover-date time {
   display: inline-block;
   min-width: 68px;
-  text-align: center;
+  text-align: right;
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
 }
@@ -687,7 +714,6 @@ a.opennem-facility-label:focus-visible {
   /* Push content to edges on mobile */
   .opennem-stripes-container {
     padding: 0 4px;
-    padding-top: calc(60px + 8px); /* Fixed header height + spacing on mobile */
   }
   
   /* Reduce region spacing */
@@ -1119,7 +1145,6 @@ a.opennem-facility-label:focus-visible {
   max-width: 1100px;
   margin: 0 auto;
   padding: var(--app-padding);
-  padding-top: calc(var(--app-padding) + 65px); /* clear the fixed header */
   font-family: var(--font-stack);
   color: var(--primary);
 }
