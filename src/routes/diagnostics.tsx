@@ -162,6 +162,7 @@ interface Probe {
   source: string;
   age: string | null;
   builtAt: string | null;
+  dataChangedAt: string | null;
   ms: number;
 }
 
@@ -187,6 +188,7 @@ async function probeYear(year: number): Promise<Probe> {
     source: res.headers.get('x-cf-source') ?? '—',
     age: res.headers.get('age'),
     builtAt: res.headers.get('x-cf-built-at'),
+    dataChangedAt: res.headers.get('x-cf-data-changed-at'),
     ms: Math.round(performance.now() - started),
   };
 }
@@ -227,7 +229,10 @@ function ServerCacheHealth() {
         OpenElectricity. An <code>upstream</code> on an established year is the one result worth
         investigating. <code>x-cf-built-at</code> is when the payload was last assembled from
         OpenElectricity, and travels with the body, so it stays honest however many times the
-        response is replayed.
+        response is replayed. <code>x-cf-data-changed-at</code> is when the numbers last actually
+        moved: the gap between the two is how much of the refresh schedule is re-fetching data
+        that never changes, and is the evidence for whether the archive tier&rsquo;s weekly
+        rebuild is worth keeping.
       </p>
 
       {error && <p style={{ color: '#c00', fontSize: '13px' }}>{error.message}</p>}
@@ -237,7 +242,10 @@ function ServerCacheHealth() {
           <p style={{ margin: '0 0 10px', color: '#555', fontSize: '13px' }}>
             {warm} of {data.length} years warm.
           </p>
-          <div style={{ overflowX: 'auto', maxHeight: '520px', overflowY: 'auto' }}>
+          {/* One row per year, so the whole table fits inline. A vertical scroll
+              pane here reads as a truncated table, because macOS hides the
+              scrollbar until you scroll. */}
+          <div style={{ overflowX: 'auto' }}>
             <table style={tableStyle}>
               <thead>
                 <tr>
@@ -247,6 +255,7 @@ function ServerCacheHealth() {
                   <th style={numCell}>Age</th>
                   <th style={numCell}>Time</th>
                   <th style={headCell}>Built at (AEST)</th>
+                  <th style={headCell}>Data changed (AEST)</th>
                 </tr>
               </thead>
               <tbody>
@@ -262,6 +271,7 @@ function ServerCacheHealth() {
                     <td style={numCell}>{p.age ?? '—'}</td>
                     <td style={numCell}>{p.ms} ms</td>
                     <td style={cell}>{p.builtAt ?? '—'}</td>
+                    <td style={cell}>{p.dataChangedAt ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>

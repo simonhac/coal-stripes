@@ -18,15 +18,19 @@ export default {
   /**
    * Keep the R2 store current.
    *
-   * This handler deliberately does NOT try to touch Workers Cache. Cloudflare
+   * This handler deliberately does NOT try to *warm* Workers Cache. Cloudflare
    * excludes scheduled invocations from the cache entirely, subrequests
    * included, so warming from here is impossible — see @/server/store-refresher
    * and docs/workers-behaviour-measured.md. Bindings work normally, which is
    * why the store is R2 and not a warm cache.
+   *
+   * Purging is a different thing and is passed `ctx.cache` for it: a purge is a
+   * control-plane call that neither reads nor writes the cache, and without it
+   * an R2 rewrite stays invisible behind the edge copy for a further full
+   * `s-maxage`.
    */
   async scheduled(_event: ScheduledController, _env: unknown, ctx: ExecutionContext) {
-    const summary = await refreshAll();
+    const summary = await refreshAll(ctx.cache);
     console.log(JSON.stringify({ log: 'refresh', ...summary }));
-    ctx.waitUntil(Promise.resolve());
   },
 };
