@@ -153,11 +153,23 @@ export interface StatsSources {
   newestBuiltAt: string | null;
 }
 
+/**
+ * The full /api/stats payload.
+ *
+ * Whole-of-history records over every coal unit that ever operated. There is no
+ * fleet view here and no `?fleet=` parameter: /stats has only ever asked for the
+ * full fleet, and a "records since 1999" table that excluded retired plants
+ * would omit most of the records worth reporting — Hazelwood and Liddell are the
+ * point, not an edge case.
+ *
+ * FleetMode remains what it says it is: a view selector for the visualisation,
+ * applied client-side over the capacity-factors roster. It appears in no server
+ * cache key or request URL, here or anywhere.
+ */
 export interface CoalGenerationStatsDTO {
   type: 'coal_generation_stats';
   version: string;
   created_at: string;
-  fleet: FleetMode;
   latestDataDay: string; // ISO date of the most recent day of data
   units: 'MWh';
   rows: StatRow[];

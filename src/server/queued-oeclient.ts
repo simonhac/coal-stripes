@@ -49,7 +49,7 @@ const QUEUE_OPTIONS = { concurrency: 10, interval: 100, intervalCap: 1 } as cons
  * uses it. Pacing is preserved where it matters — across the several OE calls a
  * single year's build fans out into. What is lost is pacing *between*
  * concurrent requests; that is now bounded instead by Workers Cache collapsing
- * duplicate misses and by the warmer's own concurrency limit.
+ * duplicate misses and by the store refresher's own concurrency limit.
  */
 const queueStore = new AsyncLocalStorage<PQueue>();
 
@@ -66,9 +66,9 @@ export function withRequestQueue<T>(fn: () => Promise<T>): Promise<T> {
  * every call site.
  *
  * p-queue runs higher numbers first. Interactive work — a visitor waiting on a
- * year — is the default; the cron warmer opts down to `background` so its sweep
- * can fan out several years at once without a visitor's cold fetch ever having
- * to wait behind it.
+ * year — is the default; the cron refresher opts down to `background` so its
+ * sweep can fan out several years at once without a visitor's cold fetch ever
+ * having to wait behind it.
  *
  * The context has to travel out-of-band because the innermost function is
  * wrapped by `unstable_cache`, whose cache key is derived from its arguments —

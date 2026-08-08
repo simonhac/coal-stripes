@@ -1,0 +1,174 @@
+/**
+ * The R2 store, exercised against a real bucket.
+ *
+ * This runs inside **workerd** with miniflare's R2 implementation, not against a
+ * hand-written stub, because the things worth pinning here are all properties of
+ * R2 itself: that customMetadata survives a round trip, that `head` returns it
+ * without the body, and that a missing key is a null rather than a throw. A mock
+ * would assert our idea of R2, which is exactly the thing that could be wrong.
+ *
+ * These tests never reach OpenElectricity — every path exercised here is the
+ * stored-object path. `readYear`'s upstream backfill is deliberately not covered:
+ * it would need a live API key and would cost a real cold fetch.
+ */
+import { beforeEach, describe, expect, it } from 'vitest';
+import { env } from 'cloudflare:workers';
+import { now } from '@internationalized/date';
+import { getStats, getYear, putStats, putYear, statsIsDue, statsKey, yearIsDue, yearKey } from '@/server/year-store';
+import { currentDataYear } from '@/server/data-years';
+import { CF_DTO_VERSION, YEAR_CACHE_TIERS } from '@/shared/config';
+import { getAESTDateTimeString } from '@/shared/date-utils';
+import type { CoalGenerationStatsDTO, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
+
+const bucket = (env as unknown as { DATA: R2Bucket }).DATA;
+
+function payload(createdAt: string): GeneratingUnitCapFacHistoryDTO {
+  return { type: 'capacity_factors', version: '1.0', created_at: createdAt, data: [] };
+}
+
+/** An AEST stamp `seconds` in the past, in the format the payloads carry. */
+function stampSecondsAgo(seconds: number): string {
+  // toDate() is the interop boundary getAESTDateTimeString expects; everything
+  // up to it stays in @internationalized/date.
+  return getAESTDateTimeString(now('Australia/Brisbane').subtract({ seconds }).toDate());
+}
+
+describe('year-store', () => {
+  beforeEach(async () => {
+    const listed = await bucket.list();
+    await Promise.all(listed.objects.map((o) => bucket.delete(o.key)));
+  });
+
+  it('runs in workerd with an R2 binding', () => {
+    expect(navigator.userAgent).toBe('Cloudflare-Workers');
+    expect(bucket).toBeDefined();
+  });
+
+  it('namespaces keys by DTO version, so a bump cannot read the old shape', () => {
+    expect(yearKey(2024)).toBe(`${CF_DTO_VERSION}/years/2024.json`);
+    expect(statsKey()).toBe(`${CF_DTO_VERSION}/stats.json`);
+  });
+
+  it('round-trips a year unchanged, with builtAt in metadata', async () => {
+    const dto = payload('2026-08-08T01:02:03+10:00');
+    await putYear(2024, dto);
+
+    const stored = await getYear(2024);
+    expect(stored).not.toBeNull();
+    // builtAt must be readable WITHOUT parsing the body — that is what lets the
+    // read path stream 180 KB straight through.
+    expect(stored!.customMetadata?.builtAt).toBe('2026-08-08T01:02:03+10:00');
+    expect(await stored!.json()).toEqual(dto);
+  });
+
+  it('returns null for a year that was never stored', async () => {
+    expect(await getYear(2003)).toBeNull();
+  });
+
+  it('never stores a future year', async () => {
+    const future = currentDataYear() + 1;
+    await putYear(future, payload(getAESTDateTimeString()));
+
+    expect(await getYear(future)).toBeNull();
+    // And it is never due, so the refresher won't spend a build on it either.
+    expect(await yearIsDue(future)).toBe(false);
+  });
+
+  it('round-trips the stats payload', async () => {
+    const dto = {
+      type: 'coal_generation_stats',
+      version: '1.0',
+      created_at: '2026-08-08T01:02:03+10:00',
+      latestDataDay: '2026-08-07',
+      units: 'MWh',
+      rows: [],
+      dataQuality: { totalHoleUnitDays: 0, gaps: [] },
+    } as CoalGenerationStatsDTO;
+
+    await putStats(dto);
+
+    const stored = await getStats();
+    expect(stored).not.toBeNull();
+    expect(await stored!.json()).toEqual(dto);
+  });
+
+  describe('statsIsDue', () => {
+    const stats = (createdAt: string) => ({
+      type: 'coal_generation_stats',
+      version: '1.0',
+      created_at: createdAt,
+      latestDataDay: '2026-08-07',
+      units: 'MWh',
+      rows: [],
+      dataQuality: { totalHoleUnitDays: 0, gaps: [] },
+    }) as CoalGenerationStatsDTO;
+
+    it('is due when nothing is stored', async () => {
+      expect(await statsIsDue()).toBe(true);
+    });
+
+    it('is not due immediately after a write', async () => {
+      await putStats(stats(getAESTDateTimeString()));
+      expect(await statsIsDue()).toBe(false);
+    });
+
+    // The backstop: if a fold fails after years were written, later ticks see an
+    // unchanged set of years, so age is the only thing that can trigger a retry.
+    it('is due once a day old, even though no year moved', async () => {
+      await putStats(stats(stampSecondsAgo(60 * 60 * 25)));
+      expect(await statsIsDue()).toBe(true);
+    });
+  });
+
+  describe('yearIsDue', () => {
+    it('is due when nothing is stored', async () => {
+      expect(await yearIsDue(2024)).toBe(true);
+    });
+
+    it('is not due immediately after a write', async () => {
+      await putYear(2024, payload(getAESTDateTimeString()));
+      expect(await yearIsDue(2024)).toBe(false);
+    });
+
+    it('honours the archive tier: a week old is due, a day old is not', async () => {
+      const archiveYear = currentDataYear() - 10;
+      const week = YEAR_CACHE_TIERS.archive.revalidateSeconds;
+
+      await putYear(archiveYear, payload(stampSecondsAgo(week - 3600)));
+      expect(await yearIsDue(archiveYear)).toBe(false);
+
+      await putYear(archiveYear, payload(stampSecondsAgo(week + 3600)));
+      expect(await yearIsDue(archiveYear)).toBe(true);
+    });
+
+    it('honours the current tier: an hour old is due', async () => {
+      const year = currentDataYear();
+      const hour = YEAR_CACHE_TIERS.current.revalidateSeconds;
+
+      await putYear(year, payload(stampSecondsAgo(hour - 300)));
+      expect(await yearIsDue(year)).toBe(false);
+
+      await putYear(year, payload(stampSecondsAgo(hour + 300)));
+      expect(await yearIsDue(year)).toBe(true);
+    });
+
+    it('rewrites an object whose builtAt is missing or unparseable', async () => {
+      // Written by something that predates this scheme.
+      await bucket.put(yearKey(2024), JSON.stringify(payload('x')), {
+        customMetadata: { builtAt: 'not a timestamp' },
+      });
+      expect(await yearIsDue(2024)).toBe(true);
+
+      await bucket.put(yearKey(2024), JSON.stringify(payload('x')));
+      expect(await yearIsDue(2024)).toBe(true);
+    });
+
+    it('accepts an explicit reference time', async () => {
+      const archiveYear = currentDataYear() - 10;
+      await putYear(archiveYear, payload(getAESTDateTimeString()));
+
+      const inTwoWeeks = now('Australia/Brisbane').add({ weeks: 2 });
+      expect(await yearIsDue(archiveYear, inTwoWeeks)).toBe(true);
+    });
+  });
+});

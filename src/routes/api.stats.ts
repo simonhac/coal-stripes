@@ -1,39 +1,42 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { computeCoalStats } from '@/server/coal-stats-service';
 import { coalStatsHeaders, NO_STORE } from '@/server/cache-headers';
-import type { FleetMode } from '@/shared/types';
+import { getStats, putStats } from '@/server/year-store';
 
 /**
  * Whole-of-history coal generation records.
  *
- * The `unstable_cache` wrapper the Next version used is gone: Workers Cache
- * holds the response for a day (see coalStatsHeaders) and collapses concurrent
- * misses, so this handler only runs on a real rebuild. The rebuild itself is
- * cheap because computeCoalStats reads its 28 years back through the cache via
- * a loopback — see @/server/loopback.
+ * Precomputed into R2 by the cron, so the normal path here is a single R2 read
+ * streamed through — no folding of 28 years, and no reading of 28 year payloads
+ * to fold. Only a cold bucket reaches computeCoalStats, and that result is
+ * stored on the way out.
  *
- * `?fleet=` is validated rather than defaulted silently, because the two modes
- * are separate cache entries (the key includes the query string) and a typo
- * would otherwise quietly populate a third.
+ * The route takes no parameters. There used to be a `?fleet=full|current`,
+ * which forked the cache entry and doubled the warmer's work for a payload
+ * nothing ever requested — /stats has only ever asked for the full fleet, and
+ * a records-since-1999 table without Hazelwood and Liddell in it would be
+ * missing the point. FleetMode stays what it is elsewhere: a client-side view
+ * selector over the capacity-factors roster, in no server URL.
  */
 export const Route = createFileRoute('/api/stats')({
   server: {
     handlers: {
-      GET: async ({ request }) => {
+      GET: async () => {
         try {
-          const { searchParams } = new URL(request.url);
-          const fleetParam = searchParams.get('fleet');
-          if (fleetParam !== null && fleetParam !== 'full' && fleetParam !== 'current') {
-            return Response.json(
-              { error: "Invalid fleet parameter (expected 'full' or 'current')" },
-              { status: 400, headers: NO_STORE },
-            );
+          const stored = await getStats();
+          if (stored) {
+            const headers = coalStatsHeaders();
+            headers.set('x-cf-source', 'r2');
+            headers.set('Content-Type', 'application/json');
+            return new Response(stored.body, { headers });
           }
-          const mode: FleetMode = fleetParam === 'current' ? 'current' : 'full';
 
-          const data = await computeCoalStats(mode);
+          const data = await computeCoalStats();
+          await putStats(data);
 
-          return Response.json(data, { headers: coalStatsHeaders(mode) });
+          const headers = coalStatsHeaders();
+          headers.set('x-cf-source', 'upstream');
+          return Response.json(data, { headers });
         } catch (error) {
           console.error('Stats API Error:', error);
           return Response.json(

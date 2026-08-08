@@ -169,3 +169,33 @@ nothing.** Otherwise the probe warms the very thing it claims to measure.
 Note also that `docs/cloudflare.md` — the original migration proposal — stated
 this limitation correctly, and it was "corrected" away on the strength of the
 spike. The docs were right and the experiment was wrong.
+
+---
+
+## Resolution: the warmer question is moot
+
+**2026-08-08.** Nothing above is retracted — items 10 and 11 are still true, and
+this file is kept as the record of how the false positive happened. But the
+problem they describe no longer applies, because the app stopped trying to keep
+Workers Cache warm.
+
+Year payloads and the stats payload are now stored in R2, written by the same
+cron. Bindings are not subject to the "no cache involvement" limitation that
+defeats every warming mechanism, so a `scheduled` handler can write to R2
+normally. Workers Cache stays in front purely for latency.
+
+That turns both negative results into non-issues:
+
+- **Item 10** (cron cannot warm the cache): still true, still not worth
+  re-attempting. It no longer matters, because there is nothing to warm.
+- **Item 11** (`stale-while-revalidate` not honoured): still true. The request
+  that blocks to revalidate now reads R2 (~10 ms) instead of OpenElectricity
+  (measured at 12.8 s on the live deployment), so the cost of an expiry fell by
+  three orders of magnitude.
+
+The verification lesson survives intact and is now built into the code: the
+`x-cf-source: r2 | upstream` response header answers "did a visitor pay for
+OpenElectricity?" from outside, on a request the server did not make. That is the
+signal the spike lacked.
+
+See `docs/caching-and-diagnostics.md` § "Why this is a store and not a warmer".

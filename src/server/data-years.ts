@@ -1,9 +1,8 @@
 /**
  * The span of years the app holds data for.
  *
- * Extracted from `cache-warmer.ts` when that module was deleted — these three
- * are pure date helpers with no Vercel or cache machinery in them, and the stats
- * service, the warmer and the purge endpoint all need them.
+ * Pure date helpers with no cache or storage machinery in them. The stats
+ * service, the store refresher and the purge endpoint all need them.
  */
 import { DATE_BOUNDARIES } from '@/shared/config';
 import { getTodayAEST } from '@/shared/date-utils';

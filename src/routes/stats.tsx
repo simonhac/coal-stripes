@@ -288,7 +288,7 @@ function DataRecency({ data }: { data: CoalGenerationStatsDTO }) {
 export const Route = createFileRoute('/stats')({ component: StatsPage });
 
 function StatsPage() {
-  const { data, isLoading, isError, error } = useQuery(statsQueryOptions('full'));
+  const { data, isLoading, isError, error } = useQuery(statsQueryOptions());
 
   return (
     <>

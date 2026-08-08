@@ -2,49 +2,31 @@
  * The Worker entrypoint.
  *
  * TanStack Start's own `@tanstack/react-start/server-entry` only exports a
- * `fetch` handler, so this wraps it to add `scheduled` for the cache warmer.
+ * `fetch` handler, so this wraps it to add `scheduled` for the store refresher.
  * `wrangler.jsonc` points `main` here instead.
  *
  * Keeping the DEFAULT export is load-bearing, not stylistic: the Workers Cache
- * key includes which entrypoint served a request, and the warmer reaches this
- * same entrypoint via `ctx.exports.default` (see @/server/loopback). A named
- * entrypoint would populate a different key and warm nothing anyone reads.
+ * key includes which entrypoint served a request, so a named entrypoint would
+ * populate a different key from the one visitors read.
  */
 import startEntry from '@tanstack/react-start/server-entry';
-import { warmAll } from '@/server/cache-warmer';
-import { withSelfFetch } from '@/server/loopback';
+import { refreshAll } from '@/server/store-refresher';
 
 export default {
   fetch: startEntry.fetch,
 
   /**
-   * The scheduled invocation itself is never cached — Cloudflare excludes
-   * non-fetch handlers by design — but its loopback into the fetch entrypoint
-   * is a fresh, cacheable invocation. That is what makes cron warming work at
-   * all, and it is the opposite of what docs/cloudflare.md §3 predicted.
+   * Keep the R2 store current.
+   *
+   * This handler deliberately does NOT try to touch Workers Cache. Cloudflare
+   * excludes scheduled invocations from the cache entirely, subrequests
+   * included, so warming from here is impossible — see @/server/store-refresher
+   * and docs/workers-behaviour-measured.md. Bindings work normally, which is
+   * why the store is R2 and not a warm cache.
    */
   async scheduled(_event: ScheduledController, _env: unknown, ctx: ExecutionContext) {
-    // NOTE: this warmer does not currently reach the cache entries visitors
-    // read. See docs/caching-and-diagnostics.md — `exports.default`,
-    // `ctx.exports.default`, a plain outbound fetch() and a self service
-    // binding have all been tried against the live deployment. Watch the
-    // `unreached` count in the log line below: while it is non-zero the warmer
-    // is a no-op, whatever `rebuilt` claims.
-    const exportsFromCtx = (ctx as unknown as {
-      exports: { default: { fetch(request: Request): Promise<Response> } };
-    }).exports;
-    const summary = await withSelfFetch(
-      (request) => exportsFromCtx.default.fetch(request),
-      () => warmAll(),
-    );
-    console.log(JSON.stringify({ log: 'warm-all', ...summary, warmed: undefined }));
-
-    // Surface anything that failed; a silent warmer is how the Vercel one hid a
-    // production failure for as long as it did.
-    const failures = summary.warmed.filter((w) => !w.ok);
-    if (failures.length) {
-      console.error(JSON.stringify({ log: 'warm-all:failures', failures }));
-    }
+    const summary = await refreshAll();
+    console.log(JSON.stringify({ log: 'refresh', ...summary }));
     ctx.waitUntil(Promise.resolve());
   },
 };

@@ -20,9 +20,9 @@ export function capacityFactorTags(year: number, tier: string): string {
   ].join(',');
 }
 
-/** Tags for the derived coal-stats responses. */
-export function coalStatsTags(mode: string): string {
-  return ['coal-stats', `stats-${mode}`, `cf-dto-${CF_DTO_VERSION}`].join(',');
+/** Tags for the derived coal-stats response. */
+export function coalStatsTags(): string {
+  return ['coal-stats', `cf-dto-${CF_DTO_VERSION}`].join(',');
 }
 
 /**
@@ -38,8 +38,9 @@ export function coalStatsTags(mode: string): string {
  * `stale-while-revalidate` is emitted but is currently a **no-op**: Workers
  * Cache does not serve stale, it blocks and revalidates (measured on Free and
  * Paid — .context/spike/RESULTS.md). It is left in so the behaviour improves by
- * itself if Cloudflare ships it. Until then the cron warmer, not swr, is what
- * keeps visitors off the cold path.
+ * itself if Cloudflare ships it. Nothing depends on it: what keeps visitors off
+ * the cold path is R2 underneath, which never expires, so the request that
+ * revalidates pays an R2 read rather than an OpenElectricity fetch.
  */
 export function capacityFactorHeaders(
   year: number,
@@ -70,14 +71,14 @@ export function capacityFactorHeaders(
   return headers;
 }
 
-/** Coal-stats responses: one day shared, one minute in the browser. */
-export function coalStatsHeaders(mode: string): Headers {
+/** Coal-stats response: one day shared, one minute in the browser. */
+export function coalStatsHeaders(): Headers {
   const headers = new Headers();
   headers.set(
     'Cache-Control',
     'public, max-age=60, s-maxage=86400, stale-while-revalidate=604800',
   );
-  headers.set('Cache-Tag', coalStatsTags(mode));
+  headers.set('Cache-Tag', coalStatsTags());
   headers.set('Vary', 'Accept-Encoding');
   return headers;
 }

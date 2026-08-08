@@ -17,8 +17,8 @@ export const Route = createFileRoute('/api/health')({
             ok: true,
             runtime: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
             hasOpenElectricityKey: Boolean(env.OPENELECTRICITY_API_KEY),
-            // `cf` is populated by Cloudflare's edge and absent in local dev —
-            // which is how we tell whether a self-loopback is possible.
+            hasDataBucket: Boolean((env as { DATA?: unknown }).DATA),
+            // `cf` is populated by Cloudflare's edge and absent in local dev.
             hasCf: Boolean(cf),
             colo: cf?.colo ?? null,
           },

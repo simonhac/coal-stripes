@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
-import type { CoalGenerationStatsDTO, FleetMode } from '@/shared/types';
+import type { CoalGenerationStatsDTO } from '@/shared/types';
 
 /**
  * The client's query for the coal-generation stats page. As everywhere else,
@@ -12,11 +12,11 @@ import type { CoalGenerationStatsDTO, FleetMode } from '@/shared/types';
  * from before a deploy could lack newly-added fields. TanStack Query still
  * dedupes and caches within the session via `staleTime`.
  */
-export function statsQueryOptions(mode: FleetMode = 'full') {
+export function statsQueryOptions() {
   return queryOptions({
-    queryKey: ['coalStats', mode] as const,
+    queryKey: ['coalStats'] as const,
     queryFn: async ({ signal }): Promise<CoalGenerationStatsDTO> => {
-      const res = await fetch(`/api/stats?fleet=${mode}`, { signal, cache: 'no-store' });
+      const res = await fetch('/api/stats', { signal, cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       return res.json();
     },

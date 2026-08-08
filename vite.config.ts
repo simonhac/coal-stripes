@@ -4,15 +4,7 @@ import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import viteReact from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 
-export default defineConfig(({ command }) => ({
-  // A Worker cannot call its own entrypoint under miniflare, which backs the
-  // dev server — the runtime sees the self-request as a deadlock and cancels
-  // the whole request. Tell the server code to take its uncached path instead.
-  // See src/server/loopback.ts for why this is a `define` and not
-  // `import.meta.env.DEV`.
-  define: {
-    __LOOPBACK_ENABLED__: JSON.stringify(command !== 'serve'),
-  },
+export default defineConfig(() => ({
   server: {
     // Conductor's @simon/workspace-env allocates this workspace 3010–3014 and
     // passes the choice through PORT. Vite doesn't read PORT on its own.

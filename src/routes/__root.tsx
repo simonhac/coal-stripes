@@ -62,6 +62,15 @@ function RootComponent() {
   );
 }
 
+/**
+ * No analytics beacon here, deliberately.
+ *
+ * Cloudflare Web Analytics is configured for automatic injection, so the edge
+ * adds the snippet itself once stripes.energy is proxied — see
+ * docs/caching-and-diagnostics.md § Analytics. Adding a manual snippet as well
+ * would be a bug, not redundancy: only one can render per page, and the two
+ * report to different endpoints.
+ */
 function RootDocument({ children }: { children: ReactNode }) {
   return (
     <html lang="en">

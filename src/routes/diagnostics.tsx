@@ -71,8 +71,9 @@ interface PurgeResponse {
  *
  * One mutation, not two. The Vercel version had to purge and re-warm in
  * separate requests because `revalidateTag` also discarded entries written
- * later in the same request. Workers Cache has no such behaviour, and the cron
- * warmer refills everything within ten minutes regardless.
+ * later in the same request. Workers Cache has no such behaviour, and purging
+ * is cheap now anyway: R2 is untouched, so the next request for each year
+ * refills the cache from a stored object rather than from OpenElectricity.
  */
 function PurgeCaches() {
   const queryClient = useQueryClient();
@@ -104,8 +105,8 @@ function PurgeCaches() {
     if (
       !window.confirm(
         'Purge every cached year and the stats payload?\n\n' +
-          'The next request for each year pays a fresh, rate-limited fetch from ' +
-          'OpenElectricity. The cron warmer refills within ten minutes.',
+          'The R2 store is not touched, so the next request for each year is ' +
+          'refilled from a stored object, not from OpenElectricity.',
       )
     ) {
       return;
@@ -158,6 +159,7 @@ interface Probe {
   ok: boolean;
   status: number;
   cacheStatus: string;
+  source: string;
   age: string | null;
   builtAt: string | null;
   ms: number;
@@ -179,6 +181,10 @@ async function probeYear(year: number): Promise<Probe> {
     ok: res.ok,
     status: res.status,
     cacheStatus: res.headers.get('cf-cache-status') ?? '—',
+    // Survives a HIT: the header was stored with the cached response, so it
+    // keeps reporting what originally produced the entry even though the Worker
+    // did not run this time. Measured, not assumed.
+    source: res.headers.get('x-cf-source') ?? '—',
     age: res.headers.get('age'),
     builtAt: res.headers.get('x-cf-built-at'),
     ms: Math.round(performance.now() - started),
@@ -215,11 +221,13 @@ function ServerCacheHealth() {
       </div>
       <p style={{ margin: '0 0 10px', color: '#555', fontSize: '13px', maxWidth: '760px' }}>
         Requests each year exactly as the visualisation does and reports Cloudflare&rsquo;s own{' '}
-        <code>cf-cache-status</code>. <code>HIT</code> is a warm entry; <code>MISS</code> or{' '}
-        <code>EXPIRED</code> means that request rebuilt it — which should be rare, since the cron
-        warmer sweeps every year every ten minutes. <code>x-cf-built-at</code> is when the payload
-        was last assembled from OpenElectricity, and travels with the body, so it stays honest
-        however many times the response is replayed.
+        <code>cf-cache-status</code> and our own <code>x-cf-source</code>. <code>HIT</code> is a
+        warm entry; <code>MISS</code> means that request rebuilt it — which is now cheap, because{' '}
+        <code>x-cf-source: r2</code> says it was rebuilt from the store rather than from
+        OpenElectricity. An <code>upstream</code> on an established year is the one result worth
+        investigating. <code>x-cf-built-at</code> is when the payload was last assembled from
+        OpenElectricity, and travels with the body, so it stays honest however many times the
+        response is replayed.
       </p>
 
       {error && <p style={{ color: '#c00', fontSize: '13px' }}>{error.message}</p>}
@@ -235,6 +243,7 @@ function ServerCacheHealth() {
                 <tr>
                   <th style={headCell}>Year</th>
                   <th style={headCell}>Cache</th>
+                  <th style={headCell}>Source</th>
                   <th style={numCell}>Age</th>
                   <th style={numCell}>Time</th>
                   <th style={headCell}>Built at (AEST)</th>
@@ -246,6 +255,9 @@ function ServerCacheHealth() {
                     <td style={cell}>{p.year}</td>
                     <td style={{ ...cell, color: STATUS_COLOUR[p.cacheStatus] ?? '#1a1a1a' }}>
                       {p.ok ? p.cacheStatus : `HTTP ${p.status}`}
+                    </td>
+                    <td style={{ ...cell, color: p.source === 'upstream' ? '#c00' : '#1a1a1a' }}>
+                      {p.source}
                     </td>
                     <td style={numCell}>{p.age ?? '—'}</td>
                     <td style={numCell}>{p.ms} ms</td>
@@ -370,8 +382,9 @@ function DiagnosticsPage() {
       <header style={{ marginBottom: '28px' }}>
         <h1 style={{ margin: '0 0 6px', fontSize: '24px' }}>Cache and render diagnostics</h1>
         <p style={{ margin: 0, color: '#555', fontSize: '14px' }}>
-          Server cache health answers “is the warmer working?” and “how old is the data we hold?”;
-          the client table lists how long each tile took to render in this browser.{' '}
+          Server cache health answers “does a cold cache cost an R2 read or an upstream fetch?” and
+          “how old is the data we hold?”; the client table lists how long each tile took to render
+          in this browser.{' '}
           <Link to="/">← back to the visualisation</Link>
         </p>
       </header>

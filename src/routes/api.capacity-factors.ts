@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { getCapFacDataService } from '@/server/cap-fac-data-service';
 import { capacityFactorHeaders } from '@/server/cache-headers';
 import { NO_STORE } from '@/server/cache-headers';
 import { envFlag } from '@/server/runtime-env';
+import { buildYear, getYear } from '@/server/year-store';
 import { getTodayAEST } from '@/shared/date-utils';
 
 // Opt-in verbose logging: set DEBUG_OE=1 to trace requests locally.
@@ -56,13 +56,16 @@ function describeError(error: unknown): ApiErrorResponse {
 /**
  * One year of per-unit capacity factors.
  *
- * Compare this with the Next version it replaces: there is no cache wrapper, no
- * single-flight map and no cold-fetch bookkeeping, because Workers Cache sits in
- * front of this handler. It only runs on a miss, and concurrent misses for the
- * same year are collapsed into one invocation whose response is streamed to
- * every waiter — which is exactly what `inFlight` in cf-cache.ts was hand-rolling.
- * Freshness and invalidation are entirely in the response headers; see
- * @/server/cache-headers.
+ * Two layers sit under this handler. Workers Cache is in front of it, so it only
+ * runs on a miss, and concurrent misses for the same year are collapsed into one
+ * invocation whose response is streamed to every waiter. Under it is R2, which
+ * holds every year and never expires — so a miss costs an R2 read, not the 3-9s
+ * OpenElectricity fetch it used to. Reaching upstream from here is now the
+ * exceptional path: a year nobody has built yet, or a brand-new bucket.
+ *
+ * `x-cf-source` says which of the two answered, because "did a visitor pay for
+ * OpenElectricity?" is the question this whole design exists to answer, and it
+ * should be readable from a single curl rather than inferred.
  */
 export const Route = createFileRoute('/api/capacity-factors')({
   server: {
@@ -94,15 +97,34 @@ export const Route = createFileRoute('/api/capacity-factors')({
           // gets a valid payload — but note it forks the cache entry, since the
           // key includes the whole query string.
 
-          debug(`🌐 API: Fetching capacity factors for year ${year}`);
+          const currentYear = getTodayAEST().year;
 
-          const data = await getCapFacDataService().getCapacityFactors(year);
+          // The stored object streams straight through: 180 KB of JSON never
+          // gets parsed, and `builtAt` rides in metadata where the header can
+          // reach it without touching the body.
+          const stored = await getYear(year);
+          if (stored) {
+            debug(`🌐 API: Serving year ${year} from R2`);
+            const headers = capacityFactorHeaders(
+              year,
+              currentYear,
+              stored.customMetadata?.builtAt ?? '',
+            );
+            headers.set('x-cf-source', 'r2');
+            headers.set('Content-Type', 'application/json');
+            return new Response(stored.body, { headers });
+          }
 
-          debug(`🌐 API: Returning data for year ${year}`);
+          // Miss: build it, store it for everyone after this visitor, serve it.
+          // The put is awaited rather than deferred — it is a few milliseconds
+          // against the seconds we just spent upstream, and letting the response
+          // race the write is how a year ends up permanently unstored.
+          debug(`🌐 API: Building year ${year} from OpenElectricity`);
+          const data = await buildYear(year);
 
-          return Response.json(data, {
-            headers: capacityFactorHeaders(year, getTodayAEST().year, data.created_at),
-          });
+          const headers = capacityFactorHeaders(year, currentYear, data.created_at);
+          headers.set('x-cf-source', 'upstream');
+          return Response.json(data, { headers });
         } catch (error) {
           console.error('API Error:', error);
           return Response.json(describeError(error), {

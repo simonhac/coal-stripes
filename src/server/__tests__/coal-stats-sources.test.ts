@@ -1,26 +1,24 @@
 /**
  * The stats payload must state where its data came from and how old it is.
  *
- * /stats is assembled from ~28 independently-cached per-year payloads, so a
- * stale cache and a genuine upstream data gap look identical on the page. The
- * `sources` block is what tells them apart: each year's `builtAt` is the moment
- * that payload was last assembled from OpenElectricity. These tests pin the
- * behaviour that matters — every requested year is accounted for, a year that
- * failed to load is reported as null rather than silently dropped, and the
- * oldest/newest extremes are correct.
+ * /stats is assembled from ~28 per-year payloads, so a stale store and a genuine
+ * upstream data gap look identical on the page. The `sources` block is what
+ * tells them apart: each year's `builtAt` is the moment that payload was last
+ * assembled from OpenElectricity. These tests pin the behaviour that matters —
+ * every requested year is accounted for, a year that failed to load is reported
+ * as null rather than silently dropped, and the oldest/newest extremes are
+ * correct.
  *
- * `computeCoalStats` reads each year back through Workers Cache via a loopback
- * into our own entrypoint; the Jest mock for `cloudflare:workers` forwards that
- * to global fetch, which is what these tests stub. The aggregation itself is
- * exercised elsewhere.
+ * `computeCoalStats` takes its year reader as a parameter, so these drive it
+ * directly rather than stubbing a transport. The aggregation itself is exercised
+ * elsewhere.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Mock } from 'vitest';
-import { computeCoalStats } from '@/server/coal-stats-service';
+import { describe, expect, it } from 'vitest';
+import { computeCoalStats, type YearReader } from '@/server/coal-stats-service';
 import { earliestDataYear, currentDataYear } from '@/server/data-years';
 import type { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 
-/** A minimal, unit-free payload: enough shape for the fetch/provenance path. */
+/** A minimal, unit-free payload: enough shape for the provenance path. */
 function payload(createdAt: string): GeneratingUnitCapFacHistoryDTO {
   return {
     type: 'capacity_factors',
@@ -30,65 +28,35 @@ function payload(createdAt: string): GeneratingUnitCapFacHistoryDTO {
   };
 }
 
-/** Stamp for a year, so each mocked year is distinguishable. */
+/** Stamp for a year, so each year is distinguishable. */
 const stampFor = (year: number): string =>
   `${String(year).padStart(4, '0')}-03-04T05:06:07+10:00`;
 
-/**
- * Mock the per-year self-fetch. `failYears` return a non-ok response, which
- * fetchYear maps to null.
- */
-function mockFetch(failYears: number[] = []): Mock {
-  const fn = vi.fn(async (url: string) => {
-    const year = Number.parseInt(new URL(url).searchParams.get('year') ?? '', 10);
-    // arrayBuffer: the loopback drains a failed response before discarding it,
-    // so the subrequest doesn't stay open.
-    if (failYears.includes(year)) {
-      return {
-        ok: false,
-        status: 500,
-        json: async () => ({}),
-        arrayBuffer: async () => new ArrayBuffer(0),
-      } as unknown as Response;
-    }
-    return {
-      ok: true,
-      status: 200,
-      json: async () => payload(stampFor(year)),
-      arrayBuffer: async () => new ArrayBuffer(0),
-    } as unknown as Response;
-  });
-  global.fetch = fn as unknown as typeof fetch;
-  return fn;
+/** A reader where `failYears` come back null, as an unbuildable year does. */
+function reader(failYears: number[] = []): YearReader {
+  return async (year) => (failYears.includes(year) ? null : payload(stampFor(year)));
 }
 
+const allYears = (): number[] => {
+  const years: number[] = [];
+  for (let y = earliestDataYear(); y <= currentDataYear(); y++) years.push(y);
+  return years;
+};
+
 describe('computeCoalStats — data provenance', () => {
-  const originalFetch = global.fetch;
-  afterEach(() => {
-    global.fetch = originalFetch;
-    vi.restoreAllMocks();
-  });
-
-  it('records a builtAt for every year it fetched', async () => {
-    mockFetch();
-
-    const stats = await computeCoalStats('full');
+  it('records a builtAt for every year it read', async () => {
+    const stats = await computeCoalStats(reader());
     const sources = stats.sources;
 
-    const expectedYears: number[] = [];
-    for (let y = earliestDataYear(); y <= currentDataYear(); y++) expectedYears.push(y);
-
     expect(sources).toBeDefined();
-    expect(sources!.years.map((s) => s.year)).toEqual(expectedYears);
+    expect(sources!.years.map((s) => s.year)).toEqual(allYears());
     for (const s of sources!.years) {
       expect(s.builtAt).toBe(stampFor(s.year));
     }
   });
 
   it('reports the oldest and newest payload build times', async () => {
-    mockFetch();
-
-    const sources = (await computeCoalStats('full')).sources!;
+    const sources = (await computeCoalStats(reader())).sources!;
 
     // stampFor is ordered by year, so the extremes are the range endpoints.
     expect(sources.oldestBuiltAt).toBe(stampFor(earliestDataYear()));
@@ -97,9 +65,8 @@ describe('computeCoalStats — data provenance', () => {
 
   it('marks a year that failed to load as null rather than dropping it', async () => {
     const failed = currentDataYear() - 1;
-    mockFetch([failed]);
 
-    const sources = (await computeCoalStats('full')).sources!;
+    const sources = (await computeCoalStats(reader([failed]))).sources!;
     const entry = sources.years.find((s) => s.year === failed);
 
     expect(entry).toEqual({ year: failed, builtAt: null });
@@ -108,11 +75,7 @@ describe('computeCoalStats — data provenance', () => {
   });
 
   it('reports nulls when no year could be loaded at all', async () => {
-    const allYears: number[] = [];
-    for (let y = earliestDataYear(); y <= currentDataYear(); y++) allYears.push(y);
-    mockFetch(allYears);
-
-    const sources = (await computeCoalStats('full')).sources!;
+    const sources = (await computeCoalStats(reader(allYears()))).sources!;
 
     expect(sources.oldestBuiltAt).toBeNull();
     expect(sources.newestBuiltAt).toBeNull();

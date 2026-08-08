@@ -127,12 +127,16 @@ export const CF_DTO_VERSION = 'v1';
 // immutable. These windows set how long Workers Cache serves an entry before it
 // must be rebuilt.
 //
-// These windows are only comfortable because the cron warmer sweeps every year
-// every 10 minutes and so refills entries long before they lapse. Do NOT assume
-// stale-while-revalidate covers the gap: it is set on the response but Workers
-// Cache does not honour it — a lapsed entry blocks the next visitor for the full
-// OpenElectricity fetch (3–9 s). Measured on both Free and Paid,
-// .context/spike/RESULTS.md.
+// These windows do double duty: they set `s-maxage` on the response AND are read
+// by the store refresher as a write schedule (src/server/store-refresher.ts).
+// Same question either way — how long before this year's numbers might have
+// moved — so one definition keeps the cache and the store agreeing on "fresh".
+//
+// Do NOT assume stale-while-revalidate covers a lapse: it is set on the response
+// but Workers Cache does not honour it, so a lapsed entry blocks the next
+// visitor (measured on both Free and Paid, .context/spike/RESULTS.md). That is
+// survivable only because R2 sits underneath — the blocked request reads a
+// stored object rather than OpenElectricity.
 export type YearCacheTier = 'current' | 'recent' | 'archive';
 
 export interface YearCachePolicy {

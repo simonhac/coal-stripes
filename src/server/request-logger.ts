@@ -104,7 +104,7 @@ export function initializeRequestLogger(port: number): void {
  * This used to throw instead, which made it a trap: the only explicit
  * initialisation lived at module scope in the capacity-factors route, so any
  * code path that reached the OE client without that module having been loaded
- * died. The cron warmer hit exactly this. Self-initialising is what makes the
+ * died. The cron sweep hit exactly this. Self-initialising is what makes the
  * route's module-scope call unnecessary — which matters now, because module
  * scope in a Worker runs at isolate startup, not per request.
  */

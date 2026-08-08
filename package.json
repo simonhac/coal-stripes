@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "preview": "vite build && wrangler dev --var CF_LOOPBACK:off",
+    "preview": "vite build && wrangler dev",
     "deploy": "vite build && wrangler deploy",
     "cf-typegen": "wrangler types",
     "build:local": "vite build",
