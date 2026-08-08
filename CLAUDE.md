@@ -7,30 +7,41 @@
 - The client never talks directly to OpenElectricity, only to our server.
 
 - **Where dev gets its data:** there is **no** dev/mock/staging data source. In
-  every environment the data comes from the **production OpenElectricity API**
-  (`https://api.openelectricity.org.au/v4`, keyed by `OPENELECTRICITY_API_KEY` in
-  `.env.local`; the SDK falls back to prod unless `OPENELECTRICITY_API_URL` is
-  set, which it is not). `npm run dev` runs the Next route `/api/capacity-factors`
-  **in-process, same host/port** as the app, and that route calls OE prod
-  directly via `CapFacDataService`. The only dev-vs-prod difference is caching:
-  dev uses the local Next Data Cache (`.next/cache`); prod uses the Vercel Data
-  Cache kept warm by the cron warmer. So a fresh dev instance pays a cold,
-  rate-limited OE fetch on first request, then serves from `.next/cache` —
-  **`rm -rf .next/cache` to force a re-fetch** (e.g. after a server-side data
-  change). Because dev and prod share the same upstream, a data anomaly seen in
-  dev will match prod (see `curl https://stripes.energy/api/capacity-factors?...`).
+  every environment the data ultimately comes from the **production
+  OpenElectricity API** (`https://api.openelectricity.org.au/v4`, keyed by
+  `OPENELECTRICITY_API_KEY` in `.env.local`; the SDK falls back to prod unless
+  `OPENELECTRICITY_API_URL` is set, which it is not). `npm run dev` runs the app
+  under **workerd** via the Cloudflare Vite plugin, so dev, test and prod share
+  one runtime, and `/api/capacity-factors` is served **in-process, same
+  host/port** as the app. Because dev and prod share the same upstream, a data
+  anomaly seen in dev will match prod (see
+  `curl https://stripes.energy/api/capacity-factors?...`).
 
-- **Caching, in one breath:** four layers stand between a reader and
-  OpenElectricity — (1) their browser, 60 s; (2) the **Sydney CDN edge**, the
-  fast one, which answers without our server running; (3) the **Data Cache** at
-  the origin (also Sydney — `vercel.json` pins functions to `syd1`); (4)
-  **OpenElectricity itself, ~3–9 s, which no reader should ever reach.** The
-  `warm-all` cron sweeps every year every 10 minutes and warms layers 2 and 3 by
-  *different* means: an in-process call for the Data Cache, then a plain HTTP
-  self-fetch for the edge. Warming by self-fetch alone silently fails — if the
-  edge already has a copy the CDN answers and the origin never runs, so the Data
-  Cache goes untouched and gets evicted. Full explanation:
+  The dev-vs-prod difference is the **R2 store**: plain `wrangler dev` gets a
+  *local, empty* `DATA` bucket, so the first request falls through to a cold,
+  rate-limited OpenElectricity fetch and needs the API key. `wrangler dev
+  --remote` binds the **real** bucket instead, which is the quick way to drive
+  the real UI with real data (and works without the OE key, since reads are
+  satisfied from R2).
+
+- **Caching, in one breath:** three layers stand between a reader and
+  OpenElectricity — (1) their browser, 60 s; (2) **Workers Cache**, which
+  answers at the edge; (3) **R2** (the `DATA` binding), whose objects never
+  expire and which is therefore the *floor* — a miss below the cache costs an R2
+  read, not the 3–9 s OpenElectricity fetch that no reader should ever pay. A
+  cron rebuilds R2 every 10 minutes. Note it does **not** warm the cache:
+  Cloudflare excludes scheduled invocations from Workers Cache entirely, which
+  is precisely why this is a store and not a warmer. Full explanation:
   `docs/caching-and-diagnostics.md`.
+
+- **Australian traffic enters Cloudflare at Singapore**, not Sydney — the zone is
+  on the Free plan, whose shared `104.21.x`/`172.67.x` prefixes are not routed to
+  an Australian PoP. It costs ~300 ms on every request, cache hit or miss, and no
+  Worker setting can change it (`placement` controls where the Worker *executes*
+  — confirmed `remote-SYD` — never which colo terminates the connection). Don't
+  re-diagnose it as a code problem; the evidence is in
+  `docs/caching-and-diagnostics.md` § Where the Worker actually runs. The useful
+  response is to spend fewer round trips.
 
 - When a generating unit is inoperable (due to maintenance or outages) its capacity factor will be zero, not null/undefined.
 - When a capacity factor is unknown — either because the associated date is in the future or, for dates in the past, the data collection infrastructure is faulty — this is always represented as null.
@@ -40,7 +51,14 @@
 
 - Environment variables are defined and stored in `.env.local`.
 
-- The production deployment is at **https://stripes.energy** (Vercel). Use it for prod checks — e.g. `curl -sS -D - https://stripes.energy/api/capacity-factors?year=2006 -o /dev/null` to inspect cache headers (`x-vercel-cache`, `age`).
+- The production deployment is at **https://stripes.energy**, a Cloudflare Worker
+  (`coal-stripes`) attached by a *route*, not a custom domain — see the comment
+  in `wrangler.jsonc`. Use it for prod checks — e.g.
+  `curl -sS -D - https://stripes.energy/api/capacity-factors?year=2006 -o /dev/null`
+  to inspect `cf-cache-status`, `age`, `cf-ray` (the trailing code is the entry
+  colo) and `cf-placement` (where the Worker ran). `curl` defaults to
+  `Accept: */*`; send `Accept: text/html` when checking anything about the HTML,
+  or you will get a different, un-analytics-injected variant.
 
 - When searching code, prefer ast-grep for syntax-aware and structural matching (eg. `ast-grep --lang typescript -p '<pattern>'`) instead of text-only tools like rg or grep.
 

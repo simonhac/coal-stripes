@@ -1,7 +1,10 @@
 # coal-stripes workspace setup/run — driven by @simon/workspace-env.
 project: coal-stripes
 setup:
-  - vercelLink            # link the "coal-stripes" Vercel project (deploys only)
+  # No deploy-platform link step. Deploys go to Cloudflare via `wrangler deploy`,
+  # and wrangler's credentials are global (~/.wrangler/config/default.toml), not
+  # per-workspace — so there is nothing to link. (This used to run `vercelLink`,
+  # which is gone with the platform.)
   - opInjectEnv           # op inject .env.tpl -> .env.local from 1Password
   - validateEnv           # runs the project's @t3-oss/env schema if configured; else info-skips
   - verify

@@ -20,6 +20,7 @@ check, at any moment, whether it is working.
 - [Confirming caching works on prod](#confirming-caching-works-on-prod)
 - [Runtime traps worth knowing](#runtime-traps-worth-knowing)
 - [Analytics](#analytics)
+- [Static assets](#static-assets)
 
 ---
 
@@ -259,14 +260,44 @@ that the Business plan ($200/mo) fixes Australian routing is anecdote that
 contradicts the official feature table. There is no plan worth buying to fix
 this.
 
-**Before DNS cutover, weigh this:** `stripes.energy` on Vercel is served from
-`syd1` today. Moving to Workers on a Free zone routes Australian visitors via
-Singapore, making the *edge* slower even though the *origin* got ~25x faster
-(12.8 s → 0.5 s on a cold cache). Cache HITs are the common case and they are
-exactly the case placement cannot help. Size the regression honestly, though:
-~1.4x on a realistic parallel page load, not the ~4x a cold single request
-shows. That is a plan/BGP question,
-not a code one.
+**Confirmed after cutover, and the prefix is provably the whole cause.** Force
+the *same hostname and SNI* onto Cloudflare's other range and the colo changes
+with it:
+
+```
+curl --resolve stripes.energy:443:104.16.132.229 https://stripes.energy/  ->  ...-MEL, ttfb 0.044 s
+curl                                             https://stripes.energy/  ->  ...-SIN, ttfb 0.341 s
+```
+
+Identical zone, identical handshake, identical Worker; the only variable is
+which IP range the connection lands on. (The MEL request returns Cloudflare
+error 1034 — the zone is not served on that prefix — but the `cf-ray` still
+names the colo that terminated it, which is the whole point.) The zone is on the
+**Free** plan; confirm with
+
+```
+curl -sS "https://api.cloudflare.com/client/v4/zones?name=stripes.energy" \
+  -H "Authorization: Bearer $CF_TOKEN" | jq '.result[0].plan.name'
+```
+
+`traceroute` shows the shape of it: Melbourne → Adelaide → **Perth** → Telstra
+Global submarine → Singapore, ~96 ms. Cloudflare has said publicly that it moved
+Free-plan traffic off Telstra and Optus links because those carriers price
+transit far above industry norms, and this path is exactly that decision made
+visible.
+
+Nothing in `wrangler.jsonc` can change it. Placement controls where the Worker
+*executes*, never which colo *terminates* the connection — and a cache HIT never
+executes the Worker at all yet still pays the full 0.3 s.
+
+**What the cutover actually cost.** The *edge* got slower (Vercel `syd1` → a
+Singapore entry colo) while the *origin* got ~25x faster (12.8 s → 0.5 s on a
+cold cache). Cache HITs are the common case and are exactly the case placement
+cannot help. Sized honestly that is ~1.4x on a realistic parallel page load, not
+the ~4x a cold single `curl` suggests. Because it is a fixed per-round-trip tax,
+the useful response is to *spend fewer round trips* — which is why hashed assets
+are `immutable` and the font stylesheet is linked from the document head rather
+than `@import`-ed (see § Static assets below).
 
 **Why Workers Paid is still required.** The free plan caps CPU at **10 ms per
 invocation, including cron invocations**, and 50 subrequests. Reads now fit
@@ -538,20 +569,87 @@ over the manual snippet, both learned the hard way:
 It follows that a beacon in `__root.tsx` would be actively harmful once the zone
 is proxied. There is a comment there saying so.
 
-**It starts working at DNS cutover, not before.** Automatic injection needs the
-zone proxied through Cloudflare, and today `stripes.energy` is DNS-only,
-pointing at Vercel. Nor can the current `workers.dev` deployment be made to
-report into this site: Cloudflare validates beacons by **postfix-matching the
-configured hostname**, so `stripes.energy` accepts `www.stripes.energy` and
-`blog.staging.stripes.energy` but rejects `coal-stripes.simon-8e9.workers.dev`.
-(Tempting idea that does not survive that rule: turning RUM on early to gather
-real Core Web Vitals as evidence for the Singapore-routing question above. It
-would need a second Web Analytics site for the workers.dev hostname and a
-token swap at cutover — not worth it.)
+**It started working at DNS cutover, not before** — automatic injection needs
+the zone proxied through Cloudflare. Verified live: the page loads
+`static.cloudflareinsights.com/beacon.min.js` and the beacon `POST`s to
+first-party `/cdn-cgi/rum`, `204`. (Historical note, in case anyone reconsiders
+turning RUM on early for a future migration: Cloudflare validates beacons by
+**postfix-matching the configured hostname**, so a `stripes.energy` site accepts
+`www.stripes.energy` but rejects `coal-stripes.simon-8e9.workers.dev`.)
 
-One sharp edge to know: automatic injection fails silently if a response carries
+**Checking it with `curl` will tell you it is broken. It is not.** Cloudflare
+only injects when the *request* carries a browser-ish `Accept` header. `curl`
+sends `Accept: */*` and gets the un-injected HTML; the identical URL with
+`Accept: text/html` gets the beacon, ~359 bytes longer. User-Agent makes no
+difference, and neither does cache status — the two variants are cached
+separately and **both** report `cf-cache-status: HIT`, so there is no
+cache-busting trick that reveals it either. The correct probe:
+
+```bash
+curl -sS -H 'Accept: text/html,application/xhtml+xml' https://stripes.energy/ \
+  | grep -c cloudflareinsights          # 1 = injected, 0 = actually broken
+```
+
+One further sharp edge: automatic injection fails silently if a response carries
 `Cache-Control: … no-transform`. Our HTML sets no `Cache-Control` at all, so we
 are fine — but check it if analytics ever goes quiet.
 
 Server-side, `observability` is enabled in `wrangler.jsonc`, so Worker logs and
 invocation metrics are in the dashboard under Workers → coal-stripes.
+
+---
+
+## Static assets
+
+Everything above is about the *data* path. The JS and CSS take a different one:
+they are Workers Static Assets, served from `dist/client` before the Worker
+runs, and none of the `Cache-Control` in `src/server/cache-headers.ts` applies to
+them.
+
+Their default is `public, max-age=0, must-revalidate`. That is right for the
+un-hashed files in `public/` (`favicon.svg`, `og-image.png` — stable URLs whose
+contents can change) and wrong for `/assets/*`, where Vite content-hashes every
+filename, so a URL there can never change meaning. Left at the default, a repeat
+visit revalidated all seven modules the page needs — two stylesheets and five
+JS chunks — before it could render. They come back `304` with no body, but on
+this zone each one is still a ~300 ms round trip to Singapore.
+
+`public/_headers` fixes it. It is copied verbatim into `dist/client` by Vite,
+which is the assets directory the Cloudflare plugin hands to Wrangler.
+
+**Only one `Cache-Control` rule, deliberately.** Matching rules are *merged*,
+not overridden, and a repeated header is joined with a comma — so adding a `/*`
+rule alongside `/assets/*` would emit
+`Cache-Control: public, max-age=86400, public, max-age=31536000, immutable`
+and the browser would honour the first `max-age`. Anything not matched keeps the
+default, which is what the un-hashed files want anyway.
+
+Two more round trips came out of the critical path in the same pass:
+
+- **DM Sans is linked from the document head** (`src/routes/__root.tsx`), not
+  `@import`-ed from `opennem.css`. An `@import` is discovered only after the
+  importing sheet has downloaded *and* parsed, so the font CSS sat behind
+  `opennem.css` in a serial chain — ~340 ms of dead time. `preconnect` to
+  `fonts.gstatic.com` covers the second hop, which is otherwise not discovered
+  until the font CSS parses.
+- **Facility canvases carry their height as a JSX attribute**, resolved during
+  render rather than in the paint effect (`src/components/CompositeTile.tsx`).
+  A `<canvas>` with no `width`/`height` attributes is intrinsically 300×150, and
+  with `width: 100%` CSS derives an aspect ratio from that — so the first painted
+  frame laid every row out at half the container width, ~584 px instead of
+  25–96 px, and the effect collapsed the page from ~17,600 px to ~1,900 px one
+  frame later. That single reflow was **CLS 0.57**, i.e. the entire score.
+
+Verifying all three:
+
+```bash
+# hashed asset — immutable; un-hashed public file — still revalidates
+curl -sI https://stripes.energy/assets/<hashed>.js | grep -i cache-control
+curl -sI https://stripes.energy/og-image.png      | grep -i cache-control
+
+# font stylesheet present in the initial HTML, not behind opennem.css
+curl -sS -H 'Accept: text/html' https://stripes.energy/ | grep -c fonts.googleapis.com
+```
+
+CLS is a browser measurement, so use a DevTools performance trace on a fresh
+load, or a `PerformanceObserver` on `layout-shift` — `curl` cannot see it.
