@@ -29,6 +29,12 @@ async function maxOffset(page: Page): Promise<number> {
   return Number(await page.locator(VIZ).getAttribute('data-max-offset'));
 }
 
+/** Where navigation is HEADED, as opposed to `offset()` — where it has got to. */
+async function targetOffset(page: Page): Promise<number | null> {
+  const v = await page.locator(VIZ).getAttribute('data-target-offset');
+  return v == null ? null : Number(v);
+}
+
 /** Wait until data-offset has been stable for a solid window (spring truly at
  *  rest, incl. the day-quantised tail + the final onRest commit). */
 async function settle(page: Page): Promise<number> {
@@ -106,13 +112,27 @@ test.describe('gesture navigator', () => {
     const y = Math.min(box.y + 220, page.viewportSize()!.height - 120);
     // Manual drag so we can sample mid-gesture. From the present, dragging left
     // rubber-bands past the bound; on release it must snap back to exactly the present.
-    await page.mouse.move(box.x + box.width * 0.85, y);
+    //
+    // Stepped by hand and tracked as a running PEAK, rather than one reading
+    // after a `{ steps: 6 }` burst. data-offset is published through a
+    // transition-lane setState, so it lags the pointer by a step or more and a
+    // single instantaneous sample can still be showing the pre-overshoot value
+    // — which is a property of how the offset is observed, not of the gesture.
+    // Same shape as the wheel overscroll test below.
+    const x1 = box.x + box.width * 0.85;
+    const x2 = box.x + box.width * 0.1;
+    await page.mouse.move(x1, y);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width * 0.1, y, { steps: 6 });
-    const during = await offset(page);
+    let peak = max;
+    for (let i = 1; i <= 6; i++) {
+      await page.mouse.move(x1 + (x2 - x1) * (i / 6), y);
+      await page.waitForTimeout(25);
+      const o = (await offset(page))!;
+      if (o > peak) peak = o;
+    }
     await page.mouse.up();
     const after = await settle(page);
-    expect(during).toBeGreaterThan(max); // proved it rubber-banded past the present
+    expect(peak).toBeGreaterThan(max); // proved it rubber-banded past the present
     expect(after).toBe(max); // snapped back exactly — not stuck past it, not flung elsewhere
   });
 
@@ -179,6 +199,67 @@ test.describe('gesture navigator', () => {
     const after = await settle(page);
     expect(after).toBeLessThan(before); // moved back
     expect(before - after).toBeLessThan(60); // ~1 month, not a huge jump
+  });
+
+  // The regression this whole target/animated split exists for. Every press used
+  // to re-base off the *rendered* date — which the spring was still rewriting on
+  // a low-priority transition lane — so three fast presses computed from
+  // near-identical stale bases and travelled barely more than one month.
+  test('three fast ArrowLefts compose to three months, not one', async ({ page }) => {
+    await loadApp(page);
+    const before = (await targetOffset(page))!;
+
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+
+    // The target is reached synchronously on the keystroke — no settling first.
+    const target = (await targetOffset(page))!;
+    const travelled = before - target;
+    expect(travelled).toBeGreaterThan(85);  // 3 calendar months ≈ 89-92 days
+    expect(travelled).toBeLessThan(95);
+
+    // ...and the stripes then glide to exactly that target.
+    expect(await settle(page)).toBe(target);
+  });
+
+  // The header must not wait for the glide: the date is the answer to the
+  // keypress, the animation is just how the stripes catch up.
+  test('the date range header moves on the keystroke, ahead of the stripes', async ({ page }) => {
+    await loadApp(page);
+    const header = page.locator('.opennem-date-range');
+    const beforeText = (await header.textContent())!;
+    const beforeOffset = (await offset(page))!;
+
+    await page.keyboard.press('ArrowLeft');
+
+    // Header already shows the destination while the stripes are still en route.
+    await expect(header).not.toHaveText(beforeText, { timeout: 1000 });
+    expect(await offset(page)).not.toBe(await targetOffset(page));
+    expect((await offset(page))!).toBeLessThanOrEqual(beforeOffset);
+
+    // They reconcile once the spring rests.
+    const settled = await settle(page);
+    expect(settled).toBe(await targetOffset(page));
+  });
+
+  // The same decoupling, one level up: a press landing *during* a keyboard glide
+  // must build on the target it is chasing, not on the half-finished animation.
+  test('a keypress during an in-flight glide builds on the target, not the animation', async ({ page }) => {
+    await loadApp(page);
+    const before = (await targetOffset(page))!;
+
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForTimeout(120); // well inside the ~700ms NAV_SPRING glide
+    expect(await offset(page)).not.toBe(await targetOffset(page)); // genuinely mid-flight
+
+    await page.keyboard.press('ArrowLeft');
+    const target = (await targetOffset(page))!;
+    const travelled = before - target;
+    expect(travelled).toBeGreaterThan(55); // 2 calendar months ≈ 59-62 days
+    expect(travelled).toBeLessThan(65);
+
+    expect(await settle(page)).toBe(target);
   });
 
   // Ctrl+S used to match the bare 's' binding, preventDefault the browser's

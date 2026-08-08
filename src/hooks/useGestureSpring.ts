@@ -4,10 +4,30 @@ import { useDrag, useWheel } from '@use-gesture/react';
 import { DATE_BOUNDARIES } from '@/shared/config';
 import { resolveDragRelease, rubberbandClamp } from '@/shared/gesture-physics';
 
+/**
+ * What an emitted offset means.
+ *
+ * `isTransient` is the important one: a spring/navigate frame is a position on
+ * the *way to* a target, so it describes where the stripes are, never where the
+ * user asked to go. Everything else — a finger mid-drag, a wheel mid-pan, a
+ * settled rest — is both at once.
+ */
+export interface OffsetEmitMeta {
+  isDragging: boolean;
+  isTransient: boolean;
+}
+
 interface GestureSpringOptions {
-  currentOffset: number; // fractional day-offset from parent (the source of truth; 0 = earliestDataEndDay)
+  currentOffset: number; // fractional day-offset from parent (the rendered position; 0 = earliestDataEndDay)
   maxOffset: number; // latestDataDay offset; minOffset is implicitly 0
-  onOffsetChange: (offset: number, isDragging: boolean) => void;
+  /** The rendered position moved. Fires per animation frame (day-quantised). */
+  onOffsetChange: (offset: number, meta: OffsetEmitMeta) => void;
+  /**
+   * A new resting target was established — synchronously, at the moment of
+   * intent (keypress, month click, gesture release), not once the spring gets
+   * there. Always a clamped, whole-day offset.
+   */
+  onNavigationTarget?: (offset: number) => void;
 }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
@@ -31,12 +51,20 @@ type Phase = 'idle' | 'drag' | 'wheel' | 'spring' | 'navigate';
  * @use-gesture owns the bounds + rubber-band resistance; react-spring owns the
  * release momentum (decay), snap-back, and keyboard/month glide.
  *
+ * Two things come out, and keeping them apart is the point. `onOffsetChange`
+ * reports where the stripes ARE, once per day-crossing; `onNavigationTarget`
+ * reports where they are HEADED, once, at the instant that becomes known. A
+ * keypress lands on the second immediately, so the date can move without
+ * waiting for the glide — and so the next keypress builds on the destination
+ * rather than on a half-finished animation.
+ *
  * Deals only in numeric offsets — no date knowledge.
  */
 export function useGestureSpring({
   currentOffset,
   maxOffset,
   onOffsetChange,
+  onNavigationTarget,
 }: GestureSpringOptions) {
   const elementRef = useRef<HTMLDivElement>(null);
 
@@ -45,9 +73,11 @@ export function useGestureSpring({
   const currentOffsetRef = useRef(currentOffset);
   const maxOffsetRef = useRef(maxOffset);
   const onOffsetChangeRef = useRef(onOffsetChange);
+  const onNavigationTargetRef = useRef(onNavigationTarget);
   currentOffsetRef.current = currentOffset;
   maxOffsetRef.current = maxOffset;
   onOffsetChangeRef.current = onOffsetChange;
+  onNavigationTargetRef.current = onNavigationTarget;
 
   // Per-gesture invariants + bookkeeping
   const ppdRef = useRef(1); // pixels per day, captured at gesture start
@@ -55,7 +85,11 @@ export function useGestureSpring({
   const lastActivePRef = useRef(0); // last active (rubber-banded) px — the true visual release position
   const wheelRawPxRef = useRef(0); // raw (un-clamped) accumulated wheel position (px) within a burst
   const lastEmittedRef = useRef<number | null>(null);
-  const lastDraggingRef = useRef(false);
+  const lastMetaRef = useRef<OffsetEmitMeta>({ isDragging: false, isTransient: false });
+  // The spring's true visual position in px. Written by every emit, so it is
+  // exact even while the parent's `currentOffset` lags behind on a transition
+  // lane. This is what a mid-flight navigation must animate FROM.
+  const visualPxRef = useRef(0);
   const settleTargetPxRef = useRef<number | null>(null); // exact final px for a settling animation
   const pendingWheelRef = useRef<{ p: number; dragging: boolean } | null>(null); // latest wheel emit awaiting its frame
   const wheelRafRef = useRef<number | null>(null); // rAF id coalescing the active wheel emits
@@ -67,14 +101,34 @@ export function useGestureSpring({
     return width > 0 ? width / DATE_BOUNDARIES.TILE_WIDTH : ppdRef.current || 1;
   }, []);
 
-  // Emit to the parent: quantise to whole days + dedupe so setEndDate only fires
-  // on day-boundary crossings (not every animation frame).
+  // Emit to the parent: quantise to whole days + dedupe so the parent's date
+  // state only changes on day-boundary crossings (not every animation frame).
+  //
+  // `visualPxRef` is written first, before the dedupe: the sub-day px position
+  // keeps moving on frames the parent never hears about, and that is precisely
+  // the position a keypress needs to animate from.
   const emit = useCallback((p: number, dragging: boolean) => {
+    visualPxRef.current = p;
+    const phase = phaseRef.current;
+    const meta: OffsetEmitMeta = {
+      isDragging: dragging,
+      isTransient: phase === 'spring' || phase === 'navigate',
+    };
     const days = Math.round(p / ppdRef.current);
-    if (days === lastEmittedRef.current && dragging === lastDraggingRef.current) return;
+    const last = lastMetaRef.current;
+    if (
+      days === lastEmittedRef.current &&
+      meta.isDragging === last.isDragging &&
+      meta.isTransient === last.isTransient
+    ) return;
     lastEmittedRef.current = days;
-    lastDraggingRef.current = dragging;
-    onOffsetChangeRef.current(days, dragging);
+    lastMetaRef.current = meta;
+    onOffsetChangeRef.current(days, meta);
+  }, []);
+
+  // Announce a new resting target, quantised to whole days to match `emit`.
+  const emitTargetPx = useCallback((px: number) => {
+    onNavigationTargetRef.current?.(Math.round(px / ppdRef.current));
   }, []);
 
   // Coalesce the high-frequency active-wheel emits to at most one parent update
@@ -128,10 +182,13 @@ export function useGestureSpring({
         if (!result.finished) return;
         const phase = phaseRef.current;
         if (phase === 'spring' || phase === 'navigate') {
+          // Idle first, so the resting emit is non-transient: the final position
+          // is where the stripes are AND where they were headed, and the parent's
+          // two dates land on exactly the same day.
+          phaseRef.current = 'idle';
           // Emit the intended target exactly — the spring can settle a hair short,
           // which would land a boundary snap 1 day off.
           emit(settleTargetPxRef.current ?? apiRef.current!.get().x, false);
-          phaseRef.current = 'idle';
         }
       },
     });
@@ -142,9 +199,13 @@ export function useGestureSpring({
     () => ({ left: 0, right: maxOffsetRef.current * ppdRef.current }),
     []
   );
+  // @use-gesture resolves `from` before the handler runs, so phaseRef still holds
+  // the phase we're interrupting. Grabbing the stripes mid-glide must catch them
+  // where they visually are, not at the parent's transition-lagged offset.
   const seedFromCurrent = useCallback((): [number, number] => {
+    const wasIdle = phaseRef.current === 'idle';
     ppdRef.current = getPixelsPerDay(); // runs before bounds + handler → one ppd for the gesture
-    return [currentOffsetRef.current * ppdRef.current, 0];
+    return [wasIdle ? currentOffsetRef.current * ppdRef.current : visualPxRef.current, 0];
   }, [getPixelsPerDay]);
 
   // ── Drag (mouse + touch, via pointer events) ────────────────────────────────
@@ -169,8 +230,9 @@ export function useGestureSpring({
         // and without this a tap strands isDragging=true and disables keyboard
         // nav until the next gesture. The day-quantised dedupe makes it a no-op
         // when no true was emitted (same day, dragging already false).
-        emit(lastActivePRef.current, false);
         phaseRef.current = 'idle';
+        emit(lastActivePRef.current, false);
+        emitTargetPx(lastActivePRef.current);
         return;
       }
 
@@ -187,6 +249,10 @@ export function useGestureSpring({
       });
 
       const targetPx = result.target * ppd;
+      // The release decides where this gesture is headed, so the target is known
+      // now — not when the spring finally arrives. Announcing it here is what
+      // lets a keypress landing mid-coast build on the destination.
+      emitTargetPx(targetPx);
       // 'settle', or a momentum/snap whose target rounds to the current day, is a
       // no-op: emit directly. A 0-frame spring never fires onRest, which would latch
       // isDragging=true (set by the active-drag emit) and kill keyboard navigation.
@@ -224,11 +290,16 @@ export function useGestureSpring({
       // useWheel, so we accumulate the raw per-event delta ourselves. Momentum
       // comes for free from the OS inertial wheel stream (a decaying tail).
       if (first) {
+        const wasIdle = phaseRef.current === 'idle';
         phaseRef.current = 'wheel';
         api.stop();
         cancelScheduledEmit(); // drop any coalesced frame left by a prior gesture
         ppdRef.current = getPixelsPerDay();
-        wheelRawPxRef.current = currentOffsetRef.current * ppdRef.current;
+        // Same rule as seedFromCurrent: interrupting a glide picks up the visual
+        // position; starting cold takes the parent's (resize-aware) offset.
+        wheelRawPxRef.current = wasIdle
+          ? currentOffsetRef.current * ppdRef.current
+          : visualPxRef.current;
       }
       // A delayed trailing wheelEnd can fire ~140ms after the last event — by then a
       // drag or keyboard nav may own the phase; don't let the stale burst clobber it.
@@ -253,12 +324,14 @@ export function useGestureSpring({
       cancelScheduledEmit();
       emit(displayPx, false);
       if (wheelRawPxRef.current < 0 || wheelRawPxRef.current > maxP) {
-        phaseRef.current = 'spring';
         const target = wheelRawPxRef.current < 0 ? 0 : maxP;
+        emitTargetPx(target); // the bound we're about to snap back to, not the stretched position
+        phaseRef.current = 'spring';
         settleTargetPxRef.current = target;
         api.start({ from: { x: displayPx }, to: { x: target }, config: SPRING_BACK });
       } else {
         phaseRef.current = 'idle';
+        emitTargetPx(displayPx);
       }
     },
     { axis: 'x' }
@@ -273,17 +346,29 @@ export function useGestureSpring({
     (target: number) => {
       api.stop();
       cancelScheduledEmit(); // a queued wheel frame must not clobber the nav target
+      const wasIdle = phaseRef.current === 'idle';
       ppdRef.current = getPixelsPerDay();
       const ppd = ppdRef.current;
       const clamped = Math.max(0, Math.min(maxOffsetRef.current, target));
-      const from = currentOffsetRef.current;
+
+      // Announce the destination FIRST, synchronously. The parent records it
+      // before this call returns, so a second keypress in the same tick builds
+      // on this target rather than on wherever the stripes have got to.
+      onNavigationTargetRef.current?.(clamped);
+
+      // Start from where the stripes actually are. When idle the parent's offset
+      // is authoritative (and picks up a resize, which visualPxRef — being px at
+      // the old scale — would not). Mid-gesture or mid-glide it is the opposite:
+      // the parent lags behind on a transition lane, so using it would snap the
+      // view backwards before setting off.
+      const fromPx = wasIdle ? currentOffsetRef.current * ppd : visualPxRef.current;
       // Only glide for short hops (arrow keys, nearby months). A large jump would
       // sweep through years of tiles frame-by-frame and crawl, so snap it instantly.
-      const animate = Math.abs(clamped - from) <= NAV_ANIMATE_MAX_DAYS;
+      const animate = Math.abs(clamped - fromPx / ppd) <= NAV_ANIMATE_MAX_DAYS;
       phaseRef.current = 'navigate';
       settleTargetPxRef.current = clamped * ppd;
       api.start({
-        from: { x: from * ppd },
+        from: { x: fromPx },
         to: { x: clamped * ppd },
         immediate: !animate,
         config: NAV_SPRING,

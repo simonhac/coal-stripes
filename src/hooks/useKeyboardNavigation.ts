@@ -12,7 +12,17 @@ function clampEndDate(endDate: CalendarDate): CalendarDate {
 }
 
 interface UseKeyboardNavigationOptions {
-  currentEndDate: CalendarDate | null;
+  /**
+   * The current navigation TARGET, read at call time.
+   *
+   * A getter, not a value, and deliberately so. Relative moves must compose:
+   * two presses in one tick have to see one another, and a target held in React
+   * state would hand both the same stale date (the spring rewrites the rendered
+   * date ~60×/s on a low-priority transition lane, so it can be many frames
+   * behind). Reading through a ref makes ← ← land exactly two months back, and
+   * bases the move on the destination rather than on a half-finished glide.
+   */
+  getEndDate: () => CalendarDate | null;
   /** Animate to an absolute end date (drives the shared gesture spring). */
   navigateToDate: (date: CalendarDate) => void;
 }
@@ -26,14 +36,15 @@ interface UseKeyboardNavigationOptions {
  * and wheel all move through one animator.
  */
 export function useKeyboardNavigation({
-  currentEndDate,
+  getEndDate,
   navigateToDate,
 }: UseKeyboardNavigationOptions) {
   // Navigate by months
   const navigateByMonths = useCallback((months: number) => {
+    const currentEndDate = getEndDate();
     if (!currentEndDate) return;
     navigateToDate(clampEndDate(currentEndDate.add({ months })));
-  }, [currentEndDate, navigateToDate]);
+  }, [getEndDate, navigateToDate]);
 
   // Navigate so the given month is the first month displayed
   const navigateToMonth = useCallback((year: number, month: number) => {
@@ -62,6 +73,7 @@ export function useKeyboardNavigation({
   // Snap to the previous (dir < 0) or next (dir > 0) year boundary. When the
   // view already starts on Jan 1, step a whole year rather than sitting still.
   const navigateToYearBoundary = useCallback((dir: number) => {
+    const currentEndDate = getEndDate();
     if (!currentEndDate) return;
     const startDate = currentEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 });
     const onYearStart = startDate.month === 1 && startDate.day === 1;
@@ -69,7 +81,7 @@ export function useKeyboardNavigation({
       ? (onYearStart ? startDate.year - 1 : startDate.year)
       : (onYearStart ? currentEndDate.year + 1 : currentEndDate.year);
     navigateToYearStart(targetYear);
-  }, [currentEndDate, navigateToYearStart]);
+  }, [getEndDate, navigateToYearStart]);
 
   return {
     navigateByMonths,

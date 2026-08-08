@@ -17,7 +17,7 @@ import type { CapFacYear } from '@/client/cap-fac-year';
 import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
 import { useShortcuts, type ShortcutHandlers } from '@/hooks/useShortcuts';
 import type { ShortcutScope } from '@/shared/shortcuts';
-import { useGestureSpring } from '@/hooks/useGestureSpring';
+import { useGestureSpring, type OffsetEmitMeta } from '@/hooks/useGestureSpring';
 import { usePrefetchAdjacentYears } from '@/hooks/usePrefetchAdjacentYears';
 import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities';
 import { useHoverIndicator } from '@/hooks/useHoverIndicator';
@@ -89,7 +89,17 @@ export const Route = createFileRoute('/')({
 function Home() {
   const queryClient = useQueryClient();
   const navigate = Route.useNavigate();
-  const [endDate, setEndDate] = useState<CalendarDate | null>(null);
+  // Two dates, deliberately. `targetEndDate` is where navigation is HEADED —
+  // it moves the instant the user asks, and drives the header and the prefetch.
+  // `animatedEndDate` is where the stripes ARE — the spring rewrites it every
+  // day-crossing. They differ only while a glide is in flight.
+  //
+  // `targetEndDateRef` mirrors the target synchronously, because relative moves
+  // must compose within a single tick: React state (on a transition lane, no
+  // less) would hand two arrow presses the same stale base and swallow the
+  // second. See useKeyboardNavigation.getEndDate.
+  const [targetEndDate, setTargetEndDate] = useState<CalendarDate | null>(null);
+  const targetEndDateRef = useRef<CalendarDate | null>(null);
   const [animatedEndDate, setAnimatedEndDate] = useState<CalendarDate | null>(null);
 
   // Fleet roster mode, read straight from the URL rather than mirrored into
@@ -139,27 +149,12 @@ function Home() {
     [animatedEndDate]
   );
 
-  // Handle date navigation — sets the target (header) and the rendered date
-  // (tiles) together so header and tiles always move in lock-step.
-  //
-  // Wrapped in startTransition so these per-frame gesture updates land on a
-  // transition lane instead of the default lane. React 19's max-update-depth
-  // guard only counts sync/continuous/default commits that leave work pending;
-  // transition lanes are excluded, so a sustained pan (which fires this ~60×/s,
-  // alongside incidental per-frame re-renders from tooltips/query churn) can no
-  // longer climb the nested-update counter and freeze the tab. All three
-  // setStates share the one transition, so header and tiles stay in lock-step.
-  const handleDateNavigate = useCallback((newEndDate: CalendarDate, dragging: boolean) => {
-    startTransition(() => {
-      setEndDate(newEndDate);
-      setIsDragging(dragging);
-      setAnimatedEndDate(newEndDate);
-    });
-  }, []);
 
-  // Offset bounds for the gesture spring (offset 0 = earliestDataEndDay).
+  // Offset bounds for the gesture spring (offset 0 = earliestDataEndDay). This
+  // is the RENDERED position — it's what a fresh gesture seeds from, so it has
+  // to be where the stripes are, not where they're going.
   const boundaries = useMemo(() => getDateBoundaries(), []);
-  const currentEndDateForGesture = endDate || boundaries.latestDataDay;
+  const currentEndDateForGesture = animatedEndDate || boundaries.latestDataDay;
   const currentOffset = getDaysBetween(boundaries.earliestDataEndDay, currentEndDateForGesture);
   const maxOffset = getDaysBetween(boundaries.earliestDataEndDay, boundaries.latestDataDay);
 
@@ -200,16 +195,46 @@ function Home() {
     return lastRosterRef.current;
   }, [rosterLoaded, rosterLeft, rosterRight]);
 
-  // Gesture spring → date. Offset can be negative for elastic overshoot.
-  const handleOffsetChange = useCallback((offset: number, dragging: boolean) => {
-    handleDateNavigate(boundaries.earliestDataEndDay.add({ days: offset }), dragging);
-  }, [boundaries, handleDateNavigate]);
+  // Gesture spring → rendered date. Offset can be negative for elastic overshoot.
+  //
+  // Wrapped in startTransition so these per-frame gesture updates land on a
+  // transition lane instead of the default lane. React 19's max-update-depth
+  // guard only counts sync/continuous/default commits that leave work pending;
+  // transition lanes are excluded, so a sustained pan (which fires this ~60×/s,
+  // alongside incidental per-frame re-renders from tooltips/query churn) can no
+  // longer climb the nested-update counter and freeze the tab.
+  //
+  // A non-transient offset — a finger mid-drag, a wheel mid-pan, a settled rest
+  // — is the target as well as the position, so it moves both. A spring or
+  // glide frame is only ever the position: its target was already announced by
+  // handleNavigationTarget, and letting an en-route frame overwrite it is
+  // exactly the bug this split exists to kill.
+  const handleOffsetChange = useCallback((offset: number, meta: OffsetEmitMeta) => {
+    const date = boundaries.earliestDataEndDay.add({ days: offset });
+    if (!meta.isTransient) targetEndDateRef.current = date;
+    startTransition(() => {
+      setAnimatedEndDate(date);
+      setIsDragging(meta.isDragging);
+      if (!meta.isTransient) setTargetEndDate(date);
+    });
+  }, [boundaries]);
+
+  // A new destination is known. Urgent and outside the transition — this is the
+  // keystroke's whole payload, and it must not queue behind the pan's deferred
+  // work. Safe to keep urgent because it fires only at discrete moments
+  // (keypress, month click, gesture release), never per frame.
+  const handleNavigationTarget = useCallback((offset: number) => {
+    const date = boundaries.earliestDataEndDay.add({ days: offset });
+    targetEndDateRef.current = date;
+    setTargetEndDate(date);
+  }, [boundaries]);
 
   // Unified gesture + spring navigation: drag, wheel, touch, and programmatic.
   const { bind, elementRef, navigateToOffset } = useGestureSpring({
     currentOffset,
     maxOffset,
     onOffsetChange: handleOffsetChange,
+    onNavigationTarget: handleNavigationTarget,
   });
 
   // Animate to an absolute end date through the same spring (keyboard + months).
@@ -218,6 +243,9 @@ function Home() {
   }, [boundaries, navigateToOffset]);
 
   // Timeline navigation actions, all driving the same spring via navigateToDate.
+  // They read the target through a ref, so relative moves compose no matter how
+  // far behind React's commits are.
+  const getTargetEndDate = useCallback(() => targetEndDateRef.current, []);
   const {
     navigateByMonths,
     navigateToMonth,
@@ -225,7 +253,7 @@ function Home() {
     navigateToStart,
     navigateToYearBoundary,
   } = useKeyboardNavigation({
-    currentEndDate: endDate,
+    getEndDate: getTargetEndDate,
     navigateToDate,
   });
   const handleMonthClick = navigateToMonth;
@@ -249,18 +277,19 @@ function Home() {
 
   const isScopeActive = useCallback((scope: ShortcutScope) => (
     scope === 'global' ||
-    (!welcomeOpen && !shortcutsOpen && !isDragging && endDate !== null)
-  ), [welcomeOpen, shortcutsOpen, isDragging, endDate]);
+    (!welcomeOpen && !shortcutsOpen && !isDragging && targetEndDate !== null)
+  ), [welcomeOpen, shortcutsOpen, isDragging, targetEndDate]);
 
   useShortcuts(shortcutHandlers, { capabilities, isScopeActive });
 
   // One pointer-tracking listener for the whole page, driving --hover-x.
   useHoverIndicator();
 
-  // Target date range (for display in header)
-  const targetDateRange = endDate ? {
-    start: endDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
-    end: endDate
+  // Target date range — the header and the prefetch both want the destination,
+  // so they update on the keystroke rather than trailing the glide.
+  const targetDateRange = targetEndDate ? {
+    start: targetEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
+    end: targetEndDate
   } : null;
 
   // Prefetch the years around the settled navigation target so scrolling the
@@ -275,7 +304,8 @@ function Home() {
   // current navigation target.
   useEffect(() => {
     if (!rosterLoaded) return;
-    setEndDate(prev => prev ?? boundaries.latestDataDay);
+    targetEndDateRef.current ??= boundaries.latestDataDay;
+    setTargetEndDate(prev => prev ?? boundaries.latestDataDay);
     setAnimatedEndDate(prev => prev ?? boundaries.latestDataDay);
   }, [rosterLoaded, boundaries]);
 
@@ -349,8 +379,8 @@ function Home() {
 
   // Gate on having *a* roster rather than a freshly-loaded one, so a mode
   // switch keeps the current rows on screen instead of flashing the spinner.
-  // endDate is settled by an effect once the first roster lands.
-  if (facilitiesByRegion.size === 0 || !endDate) {
+  // Both dates are settled together by an effect once the first roster lands.
+  if (facilitiesByRegion.size === 0 || !targetEndDate || !animatedEndDate) {
     return (
       <div className="opennem-loading">
         <div className="opennem-loading-spinner"></div>
@@ -364,20 +394,29 @@ function Home() {
       {/* Performance Monitor */}
       <PerformanceDisplay />
 
-      {/* Header */}
-      <OpenElectricityHeader
-        onOpenHelp={openWelcome}
-        fleetMode={mode}
-        onFleetModeChange={setMode}
-      />
+      {/* Header + date range. Grouped so the sticky header's scope ends exactly
+          at the top of the viz below — that's what makes the first region header
+          push the page header out of view instead of sliding over it. See
+          `.opennem-page-head` in opennem.css. */}
+      <div className="opennem-page-head">
+        <OpenElectricityHeader
+          onOpenHelp={openWelcome}
+          fleetMode={mode}
+          onFleetModeChange={setMode}
+        />
 
-      {/* Date Range Header */}
-      <div className="opennem-stripes-container">
-        <div className="opennem-stripes-header">
-          <DateRange dateRange={targetDateRange} />
+        {/* Date Range Header */}
+        <div className="opennem-stripes-container">
+          <div className="opennem-stripes-header">
+            <DateRange dateRange={targetDateRange} />
+          </div>
         </div>
+      </div>
 
-        {/* Main Stripes Visualisation */}
+      <div className="opennem-stripes-container">
+        {/* Main Stripes Visualisation. data-offset is where the stripes ARE;
+            data-target-offset is where they're headed — they agree except
+            mid-glide, and the e2e suite asserts on both. */}
         <div
           ref={(el) => {
             containerRef.current = el;
@@ -385,6 +424,9 @@ function Home() {
           }}
           data-testid="stripes-viz"
           data-offset={Math.round(currentOffset)}
+          data-target-offset={Math.round(
+            getDaysBetween(boundaries.earliestDataEndDay, targetEndDate)
+          )}
           data-max-offset={maxOffset}
           className="opennem-stripes-viz"
           {...bind()}
@@ -396,7 +438,7 @@ function Home() {
                 key={regionCode}
                 regionCode={regionCode}
                 facilities={facilities}
-                endDate={endDate!}
+                endDate={animatedEndDate}
                 animatedDateRange={animatedDateRange}
                 onMonthClick={handleMonthClick}
                 isMobile={isMobile}
