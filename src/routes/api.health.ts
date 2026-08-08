@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { env } from 'cloudflare:workers';
+import { readEnv } from '@/server/runtime-env';
 
 /**
  * Scaffold smoke test: proves a Start server route runs on workerd, can read a
@@ -16,7 +17,16 @@ export const Route = createFileRoute('/api/health')({
           {
             ok: true,
             runtime: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
-            hasOpenElectricityKey: Boolean(env.OPENELECTRICITY_API_KEY),
+            // Via readEnv, not `env.` directly. Two reasons, and they compound:
+            // `wrangler types` only puts a name in `Env` if it can see it —
+            // bindings from wrangler.jsonc, vars from .dev.vars — so a secret
+            // that exists only in the deployed Worker is absent from the
+            // generated types, and a fresh workspace fails `npm run typecheck`
+            // on this line alone. And this is a health check: it must report on
+            // the lookup the *data path* actually performs, which is
+            // readEnv('OPENELECTRICITY_API_KEY') in cap-fac-data-service.ts.
+            // Reading `env.` here could answer false while fetches succeed.
+            hasOpenElectricityKey: Boolean(readEnv('OPENELECTRICITY_API_KEY')),
             hasDataBucket: Boolean((env as { DATA?: unknown }).DATA),
             // `cf` is populated by Cloudflare's edge and absent in local dev.
             hasCf: Boolean(cf),

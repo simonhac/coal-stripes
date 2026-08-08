@@ -169,6 +169,26 @@ const CompositeTileComponent = ({
     };
   }, [facilityCode, regionCode, startYear, endYear, leftValid, rightValid, rightNeeded, leftData, leftIsError, rightData, rightIsError]);
 
+  // The row's height, resolved during RENDER rather than in the paint effect
+  // below — this is load-bearing for CLS, not tidiness.
+  //
+  // A <canvas> with no width/height attributes has intrinsic dimensions of
+  // 300×150, and CSS derives an aspect ratio from them. With `width: 100%` and
+  // no height, the first painted frame laid every row out at half the container
+  // width — ~584 px instead of the 25–96 px a facility actually needs. The
+  // effect then corrected it one frame later, collapsing the page from ~17,600
+  // px to ~1,900 px in a single reflow: CLS 0.57 on its own, all of the
+  // measured score.
+  //
+  // Everything needed is already available synchronously: `tiles` is a useMemo,
+  // and by the time a row mounts the page has gated on its roster year being
+  // loaded, so the real height is known on the very first frame.
+  const canvasHeight =
+    tiles.left?.getCanvas().height ??
+    tiles.right?.getCanvas().height ??
+    lastKnownHeightRef.current;
+  const displayHeight = Math.max(canvasHeight, minCanvasHeight);
+
   const drawErrorState = (ctx: CanvasRenderingContext2D, left: number, width: number, height: number) => {
     // Use light blue color to indicate unavailable data
     ctx.fillStyle = '#e6f3ff';
@@ -366,25 +386,21 @@ const CompositeTileComponent = ({
       animationFrameRef.current = null;
     }
 
-    // Set height from available tiles or use last known height
-    let canvasHeight = lastKnownHeightRef.current;
-    if (tiles.left) {
-      canvasHeight = tiles.left.getCanvas().height;
-      lastKnownHeightRef.current = canvasHeight; // Update last known height
-    } else if (tiles.right) {
-      canvasHeight = tiles.right.getCanvas().height;
-      lastKnownHeightRef.current = canvasHeight; // Update last known height
+    // Remember the height for the next render that has no tile to measure, so a
+    // row that briefly loses its data keeps its size instead of collapsing.
+    // canvasHeight/displayHeight themselves are computed during render (above)
+    // and applied as JSX attributes; assigning them again here would only clear
+    // the canvas redundantly.
+    if (tiles.left || tiles.right) {
+      lastKnownHeightRef.current = canvasHeight;
     }
-    
-    // Apply minimum height if specified
-    const displayHeight = Math.max(canvasHeight, minCanvasHeight);
-    
-    // Set canvas size - keep internal resolution at one pixel per day
-    // (TILE_WIDTH wide) and let CSS stretch it
+
+    // Clear before repainting. React has already set width/height to the same
+    // values, but drawImage does not clear, and re-assigning width does — which
+    // is exactly what a repaint needs. Internal resolution stays at one pixel
+    // per day (TILE_WIDTH wide); CSS stretches it to fit.
     canvas.width = DATE_BOUNDARIES.TILE_WIDTH;
     canvas.height = canvasHeight;
-    canvas.style.width = '100%';
-    canvas.style.height = `${displayHeight}px`;
 
     // Use date range
     const startYear = dateRange.start.year;
@@ -613,7 +629,7 @@ const CompositeTileComponent = ({
         animationFrameRef.current = null;
       }
     };
-  }, [dateRange, tiles, facilityCode, updateTooltip, minCanvasHeight, clientToCanvasCoordinates]);
+  }, [dateRange, tiles, facilityCode, updateTooltip, canvasHeight, clientToCanvasCoordinates]);
   
   // Mouse handlers for hover only
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -676,8 +692,11 @@ const CompositeTileComponent = ({
       <canvas
         ref={canvasRef}
         className="opennem-facility-canvas"
-        style={{ 
+        width={DATE_BOUNDARIES.TILE_WIDTH}
+        height={canvasHeight}
+        style={{
           width: '100%',
+          height: `${displayHeight}px`,
           imageRendering: 'pixelated'
         }}
         onMouseMove={handleMouseMove}

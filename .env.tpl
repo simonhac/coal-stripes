@@ -7,8 +7,8 @@
 #
 # (env/setup.ts does this automatically, using the service-account token from
 # the macOS Keychain item op-sa-coal-stripes-dev, or your personal op session.)
-# Prod secrets live in coal-stripes-prod and are pushed to Vercel by the infra
-# repo's sync tooling (config/coal-stripes.json) — never via this file.
+# Prod secrets live in coal-stripes-prod and are set on the Worker with
+# `wrangler secret put` — never via this file.
 #
 # NOTE: op inject parses secret references ANYWHERE in this file, including
 # comments — never write one here unless its field exists in the vault.
@@ -17,17 +17,18 @@
 OPENELECTRICITY_API_KEY="op://coal-stripes-dev/env/OPENELECTRICITY_API_KEY"
 
 # ── non-secret config ─────────────────────────────────────────────────────────
-# File logging is on locally, off on Vercel (serverless).
+# File logging is on locally, off in the deployed Worker (no filesystem).
 ENABLE_FILE_LOGGING=true
 
 # ── optional local knobs (uncomment as needed) ────────────────────────────────
 # DEBUG=1
 # DEBUG_OE=1
-# To exercise /api/cron/warm-* locally: uncomment with ANY throwaway value and
-# send the same value as `Authorization: Bearer …`. The real secret is
-# prod-only (Vercel cron runs only in production; see coal-stripes-prod vault).
-# CRON_SECRET=local-dev-only
-# Same deal for POST /api/admin/purge and the /diagnostics purge button, which
-# use their own secret. The real one is prod-only (coal-stripes-prod vault) and
-# is deliberately NOT written here — this file is committed to a public repo.
+# There is no cron token any more: the refresher is the Worker's `scheduled`
+# handler (wrangler.jsonc `triggers.crons`), invoked by Cloudflare itself over
+# no HTTP route, so there is nothing to authorise. To run it by hand, use
+# `wrangler dev` and its scheduled-trigger endpoint.
+#
+# POST /api/admin/purge and the /diagnostics purge button do still take a
+# secret. The real one is prod-only (coal-stripes-prod vault) and is
+# deliberately NOT written here — this file is committed to a public repo.
 # CACHE_SECRET=local-dev-only

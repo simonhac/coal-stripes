@@ -1,7 +1,7 @@
-/* Import DM Sans font */
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
-
 /* OpenNEM Design System CSS - Extracted from opennem-fe */
+
+/* DM Sans is linked from the document head, not @import-ed here — see the
+   `links` array in src/routes/__root.tsx for why. */
 
 :root {
   /* Colors */

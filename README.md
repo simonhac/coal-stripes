@@ -111,7 +111,7 @@ Dates use `@internationalized/date` (not the built-in `Date`) throughout, with h
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `OPENELECTRICITY_API_KEY` | Your OpenElectricity API key | Yes |
-| `CACHE_SECRET` | Shared secret authorising `POST /api/admin/purge` and the purge button on `/diagnostics`. Deliberately separate from `CRON_SECRET` — it gets typed by hand, so it must not double as the cron token | For the purge button |
+| `CACHE_SECRET` | Shared secret authorising `POST /api/admin/purge` and the purge button on `/diagnostics`. It gets typed by hand, so it is deliberately not reused anywhere else | For the purge button |
 | `ENABLE_FILE_LOGGING` | Historical name; now just toggles structured request logging to the console. Set `false` to silence | No |
 | `DEBUG_OE` | Set to `1` for verbose server logging of fetches and cache hits | No |
 

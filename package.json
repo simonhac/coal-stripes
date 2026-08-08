@@ -25,7 +25,7 @@
     "test:integration": "vitest run --project integration",
     "test:watch": "vitest --project unit",
     "test:e2e": "playwright test",
-    "postinstall": "wrangler types",
+    "postinstall": "CI=1 wrangler types",
     "test:workers": "vitest run --project workers"
   },
   "dependencies": {

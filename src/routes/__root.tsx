@@ -45,6 +45,28 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: 'icon', href: '/favicon.svg' },
+
+      // DM Sans, linked here rather than @import-ed from opennem.css.
+      //
+      // An @import is only discovered once the importing sheet has been
+      // downloaded AND parsed, so the font stylesheet sat behind opennem.css in
+      // a serial chain and could not start until it landed — measured at ~340 ms
+      // on this zone, whose edge is in Singapore. Linked from the head it is in
+      // the initial HTML, so the browser's preload scanner starts all three
+      // sheets together.
+      //
+      // The preconnects cover the second hop: fonts.googleapis.com returns
+      // @font-face rules pointing at fonts.gstatic.com, a different origin whose
+      // handshake would otherwise begin only after that CSS parses. gstatic
+      // needs crossOrigin because fonts are fetched in CORS mode; without it the
+      // browser opens a second, unusable connection.
+      { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
+      { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossOrigin: 'anonymous' },
+      {
+        rel: 'stylesheet',
+        href: 'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap',
+      },
+
       // Next let each page import its own CSS; here both sheets are linked once
       // from the root so /diagnostics stops being the odd one out.
       { rel: 'stylesheet', href: globalsCss },
