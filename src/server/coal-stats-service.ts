@@ -13,17 +13,20 @@
  * were alive are counted as holes and surfaced so no total is presented as
  * solid when it isn't (see @/shared/data-gaps and PeriodCoverage).
  *
- * Data is pulled by self-fetching the cached /api/capacity-factors route once
- * per year — reusing the warm Data Cache rather than re-hitting OpenElectricity
- * — exactly as the cache warmer does. The whole result is cached daily by the
- * /api/stats route.
+ * Years are read from the R2 store, one per year, which self-heals from
+ * OpenElectricity on a miss (see @/server/year-store). This is normally not a
+ * request path at all: the cron folds the result and stores it, so /api/stats
+ * streams a precomputed object and only a cold bucket lands here.
+ *
+ * There is no fleet parameter. The stats cover every coal unit that ever
+ * operated; FleetMode is a client-side view selector over the capacity-factors
+ * roster, and does not reach the server. See CoalGenerationStatsDTO.
  */
 
 import { CalendarDate, parseDate } from '@internationalized/date';
 import type {
   CoalGenerationStatsDTO,
   DataGap,
-  FleetMode,
   GeneratingUnitCapFacHistoryDTO,
   GranularityStat,
   PeriodCoverage,
@@ -32,13 +35,12 @@ import type {
   StatValue,
 } from '@/shared/types';
 import { DATE_BOUNDARIES } from '@/shared/config';
-import { capacityFactorsPath } from '@/shared/capacity-factors-url';
-import { isInFleet } from '@/shared/fleet-filter';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getAESTDateTimeString, getDaysBetween, getQuarter } from '@/shared/date-utils';
 import { formatPeriodLabel, type Granularity } from '@/shared/energy-format';
-import { getBaseUrl, currentDataYear, earliestDataYear, yearRange } from '@/server/cache-warmer';
+import { currentDataYear, earliestDataYear, yearRange } from '@/server/data-years';
 import { mapPool } from '@/server/map-pool';
+import { readYear } from '@/server/year-store';
 
 const STATS_VERSION = '1.0';
 
@@ -80,32 +82,22 @@ interface RowAccum {
 }
 
 /**
- * One year's full-roster payload. The fleet view is applied afterwards, by
- * filterFleet — so computing both modes reads the same cached payloads rather
- * than fetching each year twice.
+ * How each year's full-roster payload is obtained: from R2, which self-heals
+ * from OpenElectricity on a miss (see @/server/year-store). A year that cannot
+ * be built at all comes back null.
  *
- * The URL carries the build id (capacityFactorsPath) and that is load-bearing,
- * not cosmetic. `cache: 'no-store'` governs Next's own fetch cache; it does
- * NOT stop the Vercel edge answering, so an unversioned URL could hand this a
- * payload built by a previous deploy. That matters now the fleet view is
- * derived from a per-unit `status`: a pre-status payload would fail every
- * `current` test, and the day-long stats cache would then store an empty
- * current-fleet result.
+ * Never let a failure escape as an exception here. A null year is reported
+ * honestly by the DTO as "no data" — but 28 silent nulls look exactly like a
+ * successful build of an empty fleet, and /stats would render zeros as though
+ * they were real.
+ *
+ * Injectable so tests can drive the fold without a bucket or a network.
  */
-async function fetchYear(
-  baseUrl: string,
-  year: number,
-): Promise<GeneratingUnitCapFacHistoryDTO | null> {
-  const res = await fetch(`${baseUrl}${capacityFactorsPath(year)}`, {
-    headers: { 'user-agent': 'coal-stripes-stats' },
-    cache: 'no-store',
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as GeneratingUnitCapFacHistoryDTO;
-}
+export type YearReader = (year: number) => Promise<GeneratingUnitCapFacHistoryDTO | null>;
 
-export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationStatsDTO> {
-  const baseUrl = getBaseUrl();
+export async function computeCoalStats(
+  read: YearReader = readYear,
+): Promise<CoalGenerationStatsDTO> {
   const bounds = getDateBoundaries();
   const latestDataDay = bounds.latestDataDay;
 
@@ -124,7 +116,7 @@ export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationS
 
   // 1. Fetch every year (bounded concurrency; cached upstream) and assemble each
   //    unit's whole-of-history daily series.
-  const dtos = await mapPool(years, 5, (y) => fetchYear(baseUrl, y));
+  const dtos = await mapPool(years, 5, read);
 
   // Record where the data came from. Each year's payload carries its own
   // `created_at` — when it was last built from OpenElectricity — which survives
@@ -133,13 +125,12 @@ export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationS
   // is masking an upstream fix.
   const sources = summariseSources(years, dtos);
 
-  // The fleet view is applied here, not at fetch time: `full` aggregates every
-  // unit that ever operated, `current` only those still operating. Same
-  // payloads either way — see @/shared/fleet-filter.
+  // Every unit that ever operated, retired ones included — see the note on
+  // CoalGenerationStatsDTO for why there is no fleet filter here.
   const units = new Map<string, UnitSeries>();
   for (const dto of dtos) {
     if (!dto) continue;
-    for (const u of dto.data.filter((unit) => isInFleet(unit, mode))) {
+    for (const u of dto.data) {
       const region = u.network === 'wem' ? 'WEM' : (u.region ?? 'UNKNOWN');
       let series = units.get(u.duid);
       if (!series) {
@@ -250,7 +241,6 @@ export async function computeCoalStats(mode: FleetMode): Promise<CoalGenerationS
     type: 'coal_generation_stats',
     version: STATS_VERSION,
     created_at: getAESTDateTimeString(),
-    fleet: mode,
     latestDataDay: latestDataDay.toString(),
     units: 'MWh',
     rows: statRows,

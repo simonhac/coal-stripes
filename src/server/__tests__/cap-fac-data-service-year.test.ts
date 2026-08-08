@@ -1,3 +1,5 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { CapFacDataService } from '@/server/cap-fac-data-service';
 import { parseDate } from '@internationalized/date';
 import { setupTestLogger, cleanupTestLogger } from '../test-helpers';
@@ -13,12 +15,12 @@ afterAll(() => {
 });
 
 // Mock the OpenElectricityClient
-jest.mock('openelectricity', () => ({
-  OpenElectricityClient: jest.fn().mockImplementation(() => ({
+vi.mock('openelectricity', () => ({
+  OpenElectricityClient: vi.fn().mockImplementation(function () { return {
     // The service reads the response envelope (units nested under their
     // facility), not the SDK's flattened `table` — only the envelope carries
     // each unit's commencement_date.
-    getFacilities: jest.fn().mockResolvedValue({
+    getFacilities: vi.fn().mockResolvedValue({
       response: {
         data: [
           {
@@ -42,7 +44,7 @@ jest.mock('openelectricity', () => ({
         ]
       }
     }),
-    getFacilityData: jest.fn().mockImplementation((_network: any, facilityCodes: string[], _metrics: any, options: any) => {
+    getFacilityData: vi.fn().mockImplementation((_network: any, facilityCodes: string[], _metrics: any, options: any) => {
       // Generate mock daily rows for the requested (exclusive-end) range.
       const startDate = parseDate(options.dateStart);
       const endDate = parseDate(options.dateEnd).subtract({ days: 1 }); // API end date is exclusive
@@ -65,23 +67,23 @@ jest.mock('openelectricity', () => ({
 
       return Promise.resolve({ datatable: { getRows: () => rows } });
     })
-  })),
+  }; }),
   // The service imports NoDataFound to classify tolerable "no data" errors.
   NoDataFound: class NoDataFound extends Error {}
 }));
 
 describe('CapFacDataService - Year-based Fetching', () => {
   let service: CapFacDataService;
-  let consoleSpy: jest.SpyInstance;
+  let consoleSpy: MockInstance;
 
   beforeEach(() => {
     service = new CapFacDataService('test-api-key');
-    consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
   afterEach(async () => {
     consoleSpy.mockRestore();
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     await new Promise(resolve => setImmediate(resolve));
   });
 

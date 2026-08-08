@@ -1,5 +1,3 @@
-'use client';
-
 import React from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { CompositeTile } from './CompositeTile';

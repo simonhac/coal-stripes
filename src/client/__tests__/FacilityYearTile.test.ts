@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FacilityYearTile } from '../facility-year-tile';
 import { GeneratingUnitDTO } from '@/shared/types';
 import { createFacility } from '../facility-factory';
@@ -84,7 +85,7 @@ describe('FacilityYearTile', () => {
       static last: { data: Uint8ClampedArray; width: number } | null = null;
       getContext() {
         const ctx = super.getContext();
-        ctx.putImageData = jest.fn((image: { data: Uint8ClampedArray; width: number }) => {
+        ctx.putImageData = vi.fn((image: { data: Uint8ClampedArray; width: number }) => {
           CapturingCanvas.last = image;
         }) as never;
         return ctx;

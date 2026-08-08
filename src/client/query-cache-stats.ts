@@ -39,7 +39,7 @@ export function getYearCacheStats(queryClient: QueryClient): YearCacheStats {
   const activeRequestsWithRetries: { label: string; retryCount: number }[] = [];
   let totalBytes = 0;
 
-  // Built views: key is ['capFacYear', mode, year, BUILD_ID].
+  // Built views: key is ['capFacYear', mode, year, CF_DTO_VERSION].
   for (const query of cache.findAll({ queryKey: ['capFacYear'] })) {
     const [, mode, year] = query.queryKey as [string, string, number, string];
     const label = viewLabel(mode, year);
@@ -55,7 +55,7 @@ export function getYearCacheStats(queryClient: QueryClient): YearCacheStats {
     }
   }
 
-  // Shared payloads: key is ['capFacYearData', year, BUILD_ID]. Counted for
+  // Shared payloads: key is ['capFacYearData', year, CF_DTO_VERSION]. Counted for
   // bytes but not listed as chips — a payload is an implementation detail of
   // the views above, and listing it would double the length of the list.
   for (const query of cache.findAll({ queryKey: ['capFacYearData'] })) {

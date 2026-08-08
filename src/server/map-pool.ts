@@ -1,7 +1,7 @@
 /**
  * Run `fn` over `items` with bounded concurrency, preserving input order.
  *
- * Used wherever we fan out across years — the cron warmer and the stats
+ * Used wherever we fan out across years — the store refresher and the stats
  * computation both do. The limit is what keeps a fan-out from becoming a
  * stampede: OpenElectricity never rate-limits us, but a cold year costs their
  * server about a second of work, so past ~4 years in flight the extra

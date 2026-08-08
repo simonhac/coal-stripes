@@ -27,7 +27,7 @@ export function getTooltipFormattedDate(data: TooltipData): string {
     case 'month':
       return `${getMonthName(data.startDate)} ${data.startDate.year}`;
     
-    case 'period':
+    case 'period': {
       if (!data.endDate) {
         throw new Error('endDate is required for period tooltip type');
       }
@@ -47,6 +47,7 @@ export function getTooltipFormattedDate(data: TooltipData): string {
       } else {
         return `${startDay} ${startMonth} ${startYear} – ${endDay} ${endMonth} ${endYear}`;
       }
+    }
   }
 }
 

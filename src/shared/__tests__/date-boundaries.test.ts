@@ -1,15 +1,18 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MockedFunction } from 'vitest';
 import { CalendarDate } from '@internationalized/date';
 import { getDateBoundaries } from '../date-boundaries';
 import { getTodayAEST } from '../date-utils';
 
 // Mock the date-utils module
-jest.mock('../date-utils', () => ({
-  getTodayAEST: jest.fn()
+vi.mock('../date-utils', () => ({
+  getTodayAEST: vi.fn()
 }));
 
 // Mock the config module
-jest.mock('../config', () => {
-  const { CalendarDate } = jest.requireActual('@internationalized/date');
+vi.mock('../config', async () => {
+  const { CalendarDate } =
+    await vi.importActual<typeof import('@internationalized/date')>('@internationalized/date');
   return {
     DATE_BOUNDARIES: {
       EARLIEST_START_DATE: new CalendarDate(2006, 1, 1),
@@ -20,7 +23,7 @@ jest.mock('../config', () => {
 });
 
 describe('date-boundaries', () => {
-  const mockTodayAEST = getTodayAEST as jest.MockedFunction<typeof getTodayAEST>;
+  const mockTodayAEST = getTodayAEST as MockedFunction<typeof getTodayAEST>;
   
   beforeEach(() => {
     // Set a consistent "today" for tests - 15 March 2024
@@ -28,7 +31,7 @@ describe('date-boundaries', () => {
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('getDateBoundaries', () => {

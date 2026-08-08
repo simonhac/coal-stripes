@@ -47,6 +47,25 @@ async function settle(page: Page): Promise<number> {
   return prev ?? 0;
 }
 
+/**
+ * How many wheel steps of `stepPx` it takes to cross the whole timeline, with
+ * headroom.
+ *
+ * Derived rather than hard-coded, because the distance is not a constant: the
+ * viz shows TILE_WIDTH (365) days across its full width, so a day is
+ * `width / 365` pixels, and the timeline gains a day every day. A fixed step
+ * count silently stops reaching the end — which is exactly what happened here.
+ * The old `60 × 500px` budget covered ~30,000px of a ~31,000px timeline, so the
+ * "hard scroll back" landed 28 days short of the start and never engaged the
+ * clamp it was written to test.
+ */
+async function stepsToCrossTimeline(page: Page, stepPx: number): Promise<number> {
+  const box = (await page.locator(VIZ).boundingBox())!;
+  const pixelsPerDay = box.width / 365;
+  const days = await maxOffset(page);
+  return Math.ceil(((days * pixelsPerDay) / stepPx) * 1.4);
+}
+
 /** A drag across the viz. Coordinates are kept inside the 720px viewport (the viz
  *  itself is much taller). Fewer steps ⇒ faster ⇒ higher release velocity. */
 async function dragX(
@@ -125,10 +144,14 @@ test.describe('gesture navigator', () => {
     expect(back).toBeLessThan(max);
     expect(back).toBeGreaterThan(0);
 
-    await scroll(-500, 60, 10); // hard scroll back — must clamp at the start, never negative
+    // Enough wheel travel to actually reach each end, whatever the viewport and
+    // however long the timeline has grown — see stepsToCrossTimeline.
+    const steps = await stepsToCrossTimeline(page, 500);
+
+    await scroll(-500, steps, 10); // hard scroll back — must clamp at the start, never negative
     expect(await settle(page)).toBe(0);
 
-    await scroll(500, 200, 5); // hard scroll forward — must clamp at the present, never past
+    await scroll(500, steps, 5); // hard scroll forward — must clamp at the present, never past
     expect(await settle(page)).toBe(max);
   });
 

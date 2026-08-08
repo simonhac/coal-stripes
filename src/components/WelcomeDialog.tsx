@@ -1,5 +1,3 @@
-'use client';
-
 import { Modal } from './Modal';
 import { Kbd } from './Kbd';
 import type { DeviceCapabilities } from '@/hooks/useDeviceCapabilities';

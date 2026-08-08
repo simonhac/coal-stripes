@@ -1,6 +1,4 @@
-'use client';
-
-import Link from 'next/link';
+import { Link } from '@tanstack/react-router';
 import type { FleetMode } from '@/shared/types';
 import { FleetModeToggle } from './FleetModeToggle';
 
@@ -15,6 +13,12 @@ interface OpenElectricityHeaderProps {
 }
 
 export function OpenElectricityHeader({ onOpenHelp, fleetMode, onFleetModeChange }: OpenElectricityHeaderProps) {
+  // These class names look like Tailwind and are not: `.fixed`, `.flex`,
+  // `.justify-between`, `.mx-auto`, `.px-4`, `.py-3` and friends are hand-written
+  // in opennem.css under "Base utility classes for header". Tailwind was
+  // installed but never wired up (no CSS file imported it), so removing Tailwind
+  // changes nothing here — but removing these classes breaks the header layout,
+  // which is how that was discovered.
   return (
     <header className="border-b fixed top-0 left-0 right-0 z-50" style={{ backgroundColor: '#faf9f6', borderBottom: '1px solid #e5e5e5' }}>
       <div className="mx-auto px-4 py-3 lg:py-4" style={{ maxWidth: '1200px' }}>
@@ -22,7 +26,7 @@ export function OpenElectricityHeader({ onOpenHelp, fleetMode, onFleetModeChange
           {/* Wordmark — this is an independent project, not an official Open
               Electricity site, so we use our own "Coal ⚡ Stripes" wordmark while
               keeping the bolt motif from the OE mark (an associated project). */}
-          <Link href="/" className="opennem-brand" aria-label="Coal Stripes — home">
+          <Link to="/" className="opennem-brand" aria-label="Coal Stripes — home">
             <span className="opennem-wordmark">Coal</span>
             <svg
               className="opennem-wordmark-bolt"

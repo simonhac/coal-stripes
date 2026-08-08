@@ -1,5 +1,19 @@
-import * as fs from 'fs';
-import * as path from 'path';
+/**
+ * Request logging for the OpenElectricity client.
+ *
+ * Previously this appended lines to daily files under `logs/` with
+ * `fs.appendFileSync`. That cannot survive the move to workerd: there is no
+ * filesystem, and — more immediately — `import * as fs from 'fs'` at module
+ * scope breaks bundling regardless of whether the writes ever execute, because
+ * `queued-oeclient.ts` imports this module statically. The `ENABLE_FILE_LOGGING`
+ * gate did not save it; only removing the import does.
+ *
+ * The replacement writes one structured JSON line per event to `console`, which
+ * Workers Logs and Logpush pick up and index. Same call sites, same event
+ * vocabulary, no I/O.
+ */
+
+import { readEnv } from '@/server/runtime-env';
 
 export type LogEventType =
   | 'QUEUED'
@@ -29,84 +43,21 @@ export interface LogEntry {
   resetIn?: number;
 }
 
+/**
+ * Set `ENABLE_FILE_LOGGING=false` to silence request logging entirely. The name
+ * is kept for continuity with `.env.local`, though nothing writes to a file any
+ * more; unset means on.
+ */
+function loggingEnabled(): boolean {
+  return readEnv('ENABLE_FILE_LOGGING') !== 'false';
+}
+
 export class RequestLogger {
-  private logDir: string;
-  private port: number;
-  private requestCounter: number = 0;
-  private currentLogFile: string | null = null;
-  private currentDate: string | null = null;
+  private requestCounter = 0;
   public readonly fileLoggingEnabled: boolean;
 
-  constructor(port: number) {
-    this.port = port;
-    this.logDir = path.join(process.cwd(), 'logs');
-    
-    // Check if file logging is enabled via environment variable
-    // Default to true for development, false for production
-    this.fileLoggingEnabled = process.env.ENABLE_FILE_LOGGING === 'true' || 
-                             (process.env.ENABLE_FILE_LOGGING !== 'false' && process.env.NODE_ENV === 'development');
-    
-    if (this.fileLoggingEnabled) {
-      this.ensureLogDirectory();
-      this.initializeLogFile();
-    }
-  }
-
-  private ensureLogDirectory(): void {
-    if (!fs.existsSync(this.logDir)) {
-      fs.mkdirSync(this.logDir, { recursive: true });
-    }
-  }
-
-  private initializeLogFile(): void {
-    // Get the initial log file name
-    const logFile = path.join(this.logDir, this.getLogFileName());
-    
-    // Write the opening log entry
-    const timestamp = this.formatTimestamp(new Date());
-    const logLine = `${timestamp} [LOG_OPENED] port=${this.port} pid=${process.pid}\n`;
-    
-    fs.appendFileSync(logFile, logLine);
-  }
-
-  private getLogFileName(): string {
-    const now = new Date();
-    const dateStr = this.formatDate(now);
-    
-    // Check if we need a new log file (date changed)
-    if (dateStr !== this.currentDate) {
-      this.currentDate = dateStr;
-      const timeStr = this.formatTime(now);
-      this.currentLogFile = `${dateStr}_${timeStr}_capfac_${this.port}.log`;
-      this.requestCounter = 0; // Reset counter for new day
-    }
-    
-    return this.currentLogFile!;
-  }
-
-  private formatDate(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}${month}${day}`;
-  }
-
-  private formatTime(date: Date): string {
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    return `${hours}${minutes}${seconds}`;
-  }
-
-  private formatTimestamp(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    const ms = String(date.getMilliseconds()).padStart(3, '0');
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
+  constructor(public readonly port: number) {
+    this.fileLoggingEnabled = loggingEnabled();
   }
 
   public getNextRequestId(): string {
@@ -115,142 +66,35 @@ export class RequestLogger {
   }
 
   public log(entry: LogEntry): void {
-    if (!this.fileLoggingEnabled) {
-      // If file logging is disabled, just return
-      return;
-    }
-    
-    const logFile = path.join(this.logDir, this.getLogFileName());
-    const timestamp = this.formatTimestamp(entry.timestamp);
-    let logLine = `${timestamp} [${entry.eventType}]`;
+    if (!this.fileLoggingEnabled) return;
 
-    // Add request-specific information
-    if (entry.requestId) {
-      logLine += ` ${entry.requestId}`;
+    const { timestamp, eventType, ...rest } = entry;
+
+    // Drop undefined fields so each line carries only what the event set —
+    // the old format did the same by appending only the keys it had.
+    const fields: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(rest)) {
+      if (value !== undefined) fields[key] = value;
     }
 
-    if (entry.method && entry.path) {
-      logLine += ` ${entry.method} ${entry.path}`;
-    }
-
-    // Add event-specific details
-    switch (entry.eventType) {
-      case 'QUEUED':
-        if (entry.priority !== undefined) {
-          logLine += ` priority=${entry.priority}`;
-        }
-        break;
-
-      case 'STARTED':
-        if (entry.attempt && entry.maxAttempts) {
-          logLine += ` attempt=${entry.attempt}/${entry.maxAttempts}`;
-        }
-        break;
-
-      case 'COMPLETED':
-        if (entry.status) {
-          logLine += ` status=${entry.status}`;
-        }
-        if (entry.duration) {
-          logLine += ` duration=${entry.duration}ms`;
-        }
-        if (entry.size) {
-          logLine += ` size=${entry.size}`;
-        }
-        break;
-
-      case 'FAILED':
-        if (entry.status) {
-          logLine += ` status=${entry.status}`;
-        }
-        if (entry.duration) {
-          logLine += ` duration=${entry.duration}ms`;
-        }
-        if (entry.error) {
-          logLine += ` error="${entry.error}"`;
-        }
-        break;
-
-      case 'RETRY':
-        if (entry.attempt && entry.maxAttempts) {
-          logLine += ` attempt=${entry.attempt}/${entry.maxAttempts}`;
-        }
-        if (entry.delay) {
-          logLine += ` delay=${entry.delay}ms`;
-        }
-        break;
-
-      case 'CIRCUIT_OPEN':
-        if (entry.threshold) {
-          logLine += ` threshold=${entry.threshold}`;
-        }
-        if (entry.failures) {
-          logLine += ` failures=${entry.failures}`;
-        }
-        if (entry.resetIn) {
-          logLine += ` reset_in=${entry.resetIn}ms`;
-        }
-        break;
-
-      case 'CIRCUIT_CLOSED':
-        // No additional info needed
-        break;
-    }
-
-    logLine += '\n';
-
-    // Append to log file
-    fs.appendFileSync(logFile, logLine);
+    console.log(
+      JSON.stringify({
+        log: 'oe-request',
+        at: timestamp.toISOString(),
+        event: eventType,
+        ...fields,
+      }),
+    );
   }
 
-  public cleanOldLogs(retentionDays: number = 30): void {
-    if (!this.fileLoggingEnabled) {
-      // If file logging is disabled, don't try to clean logs
-      return;
-    }
-    
-    const now = Date.now();
-    const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
-
-    try {
-      const files = fs.readdirSync(this.logDir);
-      
-      files.forEach(file => {
-        if (file.endsWith('.log') && file.includes('_capfac_')) {
-          const filePath = path.join(this.logDir, file);
-          const stats = fs.statSync(filePath);
-          
-          if (now - stats.mtimeMs > retentionMs) {
-            fs.unlinkSync(filePath);
-            console.log(`Deleted old log file: ${file}`);
-          }
-        }
-      });
-    } catch (error) {
-      console.error('Error cleaning old logs:', error);
-    }
-  }
+  /** Retained so callers don't change; log retention is Cloudflare's problem now. */
+  public cleanOldLogs(): void {}
 }
 
-// Singleton instance
 let loggerInstance: RequestLogger | null = null;
-let cleanupIntervalId: NodeJS.Timeout | null = null;
 
 export function initializeRequestLogger(port: number): void {
-  if (!loggerInstance) {
-    loggerInstance = new RequestLogger(port);
-    
-    // Only set up cleanup if file logging is enabled
-    if (loggerInstance.fileLoggingEnabled) {
-      // Set up daily cleanup
-      cleanupIntervalId = setInterval(() => {
-        loggerInstance!.cleanOldLogs();
-      }, 24 * 60 * 60 * 1000); // Run once per day
-      
-      // Run initial cleanup
-      loggerInstance.cleanOldLogs();
-    }
-  }
+  if (!loggerInstance) loggerInstance = new RequestLogger(port);
 }
 
 /**
@@ -258,24 +102,17 @@ export function initializeRequestLogger(port: number): void {
  * use if nobody has done so explicitly.
  *
  * This used to throw instead, which made it a trap: the only explicit
- * initialisation lives at module scope in the capacity-factors route, so any
+ * initialisation lived at module scope in the capacity-factors route, so any
  * code path that reached the OE client without that module having been loaded
- * died. The cron warmer hit exactly this when it started calling the data path
- * in-process instead of over HTTP — every year in the sweep failed on a logging
- * concern. The port is only ever used to name the log file, and the same
- * fallback the route used works fine.
+ * died. The cron sweep hit exactly this. Self-initialising is what makes the
+ * route's module-scope call unnecessary — which matters now, because module
+ * scope in a Worker runs at isolate startup, not per request.
  */
 export function getRequestLogger(): RequestLogger {
-  if (!loggerInstance) {
-    initializeRequestLogger(Number.parseInt(process.env.PORT || '3000', 10));
-  }
+  if (!loggerInstance) initializeRequestLogger(0);
   return loggerInstance!;
 }
 
 export function cleanupRequestLogger(): void {
-  if (cleanupIntervalId) {
-    clearInterval(cleanupIntervalId);
-    cleanupIntervalId = null;
-  }
   loggerInstance = null;
 }

@@ -1,0 +1,97 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "coal-stripes",
+  // Wraps @tanstack/react-start/server-entry to add the `scheduled` handler.
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-08-01",
+  // Deliberately NOT setting no_handle_cross_request_promise_resolution.
+  // Cloudflare suggests it when promise continuations cross request contexts,
+  // which the OpenElectricity queue used to do — but it suppresses the warning
+  // without fixing the cause, and the underlying deadlock (timers stop advancing
+  // once their creating request ends) survives it. The queue is scoped per
+  // request instead; see src/server/queued-oeclient.ts.
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Every year's payload, and both stats payloads, live here as JSON objects
+  // written by the cron. This is the floor of the read path: a Workers Cache
+  // miss costs an R2 read, not a 3-9s OpenElectricity fetch. Objects never
+  // expire, so a cold cache is cheap rather than rare.
+  // Located in Oceania, alongside the readers and the Sydney colo.
+  "r2_buckets": [{ "binding": "DATA", "bucket_name": "coal-stripes-data" }],
+
+  // Workers Cache sits in front of R2 purely for latency. It is no longer
+  // load-bearing: nothing breaks when it is cold. See
+  // docs/caching-and-diagnostics.md.
+  //
+  // cross_version_cache: the cache key includes the Worker version by default,
+  // so every deploy would start cold. This app deploys often for client/CSS
+  // changes while the year JSON almost never changes shape, so sharing entries
+  // across versions is the right trade. Invalidation is by Cache-Tag instead
+  // (see CF_DTO_VERSION in src/shared/config.ts).
+  "cache": {
+    "enabled": true,
+    "cross_version_cache": true
+  },
+
+  // Reads are cheap, but the cron builds year payloads from OpenElectricity and
+  // /api/stats folds 28 years of daily series into whole-of-history stats. The
+  // default 30s of CPU is not enough; Paid allows up to 5 minutes. (This is
+  // also why the free plan is not an option: it caps CPU at 10ms, including
+  // for cron invocations.)
+  "limits": { "cpu_ms": 300000 },
+
+  // The production hostname.
+  //
+  // A Workers ROUTE, not a Custom Domain, and that choice is deliberate. A
+  // custom domain demands its own DNS record, so cutting over means deleting
+  // the Vercel A record first — a window where the apex resolves to nothing —
+  // and rolling back means recreating it and waiting on propagation.
+  //
+  // A route attaches to the EXISTING record instead. The apex keeps
+  // `A 216.150.1.1` permanently; the only switch is the record's proxy status:
+  //
+  //   orange cloud (proxied)  -> traffic enters Cloudflare, this route fires,
+  //                              the Worker answers, Vercel is never contacted
+  //   grey cloud (DNS only)   -> traffic goes straight to Vercel, as before
+  //
+  // So cutover and rollback are both one click in the dashboard, with no record
+  // ever deleted and no propagation delay. Nothing to restore if it goes wrong.
+  //
+  // Because the Worker answers every matched request, Cloudflare never reaches
+  // the origin, so the zone's SSL mode is irrelevant while this is live. It
+  // WOULD matter if the route were removed while the record stayed proxied —
+  // that path needs Full (strict). Rolling back via the cloud toggle avoids it.
+  "routes": [{ "pattern": "stripes.energy/*", "zone_name": "stripes.energy" }],
+
+  "observability": { "enabled": true },
+
+  // Run the Worker in Sydney, next to the R2 bucket.
+  //
+  // `targeted` is STATIC placement — no dynamic analysis, no warm-up, no
+  // dependence on multi-region traffic to analyse. `mode: "smart"` is the
+  // dynamic alternative and a poor fit here (one subrequest, Australian-only
+  // traffic); measured, it behaves identically anyway.
+  //
+  // The config is a discriminated union, and the validation errors are
+  // confusing if you mix the halves:
+  //   { mode: "smart",    hint:   "oc" }                 <- Cloudflare regions
+  //   { mode: "targeted", region: "aws:ap-southeast-2" } <- cloud regions
+  // Smart hints take wnam|enam|sam|weur|eeur|apac|oc|afr|me; targeted regions
+  // take provider:region. `oc` placed us in Melbourne; aws:ap-southeast-2 is
+  // Sydney exactly. Confirm with the `cf-placement` header: `remote-SYD`.
+  //
+  // IMPORTANT — what this does NOT fix, and cannot. Placement controls where
+  // the Worker *executes*, never which colo *terminates* the request. Our
+  // traffic enters at SIN (`cf-ray: ...-SIN`) even from a Melbourne connection,
+  // under every placement setting tried. The proof that placement is the wrong
+  // lever: a cache HIT never runs the Worker at all, and is still ~0.30s from
+  // SIN against ~0.08s from Vercel's syd1. That gap is the network path to the
+  // entry colo — a plan/BGP matter. See docs/caching-and-diagnostics.md.
+  "placement": { "mode": "targeted", "region": "aws:ap-southeast-2" },
+
+  // Every 10 minutes. The refresher only rewrites objects whose freshness tier
+  // says they are due, so most ticks are a handful of R2 HEADs and nothing
+  // else. The interval must stay well under the shortest tier window
+  // (`current`, 1 hour).
+  "triggers": { "crons": ["*/10 * * * *"] }
+}

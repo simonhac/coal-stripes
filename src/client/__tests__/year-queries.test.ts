@@ -1,3 +1,5 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MockedFunction } from 'vitest';
 import { CalendarDate } from '@internationalized/date';
 import { QueryClient } from '@tanstack/react-query';
 import * as dateUtils from '@/shared/date-utils';
@@ -8,19 +10,19 @@ import {
   yearDataQueryOptions,
   yearQueryOptions,
 } from '../year-queries';
-import { YEAR_CACHE_TIERS } from '@/shared/config';
+import { CF_DTO_VERSION, YEAR_CACHE_TIERS } from '@/shared/config';
 
 // Mock the date utilities so "today" is deterministic
-jest.mock('@/shared/date-utils', () => ({
-  ...jest.requireActual('@/shared/date-utils'),
-  getTodayAEST: jest.fn()
+vi.mock('@/shared/date-utils', async () => ({
+  ...(await vi.importActual<typeof import('@/shared/date-utils')>('@/shared/date-utils')),
+  getTodayAEST: vi.fn()
 }));
 
-const mockGetTodayAEST = dateUtils.getTodayAEST as jest.MockedFunction<typeof dateUtils.getTodayAEST>;
+const mockGetTodayAEST = dateUtils.getTodayAEST as MockedFunction<typeof dateUtils.getTodayAEST>;
 
 describe('year-queries', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockGetTodayAEST.mockReturnValue(new CalendarDate(2024, 7, 15));
   });
 
@@ -81,25 +83,27 @@ describe('year-queries', () => {
       queryClient = new QueryClient();
     });
 
-    it('keys queries by mode and year, plus the build id', () => {
-      // The build id (NEXT_PUBLIC_BUILD_ID, 'dev' when unset) is part of the key
-      // so a deploy invalidates every cached year — see year-queries.ts.
+    it('keys queries by mode and year, plus the DTO version', () => {
+      // CF_DTO_VERSION is part of the key so a payload-shape change invalidates
+      // every cached year — see year-queries.ts. It replaced the per-deploy
+      // build id, which no longer exists: deploys deliberately keep their cache
+      // now (cross_version_cache), and only a shape change should bust it.
       expect(yearQueryOptions(queryClient, 'full', 2023).queryKey).toEqual([
         'capFacYear',
         'full',
         2023,
-        'dev',
+        CF_DTO_VERSION,
       ]);
       expect(yearQueryOptions(queryClient, 'current', 2023).queryKey).toEqual([
         'capFacYear',
         'current',
         2023,
-        'dev',
+        CF_DTO_VERSION,
       ]);
     });
 
     it('keys the shared payload by year alone — no mode', () => {
-      expect(yearDataQueryOptions(2023).queryKey).toEqual(['capFacYearData', 2023, 'dev']);
+      expect(yearDataQueryOptions(2023).queryKey).toEqual(['capFacYearData', 2023, CF_DTO_VERSION]);
     });
 
     it('gives the current year the short (hourly) staleTime', () => {
@@ -146,7 +150,7 @@ describe('year-queries', () => {
     it('fetches once for both fleet views of a year', async () => {
       // The point of the two-layer split: switching the fleet toggle must not
       // hit the network. Both views resolve through one shared payload query.
-      const fetchMock = jest.fn().mockResolvedValue(payloadResponse());
+      const fetchMock = vi.fn().mockResolvedValue(payloadResponse());
       global.fetch = fetchMock as unknown as typeof fetch;
 
       await queryClient.fetchQuery(yearQueryOptions(queryClient, 'full', 2023));
@@ -154,7 +158,7 @@ describe('year-queries', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       // ...and the request carries no fleet parameter.
-      expect(fetchMock.mock.calls[0][0]).toBe('/api/capacity-factors?year=2023&v=dev');
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/capacity-factors?year=2023');
     });
 
     it('leaves retries to the payload query alone', () => {
@@ -169,7 +173,7 @@ describe('year-queries', () => {
       // Panning fast across cold years: the payload lands long after the tile
       // that asked for it has gone. Painting ~33 canvases per abandoned year,
       // and caching them for gcTime, is pure waste.
-      const fetchMock = jest.fn().mockResolvedValue(payloadResponse());
+      const fetchMock = vi.fn().mockResolvedValue(payloadResponse());
       global.fetch = fetchMock as unknown as typeof fetch;
 
       const controller = new AbortController();
@@ -185,8 +189,8 @@ describe('year-queries', () => {
       // The shared payload still resolved — one view giving up must not deny
       // the other view (or a later revisit) the download it already paid for.
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(queryClient.getQueryData(['capFacYearData', 2023, 'dev'])).toBeDefined();
-      expect(queryClient.getQueryData(['capFacYear', 'full', 2023, 'dev'])).toBeUndefined();
+      expect(queryClient.getQueryData(['capFacYearData', 2023, CF_DTO_VERSION])).toBeDefined();
+      expect(queryClient.getQueryData(['capFacYear', 'full', 2023, CF_DTO_VERSION])).toBeUndefined();
     });
 
     it('refetches the payload once it goes stale, rather than rebuilding from the old one', async () => {
@@ -195,7 +199,7 @@ describe('year-queries', () => {
       // old (ensureQueryData does exactly that). Revalidation would then be
       // dead: the view would keep re-rendering the same stale data. NEM figures
       // are revised, so this must genuinely go back to the network.
-      const fetchMock = jest.fn().mockResolvedValue(payloadResponse());
+      const fetchMock = vi.fn().mockResolvedValue(payloadResponse());
       global.fetch = fetchMock as unknown as typeof fetch;
 
       await queryClient.fetchQuery(yearQueryOptions(queryClient, 'full', 2023));

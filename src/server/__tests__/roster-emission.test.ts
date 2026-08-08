@@ -5,6 +5,8 @@
  * The OpenElectricity SDK client is mocked so we can control which
  * networks/units return data (or a NoDataFound) without touching the real API.
  */
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import { CapFacDataService } from '@/server/cap-fac-data-service';
 import { parseDate } from '@internationalized/date';
 import { getDaysBetween, getTodayAEST } from '@/shared/date-utils';
@@ -13,7 +15,7 @@ import { setupTestLogger, cleanupTestLogger } from '../test-helpers';
 // The mock must provide a real NoDataFound class (defined inside the factory to
 // satisfy jest's hoisting) — the service uses `instanceof NoDataFound` to
 // classify tolerable "no data" errors.
-jest.mock('openelectricity', () => {
+vi.mock('openelectricity', () => {
   class NoDataFound extends Error {
     constructor(message: string) {
       super(message);
@@ -21,16 +23,16 @@ jest.mock('openelectricity', () => {
     }
   }
   return {
-    OpenElectricityClient: jest.fn(),
+    OpenElectricityClient: vi.fn(),
     NoDataFound,
   };
 });
 
 import { OpenElectricityClient, NoDataFound } from 'openelectricity';
 
-const ClientMock = OpenElectricityClient as unknown as jest.Mock;
-const getFacilities = jest.fn();
-const getFacilityData = jest.fn();
+const ClientMock = OpenElectricityClient as unknown as Mock;
+const getFacilities = vi.fn();
+const getFacilityData = vi.fn();
 
 const YEAR = 2019; // a past, non-leap year: all days carry data (none future-nulled)
 
@@ -138,11 +140,13 @@ beforeAll(() => setupTestLogger());
 afterAll(() => cleanupTestLogger());
 
 beforeEach(() => {
-  jest.clearAllMocks();
-  ClientMock.mockImplementation(() => ({
-    getFacilities: (...a: unknown[]) => getFacilities(...a),
-    getFacilityData: (...a: unknown[]) => getFacilityData(...a),
-  }));
+  vi.clearAllMocks();
+  ClientMock.mockImplementation(function () {
+    return {
+      getFacilities: (...a: unknown[]) => getFacilities(...a),
+      getFacilityData: (...a: unknown[]) => getFacilityData(...a),
+    };
+  });
 });
 
 describe('roster emission', () => {

@@ -1,3 +1,4 @@
+import { vi } from 'vitest';
 import { initializeRequestLogger, cleanupRequestLogger } from './request-logger';
 
 // Initialize the request logger for tests
@@ -13,12 +14,12 @@ export function cleanupTestLogger(): void {
 
 // Helper to mock the request logger for tests that don't need real logging
 export function mockRequestLogger(): void {
-  jest.mock('../request-logger', () => ({
-    initializeRequestLogger: jest.fn(),
-    getRequestLogger: jest.fn(() => ({
-      getNextRequestId: jest.fn(() => 'ID1'),
-      log: jest.fn(),
-      cleanOldLogs: jest.fn()
+  vi.mock('../request-logger', () => ({
+    initializeRequestLogger: vi.fn(),
+    getRequestLogger: vi.fn(() => ({
+      getNextRequestId: vi.fn(() => 'ID1'),
+      log: vi.fn(),
+      cleanOldLogs: vi.fn()
     }))
   }));
 }
