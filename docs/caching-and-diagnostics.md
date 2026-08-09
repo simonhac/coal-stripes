@@ -134,6 +134,40 @@ what "fresh" means.
 Future years are `Cache-Control: no-store` — the data does not exist yet — and
 are never written to R2, for the same reason.
 
+### Where in the window each year falls
+
+The *window* comes from the table above. The *phase* — which instant inside the
+window a given year is rebuilt at — is `src/server/refresh-schedule.ts`, and is
+server-only: the client has no use for it.
+
+Dueness compares **absolute slot boundaries**, not elapsed time since the last
+write. That distinction is the whole point. Age-based dueness makes the schedule
+a function of when the last build happened, so a cold bucket stamps all 28 years
+at one instant and they stay locked together for good — on 2026-08-08, 2006,
+2019, 2021 and 2025 were all built within 26 seconds of each other, and the
+archive tier rebuilt all 22 years in a single tick every week.
+
+Each tier's window is cut into as many slots as the tier has years, and a year
+takes slot `year % slots`. Because tiers are runs of *consecutive* years that is
+a bijection, so they spread perfectly evenly with no hashing:
+
+| Tier | Slots | Effect |
+|---|---|---|
+| `current` | 1 | on the hour |
+| `recent` | 5 | one of the five years every 4.8 hours |
+| `archive` | 7 | three or four of the twenty-two years each day |
+
+Aggregate work is unchanged — ~32 year-builds a day either way — but it is
+spread over the 144 daily ticks instead of arriving in a weekly burst.
+
+`current` gets one slot deliberately, so its phase is zero and it rebuilds on
+the hour. Brisbane is UTC+10 with no DST, so **every Brisbane midnight is an
+hour boundary** and the first tick after midnight rebuilds. That matters because
+the DTO nulls today and the future, so the current year's payload gains its new
+day at midnight and at no other time. Before this, a payload built at 23:30 held
+until 00:30 — measured at 00:04 on 2026-08-09, the live site's freshest 2026
+payload still ended at 7 August.
+
 ---
 
 ## The R2 store and its refresher
@@ -149,19 +183,35 @@ v1/stats.json
 The key is namespaced by DTO version, so bumping `CF_DTO_VERSION` gives the new
 shape a fresh namespace: old objects become *unreachable* rather than wrong.
 
-Objects store the **serialised response bytes**, with `builtAt` in
+Objects store the **serialised response bytes**, with three fields in
 `customMetadata`. That is what lets the read path do `new Response(object.body)`
-— 180 KB of JSON is streamed without ever being parsed, and `x-cf-built-at` is
-read from metadata rather than from the body.
+— 180 KB of JSON is streamed without ever being parsed, and the headers are read
+from metadata rather than from the body.
+
+| Field | Meaning |
+|---|---|
+| `builtAt` | when we last fetched this year from OpenElectricity |
+| `contentHash` | SHA-256 of the payload with `created_at` blanked |
+| `dataChangedAt` | when the numbers last actually *moved* |
+
+The hash is what separates a revision from a re-fetch. Every rebuild produces a
+new `created_at`, so the bytes always differ; without the hash the store cannot
+tell whether anything happened, and every rebuild has to be treated as if it
+did. `dataChangedAt` is also the measurement that would justify lengthening the
+archive window: if it stays weeks behind `builtAt` for the 2000s, the weekly
+rebuild is buying nothing. Both are visible from outside as `x-cf-built-at` and
+`x-cf-data-changed-at`.
 
 `wrangler.jsonc` runs `*/10 * * * *` into the `scheduled` handler in
 `src/worker.ts`, which calls `refreshAll()` (`src/server/store-refresher.ts`).
 Each tick:
 
-1. `HEAD` each of the 28 years, compare `builtAt` against the year's tier, and
-   rebuild only what is due. Most ticks write nothing.
-2. If any year was rewritten — **or** the stored stats payload is missing or a
-   day old — refold `/api/stats` and store it. Order matters: stats fold the
+1. `HEAD` each of the 28 years, compare `builtAt` against the year's slot, and
+   rebuild only what is due. Most ticks write nothing. A year already past twice
+   its window logs `refresh:stale` — a healthy sweep rebuilds within one cron
+   interval of a boundary, so that means earlier ticks have been failing.
+2. If any year's numbers **changed** — or the stored stats payload is missing or
+   a day old — refold `/api/stats` and store it. Order matters: stats fold the
    year payloads, so doing it first would fold the previous generation.
 
    The age condition is a backstop, not decoration. Without it, a tick that
@@ -169,7 +219,35 @@ Each tick:
    an unchanged set of years, so the stats object would stay missing until some
    visitor paid ~40 s to rebuild it.
 
-Watch the `refresh` log line: `{written, skipped, failed, statsWritten, totalMs}`.
+   The trigger is *changed*, not *written*. Before the payload hash existed, the
+   current year's hourly rewrite counted even when it re-fetched identical
+   numbers, so the fold ran ~24 times a day to produce the same answer.
+3. **Purge the Workers Cache tags for whatever changed** — `cf-year-<y>` per
+   year, plus `coal-stats`. Last, once both are stored: purging first would send
+   the next reader to R2 for the copy we were about to replace.
+
+   Without this the R2 write is invisible. Workers Cache holds its copy for the
+   full `s-maxage`, which is the same window the refresher runs on, so a reader
+   could see a payload up to *two* windows old. Measured on 2026-08-09: R2's
+   `stats.json` was built `23:30:13`, while the response being served had
+   `created_at 15:20:39` and was pinned there for another 16 hours.
+
+   Purging from `scheduled` is not the same thing as *caching* from `scheduled`,
+   which is impossible (see below) — a purge is a control-plane call that
+   neither reads nor writes the cache. Cloudflare caps a purge at 100 operations
+   per request on every plan, and this zone (Free) at 5 purge requests a minute;
+   one batched call a tick is nowhere near either.
+
+Watch the `refresh` log line:
+`{written, changed, skipped, deferred, failed, stale, statsWritten, statsChanged, purgedTags, totalMs}`.
+`written` counts rebuilds, `changed` counts the subset whose numbers moved, and
+`deferred` counts years the 4-minute budget ran out before reaching — worth
+telling apart from `skipped`, which just means not due.
+
+Expect `changed` to equal `written` for the first week after this shipped, then
+drop: objects stored before the hash existed have no `contentHash` to compare
+against, so each year's first rebuild under the new code reports a change once.
+An archive year does not reach that point until its next weekly slot.
 
 **Cost.** 28 HEADs every ten minutes is ~121k class-B ops a month against a 10M
 free allowance; the writes are ~1k class-A a month against 1M. 28 years × ~200 KB

@@ -20,7 +20,8 @@
  */
 import { getCapFacDataService } from '@/server/cap-fac-data-service';
 import { currentDataYear } from '@/server/data-years';
-import { CF_DTO_VERSION, yearCachePolicy } from '@/shared/config';
+import { yearIsDueAt } from '@/server/refresh-schedule';
+import { CF_DTO_VERSION } from '@/shared/config';
 import { parseAESTDateTime } from '@/shared/date-utils';
 import type { CoalGenerationStatsDTO, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 import { now, type ZonedDateTime } from '@internationalized/date';
@@ -69,6 +70,57 @@ function bodyOf(dto: unknown): string {
   return JSON.stringify(dto);
 }
 
+/**
+ * A digest of everything in the payload except when it was built.
+ *
+ * Every rebuild produces a new `created_at`, so the bytes always differ and the
+ * store cannot tell a genuine revision from a re-fetch of identical numbers.
+ * That distinction is what decides whether to purge the edge and refold the
+ * stats, and — over a few weeks of `dataChangedAt` stamps — whether the archive
+ * tier's weekly rebuild is buying anything at all.
+ *
+ * Serialising twice is deliberate. Composing the body from a pre-serialised
+ * `data` array would avoid it, but would silently drop any field later added to
+ * the DTO; a second `JSON.stringify` is a few milliseconds against the 3-9 s
+ * upstream fetch that preceded it.
+ */
+async function contentHash(dto: { created_at: string }): Promise<string> {
+  const canonical = JSON.stringify({ ...dto, created_at: '' });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** What a write did, beyond succeeding. */
+export interface StoreWrite {
+  /** Whether the payload differs from the one it replaced, `created_at` aside. */
+  changed: boolean;
+  /** When the numbers last actually moved — carried forward across re-fetches. */
+  dataChangedAt: string;
+}
+
+/** Shared by putYear and putStats: hash, compare, write, report. */
+async function putPayload(
+  b: R2Bucket,
+  key: string,
+  dto: { created_at: string },
+): Promise<StoreWrite> {
+  const hash = await contentHash(dto);
+  const previous = await b.head(key);
+  const changed = previous?.customMetadata?.contentHash !== hash;
+  const dataChangedAt = changed
+    ? dto.created_at
+    : previous?.customMetadata?.dataChangedAt ?? dto.created_at;
+
+  // Written even when nothing changed: R2 has no metadata-only update, and
+  // `builtAt` must advance or the year stays due and is re-fetched every tick.
+  await b.put(key, bodyOf(dto), {
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { builtAt: dto.created_at, contentHash: hash, dataChangedAt },
+  });
+
+  return { changed, dataChangedAt };
+}
+
 /** The stored object for a year, body unread so the caller can stream it. */
 export async function getYear(year: number): Promise<R2ObjectBody | null> {
   const b = await bucket();
@@ -82,32 +134,35 @@ export async function getStats(): Promise<R2ObjectBody | null> {
   return b.get(statsKey());
 }
 
-export async function putYear(year: number, dto: GeneratingUnitCapFacHistoryDTO): Promise<void> {
+export async function putYear(
+  year: number,
+  dto: GeneratingUnitCapFacHistoryDTO,
+): Promise<StoreWrite> {
   const b = await bucket();
-  if (!b || !isStorable(year)) return;
-  await b.put(yearKey(year), bodyOf(dto), {
-    httpMetadata: { contentType: 'application/json' },
-    customMetadata: { builtAt: dto.created_at },
-  });
+  // Nowhere to store it, so nothing changed for anyone downstream.
+  if (!b || !isStorable(year)) return { changed: false, dataChangedAt: dto.created_at };
+  return putPayload(b, yearKey(year), dto);
 }
 
-export async function putStats(dto: CoalGenerationStatsDTO): Promise<void> {
+export async function putStats(dto: CoalGenerationStatsDTO): Promise<StoreWrite> {
   const b = await bucket();
-  if (!b) return;
-  await b.put(statsKey(), bodyOf(dto), {
-    httpMetadata: { contentType: 'application/json' },
-    customMetadata: { builtAt: dto.created_at },
-  });
+  if (!b) return { changed: false, dataChangedAt: dto.created_at };
+  return putPayload(b, statsKey(), dto);
+}
+
+/** A freshly built year, and what storing it did. */
+export interface YearBuild extends StoreWrite {
+  dto: GeneratingUnitCapFacHistoryDTO;
 }
 
 /**
  * Build a year from OpenElectricity and store it. The only path that reaches
  * upstream, and the only one that costs real CPU.
  */
-export async function buildYear(year: number): Promise<GeneratingUnitCapFacHistoryDTO> {
+export async function buildYear(year: number): Promise<YearBuild> {
   const dto = await getCapFacDataService().getCapacityFactors(year);
-  await putYear(year, dto);
-  return dto;
+  const write = await putYear(year, dto);
+  return { dto, ...write };
 }
 
 /**
@@ -123,7 +178,7 @@ export async function readYear(year: number): Promise<GeneratingUnitCapFacHistor
   try {
     const stored = await getYear(year);
     if (stored) return (await stored.json()) as GeneratingUnitCapFacHistoryDTO;
-    return await buildYear(year);
+    return (await buildYear(year)).dto;
   } catch (error) {
     console.error(JSON.stringify({
       log: 'year-store:read-failed',
@@ -164,6 +219,13 @@ export async function statsIsDue(
   return ageSeconds >= STATS_MAX_AGE_SECONDS;
 }
 
+/** Whether a year needs rewriting, and how far past its window it already is. */
+export interface YearFreshness {
+  due: boolean;
+  /** Seconds since builtAt; null when nothing is stored or the stamp is unreadable. */
+  ageSeconds: number | null;
+}
+
 /**
  * Whether a year is due for a rewrite, per its freshness tier.
  *
@@ -174,27 +236,42 @@ export async function statsIsDue(
  *
  * The tiers in YEAR_CACHE_TIERS were written as cache expiry windows; here they
  * are read as a write schedule. Same intent — how long before this year's
- * numbers might have moved — so they stay a single source of truth.
+ * numbers might have moved — so they stay a single source of truth. Where in
+ * each window a given year falls is decided by @/server/refresh-schedule.
+ *
+ * The age comes back with the answer because the caller wants it for a different
+ * question — "has this drifted so far past its window that earlier ticks must be
+ * failing?" — and re-reading the object to ask would double the sweep's traffic.
  */
-export async function yearIsDue(
+export async function yearFreshness(
   year: number,
   reference: ZonedDateTime = now('Australia/Brisbane'),
-): Promise<boolean> {
+): Promise<YearFreshness> {
   const b = await bucket();
-  if (!b || !isStorable(year)) return false;
+  if (!b || !isStorable(year)) return { due: false, ageSeconds: null };
 
   const head = await b.head(yearKey(year));
-  if (!head) return true;
+  if (!head) return { due: true, ageSeconds: null };
 
   const builtAt = head.customMetadata?.builtAt;
-  const when = builtAt ? parseAESTDateTime(builtAt) : null;
   // An object with no parseable builtAt predates this scheme, or was written by
   // something else. Rewriting it is the cheap way to make it conform.
-  if (!when) return true;
+  const when = builtAt ? parseAESTDateTime(builtAt) : null;
+  if (!when) return { due: true, ageSeconds: null };
 
   // toDate() is the library's own interop for absolute comparison — there is no
   // way to subtract two instants without dropping to epoch milliseconds. Same
   // pattern as formatAgeFromAEST in @/shared/date-utils.
   const ageSeconds = (reference.toDate().getTime() - when.toDate().getTime()) / 1000;
-  return ageSeconds >= yearCachePolicy(year, currentDataYear()).revalidateSeconds;
+  return {
+    due: yearIsDueAt(year, currentDataYear(), when, reference),
+    ageSeconds,
+  };
+}
+
+export async function yearIsDue(
+  year: number,
+  reference: ZonedDateTime = now('Australia/Brisbane'),
+): Promise<boolean> {
+  return (await yearFreshness(year, reference)).due;
 }

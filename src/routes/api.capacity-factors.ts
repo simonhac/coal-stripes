@@ -109,6 +109,7 @@ export const Route = createFileRoute('/api/capacity-factors')({
               year,
               currentYear,
               stored.customMetadata?.builtAt ?? '',
+              stored.customMetadata?.dataChangedAt,
             );
             headers.set('x-cf-source', 'r2');
             headers.set('Content-Type', 'application/json');
@@ -120,11 +121,16 @@ export const Route = createFileRoute('/api/capacity-factors')({
           // against the seconds we just spent upstream, and letting the response
           // race the write is how a year ends up permanently unstored.
           debug(`🌐 API: Building year ${year} from OpenElectricity`);
-          const data = await buildYear(year);
+          const { dto, dataChangedAt } = await buildYear(year);
 
-          const headers = capacityFactorHeaders(year, currentYear, data.created_at);
+          const headers = capacityFactorHeaders(
+            year,
+            currentYear,
+            dto.created_at,
+            dataChangedAt,
+          );
           headers.set('x-cf-source', 'upstream');
-          return Response.json(data, { headers });
+          return Response.json(dto, { headers });
         } catch (error) {
           console.error('API Error:', error);
           return Response.json(describeError(error), {

@@ -92,7 +92,7 @@ src/
 Data flows through three layers of caching so users (almost) never wait on OpenElectricity — see **[Caching & tile-render diagnostics](docs/caching-and-diagnostics.md)** for the full picture, including how to confirm the caches are warm:
 
 1. **Server**: Cloudflare **Workers Cache** sits in front of the Worker, configured entirely by the `Cache-Control` and `Cache-Tag` headers each route sets (`src/server/cache-headers.ts`). Years are cached on a freshness tier — current hourly, recent daily, deep archive weekly (NEM data is revisable, so no year is treated as immutable). Concurrent misses for the same year are collapsed into one origin call.
-2. **Cron warming**: a `scheduled` handler sweeps every year plus both stats modes every 10 minutes (`src/server/cache-warmer.ts`), reaching the cache by looping back into the Worker's own fetch entrypoint. This is **not** optional: Workers Cache does not honour `stale-while-revalidate`, so a lapsed entry blocks the next visitor for a full OpenElectricity fetch.
+2. **The R2 store**: every year's payload also lives in the `DATA` bucket, where nothing expires, so a cache miss costs an R2 read rather than a 3–9 s OpenElectricity fetch. A `scheduled` handler rebuilds each year on its tier's schedule and purges the edge tags it changed (`src/server/store-refresher.ts`, `src/server/refresh-schedule.ts`). This is a *store*, not a warmer: Cloudflare runs scheduled invocations without cache involvement, so no cron can warm Workers Cache by any means — the fix is to make a miss cheap instead.
 3. **Client**: each year is cached with [TanStack Query](https://tanstack.com/query) (`src/client/year-queries.ts`) — the cached value is the fully pre-rendered set of canvas tiles — with adjacent years prefetched in the background.
 
 Cache health can be inspected at any time from the **`/diagnostics`** page, which probes each year and reports Cloudflare's own `cf-cache-status` — see the [caching doc](docs/caching-and-diagnostics.md).
@@ -139,8 +139,8 @@ The app deploys to **Cloudflare Workers**:
 npm run deploy            # vite build && wrangler deploy
 ```
 
-`wrangler.jsonc` configures Workers Cache, the 10-minute warming cron and the
-raised CPU limit. `OPENELECTRICITY_API_KEY` and `CACHE_SECRET` are Worker
+`wrangler.jsonc` configures Workers Cache, the R2 bucket, the 10-minute refresh
+cron and the raised CPU limit. `OPENELECTRICITY_API_KEY` and `CACHE_SECRET` are Worker
 secrets (`wrangler secret put …`), not environment variables. Workers Paid is
 required: the free plan caps CPU at 10 ms and subrequests at 50, and `/api/stats`
 needs more of both.

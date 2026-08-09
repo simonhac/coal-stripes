@@ -23,7 +23,8 @@ type IFacilityParams = NonNullable<Parameters<OpenElectricityClient['getFaciliti
 // throughput saturates around one heavy request per second, so going wider than
 // ~8 in flight only inflates everyone's latency for no extra throughput. These
 // numbers are therefore a ceiling, not a target; the useful lever is how many
-// years a caller asks for at once (see warmYears).
+// years a caller asks for at once (see REFRESH_CONCURRENCY in
+// @/server/store-refresher).
 const QUEUE_OPTIONS = { concurrency: 10, interval: 100, intervalCap: 1 } as const;
 
 /**
@@ -62,30 +63,14 @@ export function withRequestQueue<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Queue priority, carried on the async context rather than threaded through
- * every call site.
+ * There is deliberately no priority mechanism here any more.
  *
- * p-queue runs higher numbers first. Interactive work — a visitor waiting on a
- * year — is the default; the cron refresher opts down to `background` so its
- * sweep can fan out several years at once without a visitor's cold fetch ever
- * having to wait behind it.
- *
- * The context has to travel out-of-band because the innermost function is
- * wrapped by `unstable_cache`, whose cache key is derived from its arguments —
- * adding a "background" parameter there would fork the cache. One rough edge is
- * accepted: if a background fetch is already in flight and an interactive
- * caller joins it via single-flight, the interactive caller inherits the
- * background priority. Sharing one fetch still beats duplicating it.
+ * A `withQueuePriority` / `QUEUE_PRIORITY` pair used to exist so the cron could
+ * queue its sweep below a visitor's cold fetch. It had no call sites, and could
+ * not have helped if it had: `withRequestQueue` scopes a queue to a single
+ * fan-out, so the refresher and a visitor never share one and there is nothing
+ * for a priority to order them against.
  */
-export const QUEUE_PRIORITY = { interactive: 0, background: -1 } as const;
-
-const priorityStore = new AsyncLocalStorage<number>();
-
-/** Run `fn` with every OpenElectricity request it makes queued at `priority`. */
-export function withQueuePriority<T>(priority: number, fn: () => Promise<T>): Promise<T> {
-  return priorityStore.run(priority, fn);
-}
-
 // 2 retries with exponential backoff: 1s then 2s (~3s of added latency, capped
 // at 4s). Kept deliberately short so a genuinely cold miss returns in a few
 // seconds rather than ~15s; a warm-all cron re-attempts any year that fails
@@ -142,16 +127,14 @@ export class OEClientQueued {
   /**
    * Run a request through the queue with retries. Each retry attempt re-enters
    * the queue, so backoff waits don't hold a concurrency slot and retries are
-   * rate-limited like any other request — and re-queue at the same priority,
-   * since the async context still applies.
+   * rate-limited like any other request.
    */
   private run<T>(details: OERequestDetails, execute: () => Promise<T>): Promise<T> {
     const logger = getRequestLogger();
     const requestId = logger.getNextRequestId();
     const startTime = performance.now();
-    const priority = priorityStore.getStore() ?? QUEUE_PRIORITY.interactive;
 
-    return pRetry(() => this.queue.add(execute, { priority }) as Promise<T>, {
+    return pRetry(() => this.queue.add(execute) as Promise<T>, {
       ...RETRY_OPTIONS,
       // A 404 → NoDataFound means the range genuinely has no data (e.g. WEM
       // before 2006, or a retired unit queried for a year it didn't run).
