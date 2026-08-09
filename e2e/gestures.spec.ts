@@ -72,6 +72,33 @@ async function stepsToCrossTimeline(page: Page, stepPx: number): Promise<number>
   return Math.ceil(((days * pixelsPerDay) / stepPx) * 1.4);
 }
 
+/**
+ * Record every distinct `data-offset` the viz passes through, in the page, until
+ * the returned stop function is called.
+ *
+ * A MutationObserver rather than Playwright polling: a glide is over in about a
+ * second, and a round-trip per sample is far too coarse to tell a smooth
+ * animation from a teleport.
+ */
+async function recordOffsets(page: Page): Promise<() => Promise<number[]>> {
+  await page.evaluate((sel) => {
+    const el = document.querySelector(sel)!;
+    const w = window as unknown as { __offsets: number[]; __offsetObs: MutationObserver };
+    w.__offsets = [Number(el.getAttribute('data-offset'))];
+    w.__offsetObs = new MutationObserver(() => {
+      const v = Number(el.getAttribute('data-offset'));
+      if (v !== w.__offsets[w.__offsets.length - 1]) w.__offsets.push(v);
+    });
+    w.__offsetObs.observe(el, { attributes: true, attributeFilter: ['data-offset'] });
+  }, VIZ);
+  return () =>
+    page.evaluate(() => {
+      const w = window as unknown as { __offsets: number[]; __offsetObs: MutationObserver };
+      w.__offsetObs.disconnect();
+      return w.__offsets;
+    });
+}
+
 /** A drag across the viz. Coordinates are kept inside the 720px viewport (the viz
  *  itself is much taller). Fewer steps ⇒ faster ⇒ higher release velocity. */
 async function dragX(
@@ -260,6 +287,40 @@ test.describe('gesture navigator', () => {
     expect(travelled).toBeLessThan(65);
 
     expect(await settle(page)).toBe(target);
+  });
+
+  // A year hop (⌘arrow) is ~365 days — just inside the glide budget from rest,
+  // and comfortably outside it when measured from a half-finished glide. That is
+  // how a second press used to trip `immediate: true` and teleport: the budget
+  // was charged the unspent remainder of the first hop as well as the new one.
+  // It must now bend the running spring toward the new year instead.
+  test('a second Meta+ArrowLeft mid-glide keeps gliding instead of teleporting', async ({ page }) => {
+    await loadApp(page);
+    const before = (await targetOffset(page))!;
+    const stop = await recordOffsets(page);
+
+    await page.keyboard.press('Meta+ArrowLeft');
+    await page.waitForTimeout(200); // well inside the ~700ms NAV_SPRING glide
+    expect(await offset(page)).not.toBe(await targetOffset(page)); // genuinely mid-flight
+    await page.keyboard.press('Meta+ArrowLeft');
+
+    const settled = await settle(page);
+    const samples = await stop();
+    const target = (await targetOffset(page))!;
+
+    expect(settled).toBe(target);
+    expect(before - target).toBeGreaterThan(365); // two year hops, composed on the target
+
+    // Bending the motion never reverses it.
+    for (let i = 1; i < samples.length; i++) {
+      expect(samples[i]).toBeLessThanOrEqual(samples[i - 1]);
+    }
+
+    // And no single step swallows the journey. A third of the total travel is a
+    // deliberately loose bound — the point is to catch the teleport (one step of
+    // ~500+ days) without going flaky when a cold year's tiles cost a long frame.
+    const steps = samples.slice(1).map((v, i) => samples[i] - v);
+    expect(Math.max(...steps)).toBeLessThan((before - target) / 3);
   });
 
   // Ctrl+S used to match the bare 's' binding, preventDefault the browser's

@@ -4,7 +4,9 @@ import {
   resolveDragRelease,
   rubberband,
   rubberbandClamp,
+  resolveNavigation,
   MOMENTUM,
+  NAV,
 } from '../gesture-physics';
 
 // A realistic range: ~19 years of daily offsets (2006-01-01 .. present).
@@ -150,6 +152,63 @@ describe('gesture-physics: resolveDragRelease', () => {
     });
     expect(r.kind).toBe('momentum');
     expect(r.target).toBe(MAX);
+  });
+});
+
+describe('gesture-physics: resolveNavigation', () => {
+  // A ⌘arrow year-boundary hop: TILE_WIDTH is 365, so one press moves ~a year.
+  const YEAR = 365;
+
+  it('at rest, a short hop glides from where the stripes are', () => {
+    expect(resolveNavigation({ target: 5000, visual: 5030, inFlightTarget: null }))
+      .toEqual({ animate: true, retarget: false });
+  });
+
+  it('at rest, a hop right on the cap still glides', () => {
+    expect(resolveNavigation({ target: 5000, visual: 5000 + NAV.MAX_GLIDE_DAYS, inFlightTarget: null }))
+      .toEqual({ animate: true, retarget: false });
+  });
+
+  it('at rest, a multi-year jump snaps rather than sweeping the tiles', () => {
+    // `s` (jump to start) from the present.
+    expect(resolveNavigation({ target: MIN, visual: MAX, inFlightTarget: null }))
+      .toEqual({ animate: false, retarget: false });
+  });
+
+  // The regression: a second ⌘arrow while the first is still gliding. Measured
+  // from the lagging visual position the distance is ~1.5 years and the nav used
+  // to teleport; measured in intent space it is one ordinary year hop.
+  it('mid-glide, a second year hop retargets instead of snapping', () => {
+    const plan = resolveNavigation({
+      target: 5000 - YEAR, // where the second press is headed
+      visual: 5000 + 180, // the first glide is only halfway there
+      inFlightTarget: 5000, // ...but this is where it was already going
+    });
+    expect(plan).toEqual({ animate: true, retarget: true });
+    // Sanity: the same numbers judged against the visual position would not glide.
+    expect(Math.abs(5000 - YEAR - (5000 + 180))).toBeGreaterThan(NAV.MAX_GLIDE_DAYS);
+  });
+
+  it('mid-glide, chained hops keep retargeting however far the view falls behind', () => {
+    let inFlightTarget = 5000;
+    for (let i = 0; i < 5; i++) {
+      const target = inFlightTarget - YEAR;
+      expect(resolveNavigation({ target, visual: 5000, inFlightTarget }))
+        .toEqual({ animate: true, retarget: true });
+      inFlightTarget = target;
+    }
+  });
+
+  it('mid-glide, a jump too long to glide still snaps', () => {
+    expect(resolveNavigation({ target: MIN, visual: MAX - 100, inFlightTarget: MAX - YEAR }))
+      .toEqual({ animate: false, retarget: false });
+  });
+
+  it('honours an overridden cap', () => {
+    expect(resolveNavigation({ target: 100, visual: 0, inFlightTarget: null, maxGlideDays: 50 }))
+      .toEqual({ animate: false, retarget: false });
+    expect(resolveNavigation({ target: 40, visual: 0, inFlightTarget: null, maxGlideDays: 50 }))
+      .toEqual({ animate: true, retarget: false });
   });
 });
 

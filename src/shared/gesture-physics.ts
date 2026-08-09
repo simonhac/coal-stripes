@@ -68,6 +68,52 @@ export function rubberbandClamp(pos: number, min: number, max: number, maxStretc
   return pos;
 }
 
+/** Programmatic navigation (keyboard arrows, month clicks) tuning, in day-offsets. */
+export const NAV = {
+  /**
+   * A hop longer than this snaps instead of gliding — sweeping years of tiles
+   * at 60fps is a strobe, not an animation.
+   */
+  MAX_GLIDE_DAYS: 366,
+} as const;
+
+export interface NavPlan {
+  /** false ⇒ jump straight there (immediate, no animation). */
+  animate: boolean;
+  /** true ⇒ bend the running animation toward the new target, keeping its velocity. */
+  retarget: boolean;
+}
+
+/**
+ * Decide how a programmatic navigation should reach its target.
+ *
+ * The hop is measured in INTENT space — from the destination the view is
+ * already heading to, not from where the stripes have physically got to. A
+ * keypress composes on the target (that is the whole point of announcing it
+ * synchronously), so judging it against the lagging visual position would count
+ * the unspent remainder of the previous hop as part of this one, and a second
+ * year-step would blow the glide budget and teleport.
+ *
+ * When something is already in flight and the hop is glide-sized, the caller
+ * must RETARGET the running animation rather than restart it: restarting resets
+ * position and velocity, which reads as a hard stop mid-glide.
+ */
+export function resolveNavigation(params: {
+  /** Clamped day-offset asked for. */
+  target: number;
+  /** Where the stripes are now, in day-offsets. */
+  visual: number;
+  /** Destination of the running animation, or null when at rest. */
+  inFlightTarget: number | null;
+  maxGlideDays?: number;
+}): NavPlan {
+  const { target, visual, inFlightTarget } = params;
+  const maxGlide = params.maxGlideDays ?? NAV.MAX_GLIDE_DAYS;
+  const anchor = inFlightTarget ?? visual;
+  const animate = Math.abs(target - anchor) <= maxGlide;
+  return { animate, retarget: animate && inFlightTarget !== null };
+}
+
 export type ReleaseKind = 'snap' | 'momentum' | 'settle';
 
 export interface ReleaseResult {
