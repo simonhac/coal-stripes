@@ -300,6 +300,13 @@ export class FacilityYearTile {
     return this.facility.facilityCode;
   }
 
+  /**
+   * Get the network this facility belongs to ('nem' / 'wem')
+   */
+  getNetwork(): string {
+    return this.facility.network;
+  }
+
 
   /**
    * Get the memory size of the rendered canvas in bytes

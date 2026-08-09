@@ -20,6 +20,7 @@ import { CalendarDate } from '@internationalized/date';
 import { FacilityYearTile } from '@/client/facility-year-tile';
 import { getDayIndex, isLeapYear, getDaysBetween, getDateFromIndex } from '@/shared/date-utils';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
+import { formatUnitName } from '@/client/unit-names';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { perfMonitor } from '@/shared/performance-monitor';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
@@ -265,11 +266,11 @@ const CompositeTileComponent = ({
       if (hoverKey === lastHoverKeyRef.current) return;
       lastHoverKeyRef.current = hoverKey;
 
-      // Format unit name - for WA units, show only the part after underscore
-      let unitName = tooltipData.unitName;
-      if (tooltipData.network && tooltipData.network.toUpperCase() === 'WEM' && unitName && unitName.includes('_')) {
-        unitName = unitName.split('_').pop() || unitName;
-        // Update the label to use formatted unit name
+      // WEM DUIDs carry the station as a prefix; drop it for display.
+      const unitName = tooltipData.unitName
+        ? formatUnitName(tooltipData.unitName, tooltipData.network)
+        : tooltipData.unitName;
+      if (unitName !== tooltipData.unitName) {
         tooltipData.label = `${facilityName} ${unitName}`;
       }
       

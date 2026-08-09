@@ -12,6 +12,7 @@ import {
   calculateRegionStats,
   calculateAverageCapacityFactor,
   getFacilityCodesInRegion,
+  getFacilityLifecycle,
   getRegionNames
 } from '../cap-fac-stats';
 
@@ -37,6 +38,12 @@ interface UnitSpec {
   region: string;
   capacity: number;
   capacityFactor: number | null;
+  network?: string;
+  status?: 'operating' | 'retired';
+  // Lifecycle dates as OpenElectricity serves them: a date known only to the
+  // year arrives as that year's 31 December.
+  commenced?: string | null;
+  lastSeen?: string | null;
 }
 
 const makeDTO = (units: UnitSpec[]): GeneratingUnitCapFacHistoryDTO => ({
@@ -44,7 +51,7 @@ const makeDTO = (units: UnitSpec[]): GeneratingUnitCapFacHistoryDTO => ({
   version: '1.0',
   created_at: '2024-01-01T00:00:00+10:00',
   data: units.map(unit => ({
-    network: 'NEM',
+    network: unit.network ?? 'NEM',
     region: unit.region,
     data_type: 'capacity_factor',
     units: 'MW',
@@ -53,7 +60,9 @@ const makeDTO = (units: UnitSpec[]): GeneratingUnitCapFacHistoryDTO => ({
     facility_code: unit.facilityCode,
     facility_name: `${unit.facilityCode} Station`,
     fueltech: 'coal_black',
-    status: 'operating' as const,
+    status: unit.status ?? ('operating' as const),
+    commenced: unit.commenced,
+    last_seen: unit.lastSeen,
     history: {
       data: Array(365).fill(unit.capacityFactor),
       start: `${YEAR}-01-01`,
@@ -216,6 +225,68 @@ describe('cap-fac-stats', () => {
 
     it('returns null when the year is not cached', () => {
       expect(getFacilityCodesInRegion(queryClient, MODE,'NSW1', YEAR)).toBeNull();
+    });
+  });
+
+  describe('getFacilityLifecycle', () => {
+    const RANGE = { start: new CalendarDate(YEAR, 3, 1), end: new CalendarDate(YEAR, 3, 10) };
+
+    it('reports the commissioning year, and a span once a unit has retired', () => {
+      seedYear(YEAR, makeDTO([
+        { duid: 'A1', facilityCode: 'FACA', region: 'NSW1', capacity: 720, capacityFactor: 60,
+          commenced: '1981-12-31' },
+        { duid: 'A2', facilityCode: 'FACA', region: 'NSW1', capacity: 500, capacityFactor: 60,
+          commenced: '1972-12-31', status: 'retired', lastSeen: '2023-04-24' }
+      ]));
+
+      expect(getFacilityLifecycle(queryClient, MODE, 'FACA', RANGE)).toEqual({
+        totalCapacity: 1220,
+        units: [
+          { name: 'A1', capacity: 720, commencedYear: 1981, retiredYear: null },
+          { name: 'A2', capacity: 500, commencedYear: 1972, retiredYear: 2023 }
+        ]
+      });
+    });
+
+    it('reports an unknown commissioning date as null, never a year of 0', () => {
+      seedYear(YEAR, makeDTO([
+        { duid: 'A1', facilityCode: 'FACA', region: 'NSW1', capacity: 100, capacityFactor: 60,
+          commenced: null }
+      ]));
+
+      expect(getFacilityLifecycle(queryClient, MODE, 'FACA', RANGE)?.units).toEqual([
+        { name: 'A1', capacity: 100, commencedYear: null, retiredYear: null }
+      ]);
+    });
+
+    it('drops the station prefix from WEM unit names', () => {
+      seedYear(YEAR, makeDTO([
+        { duid: 'MUJA_G5', facilityCode: 'MUJA', region: 'WEM', capacity: 195.8,
+          capacityFactor: 60, network: 'WEM', commenced: '1981-12-31' }
+      ]));
+
+      expect(getFacilityLifecycle(queryClient, MODE, 'MUJA', RANGE)?.units[0].name).toBe('G5');
+    });
+
+    it('falls back to the end year when only that one is cached', () => {
+      seedYear(YEAR + 1, makeDTO([
+        { duid: 'A1', facilityCode: 'FACA', region: 'NSW1', capacity: 100, capacityFactor: 60,
+          commenced: '1981-12-31' }
+      ]));
+
+      const lifecycle = getFacilityLifecycle(queryClient, MODE, 'FACA', {
+        start: new CalendarDate(YEAR, 12, 20),
+        end: new CalendarDate(YEAR + 1, 1, 10)
+      });
+
+      expect(lifecycle).toEqual({
+        totalCapacity: 100,
+        units: [{ name: 'A1', capacity: 100, commencedYear: 1981, retiredYear: null }]
+      });
+    });
+
+    it('returns null when no displayed year is cached', () => {
+      expect(getFacilityLifecycle(queryClient, MODE, 'FACA', RANGE)).toBeNull();
     });
   });
 

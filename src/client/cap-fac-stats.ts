@@ -1,8 +1,9 @@
 import { QueryClient } from '@tanstack/react-query';
-import { CalendarDate } from '@internationalized/date';
+import { CalendarDate, parseDate } from '@internationalized/date';
 import { getDayIndex } from '@/shared/date-utils';
 import { yearQueryOptions, isValidYear } from './year-queries';
 import { CapFacYear } from './cap-fac-year';
+import { formatUnitName } from './unit-names';
 import { FleetMode } from '@/shared/types';
 
 export interface GenerationStats {
@@ -143,6 +144,81 @@ export function calculateFacilityStats(
   }
 
   return { totalWeightedCapacityFactor, totalCapacityDays };
+}
+
+/** One unit's lifecycle, as the facility hovercard lists it. */
+export interface FacilityUnitLifecycle {
+  /** Display name — the DUID, shortened for WEM. */
+  name: string;
+  /** Registered capacity, MW. */
+  capacity: number;
+  /** Year the unit was commissioned, or null when OpenElectricity doesn't say. */
+  commencedYear: number | null;
+  /** Year it last generated; null while it is still operating. */
+  retiredYear: number | null;
+}
+
+/** A facility's units and their combined registered capacity. */
+export interface FacilityLifecycle {
+  /** Registered capacity of every unit below, MW. */
+  totalCapacity: number;
+  units: FacilityUnitLifecycle[];
+}
+
+/**
+ * The calendar year of a lifecycle date.
+ *
+ * OpenElectricity stores a date it only knows to the year as 31 December of
+ * that year (`commenced_specificity: 'year'` ⇒ '1981-12-31'), so the year is
+ * usable whatever the specificity — there is nothing to correct for.
+ */
+function lifecycleYear(stamp: string | null | undefined): number | null {
+  if (!stamp) return null;
+  try {
+    return parseDate(stamp.slice(0, 10)).year;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A facility's units — capacity, and when each was commissioned (and retired) —
+ * read from whichever displayed year is already cached.
+ *
+ * Never triggers a fetch — like the capacity-factor readouts, this appears once
+ * the visible tiles have their data. The order is the tile's own unit order, so
+ * the list reads top-to-bottom against the stripes it describes.
+ */
+export function getFacilityLifecycle(
+  queryClient: QueryClient,
+  mode: FleetMode,
+  facilityCode: string,
+  dateRange: { start: CalendarDate; end: CalendarDate }
+): FacilityLifecycle | null {
+  const years = dateRange.start.year === dateRange.end.year
+    ? [dateRange.start.year]
+    : [dateRange.start.year, dateRange.end.year];
+
+  for (const year of years) {
+    if (!isValidYear(year)) continue;
+
+    const yearData = getCachedYear(queryClient, mode, year);
+    const tile = yearData?.facilityTiles.get(facilityCode);
+    if (!tile) continue;
+
+    const network = tile.getNetwork();
+    return {
+      totalCapacity: tile.getTotalCapacity(),
+      units: tile.getUnits().map(unit => ({
+        name: formatUnitName(unit.unitName, network),
+        capacity: unit.capacity,
+        commencedYear: lifecycleYear(unit.commenced),
+        retiredYear: unit.status === 'retired' ? lifecycleYear(unit.lastSeen) : null
+      }))
+    };
+  }
+
+  return null;
 }
 
 /**

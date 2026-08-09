@@ -1,9 +1,15 @@
-import React, { useRef } from 'react';
+import React, { useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
-import { calculateFacilityStats, calculateAverageCapacityFactor } from '@/client/cap-fac-stats';
+import {
+  calculateFacilityStats,
+  calculateAverageCapacityFactor,
+  getFacilityLifecycle
+} from '@/client/cap-fac-stats';
 import { useFleetMode } from '@/client/fleet-mode-context';
-import { facilityUrl } from '@/shared/openelectricity-links';
+import { usePinnableTooltip } from '@/hooks/usePinnableTooltip';
+import { useHovercardTrigger } from '@/hooks/useHovercardTrigger';
+import { FacilityHovercard } from './FacilityHovercard';
 
 interface FacilityLabelProps {
   facilityCode: string;
@@ -13,16 +19,10 @@ interface FacilityLabelProps {
 }
 
 /**
- * How far a finger may travel and still count as a tap rather than a pan.
- * On mobile the label sits on top of the pannable stripes, so a swipe that
- * happens to start over a name must not follow the link.
- */
-const TAP_SLOP_PX = 10;
-
-/**
- * A facility's name in the left column, linking out to the facility's page on
- * Open Electricity. Hovering shows the facility's average capacity factor over
- * the displayed period.
+ * A facility's name in the left column. Hovering shows the facility's average
+ * capacity factor over the displayed period and clicking/tapping pins it;
+ * dwelling on the name (or long-pressing it) raises a hovercard linking out to
+ * the facility's page on Open Electricity.
  */
 export function FacilityLabel({
   facilityCode,
@@ -33,10 +33,13 @@ export function FacilityLabel({
   const queryClient = useQueryClient();
   const mode = useFleetMode();
 
-  const touchOrigin = useRef<{ x: number; y: number } | null>(null);
-  const dragged = useRef(false);
+  const matches = useCallback(
+    (data: Record<string, unknown>) =>
+      data.facilityCode === facilityCode && data.regionCode === regionCode,
+    [facilityCode, regionCode]
+  );
 
-  const sendTooltipData = () => {
+  const sendTooltipData = (pinned: boolean) => {
     const stats = calculateFacilityStats(queryClient, mode, facilityCode, dateRange);
     if (!stats) {
       // No data available for this date range - clear tooltip
@@ -53,54 +56,42 @@ export function FacilityLabel({
         tooltipType: 'period' as const,
         regionCode: regionCode,
         facilityCode: facilityCode,
-        pinned: false
+        pinned
       };
       window.dispatchEvent(new CustomEvent('tooltip-data-hover', { detail: tooltipData }));
     }
   };
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    // Deliberately not stopping propagation: the touch must still reach the
-    // @use-gesture bindings on the viz container so panning keeps working.
-    const touch = e.touches[0];
-    touchOrigin.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
-    dragged.current = false;
-  };
+  const { togglePin, handlers } = usePinnableTooltip({ matches, sendTooltipData });
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    const origin = touchOrigin.current;
-    const touch = e.touches[0];
-    if (!origin || !touch) return;
-    if (Math.hypot(touch.clientX - origin.x, touch.clientY - origin.y) > TAP_SLOP_PX) {
-      dragged.current = true;
-    }
-  };
-
-  const handleClick = (e: React.MouseEvent) => {
-    // Swallow the synthetic click that follows a pan gesture over the label.
-    if (dragged.current) {
-      dragged.current = false;
-      e.preventDefault();
-    }
-  };
+  // The trigger owns click and touch: only it can tell a tap from a pan that
+  // happened to start over the label. Hover for the tooltip stays on the mouse
+  // events below, which is the behaviour every other label shares.
+  const { isOpen, anchorRef, cardRef, anchorHandlers, cardHandlers } = useHovercardTrigger({
+    onActivate: togglePin
+  });
 
   return (
-    <a
-      className="opennem-facility-label"
-      href={facilityUrl(facilityCode)}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label={`${facilityName} — open on Open Electricity in a new tab`}
-      // Anchors are natively draggable; without this a pan that starts on a
-      // label becomes a link drag-and-drop and never reaches @use-gesture.
-      draggable={false}
-      onMouseEnter={sendTooltipData}
-      onMouseLeave={() => window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'))}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onClick={handleClick}
-    >
-      {facilityName}
-    </a>
+    <>
+      <div
+        ref={anchorRef}
+        className="opennem-facility-label"
+        onMouseEnter={handlers.onMouseEnter}
+        onMouseLeave={handlers.onMouseLeave}
+        {...anchorHandlers}
+      >
+        {facilityName}
+      </div>
+      {isOpen && (
+        <FacilityHovercard
+          anchor={anchorRef.current}
+          cardRef={cardRef}
+          facilityCode={facilityCode}
+          facilityName={facilityName}
+          lifecycle={getFacilityLifecycle(queryClient, mode, facilityCode, dateRange)}
+          handlers={cardHandlers}
+        />
+      )}
+    </>
   );
 }

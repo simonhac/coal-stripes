@@ -34,6 +34,11 @@ export function formatEnergy(mwh: number): string {
   return `${Math.round(mwh).toLocaleString(AU)} MWh`;
 }
 
+/** A registered capacity in MW, e.g. 1480 → "1,480MW". */
+export function formatCapacity(mw: number): string {
+  return `${grouped(mw)}MW`;
+}
+
 /** A proportion in [0,1] as a one-decimal percentage, e.g. 0.578 → "57.8%". */
 export function formatPercent(proportion: number): string {
   return `${(proportion * 100).toFixed(1)}%`;
