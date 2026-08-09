@@ -2,16 +2,20 @@ import React, { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { CapFacTooltip, TooltipData } from './CapFacTooltip';
+import { RegionHeaderDateRange } from './DateRange';
 import {
   calculateRegionStats,
   calculateAverageCapacityFactor,
   getRegionNames,
 } from '@/client/cap-fac-stats';
 import { useFleetMode } from '@/client/fleet-mode-context';
+import { useHeaderDateRangeSlot } from '@/hooks/useHeaderDateRange';
 
 interface RegionTooltipProps {
   regionCode: string;
   isMobile: boolean;
+  /** Where navigation is headed — shown when this header borrows the slot. */
+  targetDateRange: { start: CalendarDate; end: CalendarDate } | null;
 }
 
 /**
@@ -22,11 +26,16 @@ interface RegionTooltipProps {
  * every tile and the month axis — when the only thing that had changed was the
  * tooltip. Subscribing down here keeps a hover to six re-renders across the
  * page instead of forty-odd.
+ *
+ * It also owns the other thing that can occupy this slot: once the page-head
+ * date range has scrolled out of sight, the pinned region's header shows the
+ * date range here instead — a tooltip, when there is one, always wins.
  */
-export function RegionTooltip({ regionCode, isMobile }: RegionTooltipProps) {
+export function RegionTooltip({ regionCode, isMobile, targetDateRange }: RegionTooltipProps) {
   const queryClient = useQueryClient();
   const mode = useFleetMode();
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
+  const showDateRange = useHeaderDateRangeSlot(regionCode);
 
   const regionNames = getRegionNames(regionCode);
   const tooltipRegionName = isMobile ? regionNames.short : regionNames.long;
@@ -101,6 +110,10 @@ export function RegionTooltip({ regionCode, isMobile }: RegionTooltipProps) {
       window.removeEventListener('tooltip-data-hover-end', handleTooltipHoverEnd);
     };
   }, [regionCode, tooltipRegionName, queryClient, mode]);
+
+  if (!tooltipData && showDateRange) {
+    return <RegionHeaderDateRange dateRange={targetDateRange} />;
+  }
 
   return <CapFacTooltip data={tooltipData} />;
 }

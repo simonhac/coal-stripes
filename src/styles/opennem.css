@@ -371,6 +371,40 @@ header a {
   justify-content: space-between;
 }
 
+/* Marks the region's bottom edge — the edge that eventually pushes its own
+   sticky header out of view — for the IntersectionObserver in
+   useHeaderDateRangeTracker. Absolute inside the region's containing block, so
+   it costs no layout. */
+.opennem-region-sentinel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+/* The date range, shown here only while the page-head copy is out of sight and
+   this region's header is the pinned one. Sits in the slot the tooltip normally
+   occupies, and matches its height so the header never changes size on the
+   handover. Sized between the region name (18px) and the tooltip chips (9.9px):
+   readable, but plainly subordinate to the region it sits beside. */
+.opennem-region-date-range {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 19px;
+  font-family: var(--font-stack);
+  font-size: 14px;
+  font-weight: 300;
+  color: rgb(74, 74, 74);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums; /* digits don't wobble while panning */
+  font-feature-settings: 'tnum' 1;
+}
+
 .opennem-region-label {
   cursor: pointer;
   padding-top: 24px;
@@ -821,12 +855,19 @@ header a {
     position: relative;
   }
   
-  /* Prevent region label from line breaking on mobile */
+  /* Prevent region label from line breaking on mobile. min-width: 0 so it
+     actually ellipsises when the date range claims its share of the row —
+     a flex item won't shrink below its content width without it. */
   .opennem-region-label {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     padding-top: 16px;
+    min-width: 0;
+  }
+
+  .opennem-region-date-range {
+    font-size: 11px;
   }
   
   /* Hide the black square (tooltip icon) on mobile */
