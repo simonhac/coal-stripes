@@ -191,6 +191,9 @@ export interface GeneratingUnit {
   // renderer needs them to tell a cross-year gap from a commissioning.
   commenced?: string | null;
   lastSeen?: string | null;
+  // Retired as at the time the payload was built, not as at its year — see the
+  // note on GeneratingUnitDTO.status.
+  status?: 'operating' | 'retired';
   history: UnitHistoryDTO;
 }
 

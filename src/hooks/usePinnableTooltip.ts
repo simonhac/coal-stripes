@@ -89,6 +89,13 @@ export function usePinnableTooltip({ matches, sendTooltipData }: UsePinnableTool
   };
 
   return {
+    isPinned,
+    /**
+     * Pin/unpin directly, for labels that own their own touch handling — see
+     * FacilityLabel, which cannot use `handlers.onTouchStart` because it must
+     * let a pan through to the gesture bindings underneath.
+     */
+    togglePin,
     handlers: {
       onMouseEnter: handleMouseEnter,
       onMouseLeave: handleMouseLeave,

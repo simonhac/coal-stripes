@@ -20,6 +20,7 @@ export function createFacility(facilityCode: string, dtoUnits: GeneratingUnitDTO
     capacity: dto.capacity,
     commenced: dto.commenced,
     lastSeen: dto.last_seen,
+    status: dto.status,
     history: dto.history
   }));
   

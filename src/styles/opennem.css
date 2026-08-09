@@ -28,6 +28,7 @@
   --border-style: 1px dotted #cdcdcd;
 
   /* Layering — above the fixed header (z-50) and the perf panel (10000) */
+  --z-hovercard: 10500;
   --z-modal: 11000;
 }
 
@@ -488,23 +489,71 @@ header a {
   user-select: none; /* Prevent selection */
 }
 
-/* Facility names are links out to Open Electricity. Scoped to the anchor so the
-   empty spacer div in CapFacXAxis (same class) gets no link affordances. */
-a.opennem-facility-label {
-  text-decoration: none;
+/* The card raised by hovering or long-pressing a facility name. Portalled onto
+   the body, so it is placed in viewport coordinates by FacilityHovercard. */
+.facility-hovercard {
+  position: fixed;
+  z-index: var(--z-hovercard);
+  max-width: 220px;
+  padding: 8px 10px;
+  background: white;
+  border: 1px solid var(--border-colour);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.facility-hovercard-name {
+  font-size: 13px;
+  font-weight: 500;
   color: var(--dark-grey);
-  /* Safari honours this rather than the draggable attribute; both stop a pan
-     that begins on a label from turning into a native link drag. */
-  -webkit-user-drag: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-a.opennem-facility-label:hover {
+.facility-hovercard-total {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #767676;
+}
+
+.facility-hovercard-units {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  justify-content: start;
+  column-gap: 10px;
+  margin-top: 4px;
+  /* A station with an unusual number of units scrolls rather than overflowing
+     the viewport the card is positioned against. */
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 11px;
+  color: #767676;
+}
+
+.facility-hovercard-unit-capacity {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.facility-hovercard-unit-years {
+  white-space: nowrap;
+}
+
+.facility-hovercard-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  color: var(--opennem-primary);
+  text-decoration: none;
+}
+
+.facility-hovercard-link:hover {
   text-decoration: underline;
-}
-
-a.opennem-facility-label:focus-visible {
-  outline: 2px solid var(--dark-grey);
-  outline-offset: 1px;
 }
 
 .opennem-stripe-data {
@@ -745,8 +794,9 @@ a.opennem-facility-label:focus-visible {
     color: #333;
     font-size: 10px;
     font-weight: 500;
-    /* Tappable so the Open Electricity link works on mobile too; FacilityLabel
-       discards the click when the touch arrived via a pan. */
+    /* Tappable so tap-to-pin and long-press-for-the-hovercard work on mobile
+       too; the touch still reaches the pan gesture underneath, and
+       useHovercardTrigger discards a tap that turned out to be a pan. */
     pointer-events: auto;
     white-space: nowrap;
     text-overflow: ellipsis;

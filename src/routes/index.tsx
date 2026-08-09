@@ -323,6 +323,8 @@ function Home() {
       // Check if the touch is on an interactive element
       const isInteractiveElement =
         target.closest('.opennem-region-label') ||
+        target.closest('.opennem-facility-label') ||
+        target.closest('.facility-hovercard') ||
         target.closest('.opennem-facility-canvas') ||
         target.closest('.opennem-month-label') ||
         target.closest('.tooltip-container');
@@ -384,7 +386,7 @@ function Home() {
     return (
       <div className="opennem-loading">
         <div className="opennem-loading-spinner"></div>
-        Loading stripes data...
+        Loading stripes…
       </div>
     );
   }
