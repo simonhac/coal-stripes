@@ -1,0 +1,44 @@
+# Pull-request gate. This workflow does NOT deploy — merges to `main` are
+# deployed by Cloudflare Workers Builds, which watches the repo directly and
+# knows nothing about this check. What connects the two is a repository ruleset
+# on `main` requiring the `check` context — without it a red PR could still be
+# merged and shipped.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+
+      # After setup-bun, so the pinned Node is the one on PATH; bun is still
+      # the installer. .nvmrc is shared with the Workers Builds image.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      # postinstall runs `CI=1 wrangler types`, generating the gitignored
+      # worker-configuration.d.ts that typecheck needs. It reads wrangler.jsonc
+      # only — no Cloudflare auth, no network.
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+
+      - run: bun run lint
+
+      # unit + workerd projects only. `test:integration` needs a live
+      # OpenElectricity key and `test:e2e` needs a browser and a dev server;
+      # neither belongs in a merge gate.
+      - run: bun run test
