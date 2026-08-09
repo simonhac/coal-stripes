@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { facilityUrl } from '@/shared/openelectricity-links';
-import { formatCapacity } from '@/shared/energy-format';
+import { formatCapacityValue } from '@/shared/energy-format';
 import { FacilityLifecycle, FacilityUnitLifecycle } from '@/client/cap-fac-stats';
 
 interface FacilityHovercardProps {
@@ -50,6 +50,19 @@ function lifespan(unit: FacilityUnitLifecycle): string {
   return unit.retiredYear === null
     ? `${unit.commencedYear}`
     : `${unit.commencedYear}–${unit.retiredYear}`;
+}
+
+/**
+ * A registered capacity with its unit set small, so "MW" reads as a qualifier
+ * of the number rather than as part of it — the effect small caps would give.
+ */
+function Capacity({ mw }: { mw: number }) {
+  return (
+    <>
+      {formatCapacityValue(mw)}
+      <span className="capacity-unit">MW</span>
+    </>
+  );
 }
 
 /**
@@ -114,7 +127,7 @@ export function FacilityHovercard({
         {facilityName}
         {lifecycle && (
           <span className="facility-hovercard-total">
-            {formatCapacity(lifecycle.totalCapacity)}
+            <Capacity mw={lifecycle.totalCapacity} />
           </span>
         )}
       </div>
@@ -124,7 +137,7 @@ export function FacilityHovercard({
             <React.Fragment key={unit.name}>
               <span>{unit.name}</span>
               <span className="facility-hovercard-unit-capacity">
-                {formatCapacity(unit.capacity)}
+                <Capacity mw={unit.capacity} />
               </span>
               <span className="facility-hovercard-unit-years">{lifespan(unit)}</span>
             </React.Fragment>

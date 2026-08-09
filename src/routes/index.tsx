@@ -21,6 +21,7 @@ import { useGestureSpring, type OffsetEmitMeta } from '@/hooks/useGestureSpring'
 import { usePrefetchAdjacentYears } from '@/hooks/usePrefetchAdjacentYears';
 import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities';
 import { useHoverIndicator } from '@/hooks/useHoverIndicator';
+import { useHeaderDateRangeTracker } from '@/hooks/useHeaderDateRange';
 import { hasSeenWelcome, markWelcomeSeen } from '@/shared/welcome-state';
 import { WelcomeDialog } from '../components/WelcomeDialog';
 import { ShortcutsDialog } from '../components/ShortcutsDialog';
@@ -121,6 +122,7 @@ function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pageHeadRef = useRef<HTMLDivElement>(null);
 
   // Onboarding / help dialogs
   const capabilities = useDeviceCapabilities();
@@ -285,6 +287,19 @@ function Home() {
   // One pointer-tracking listener for the whole page, driving --hover-x.
   useHoverIndicator();
 
+  // Hand the date range readout to the pinned region header once the page-head
+  // copy has scrolled behind the top bar. Publishes to a store rather than
+  // state, so a region boundary doesn't re-render the whole page.
+  // `ready` mirrors the loading gate below — the observers need the real DOM,
+  // not the spinner that stands in for it.
+  const regionCodes = useMemo(() => Array.from(facilitiesByRegion.keys()), [facilitiesByRegion]);
+  useHeaderDateRangeTracker({
+    pageHeadRef,
+    vizRef: containerRef,
+    regionCodes,
+    ready: regionCodes.length > 0 && targetEndDate !== null && animatedEndDate !== null,
+  });
+
   // Target date range — the header and the prefetch both want the destination,
   // so they update on the keystroke rather than trailing the glide.
   const targetDateRange = targetEndDate ? {
@@ -400,7 +415,7 @@ function Home() {
           at the top of the viz below — that's what makes the first region header
           push the page header out of view instead of sliding over it. See
           `.opennem-page-head` in opennem.css. */}
-      <div className="opennem-page-head">
+      <div className="opennem-page-head" ref={pageHeadRef}>
         <OpenElectricityHeader
           onOpenHelp={openWelcome}
           fleetMode={mode}
@@ -442,6 +457,7 @@ function Home() {
                 facilities={facilities}
                 endDate={animatedEndDate}
                 animatedDateRange={animatedDateRange}
+                targetDateRange={targetDateRange}
                 onMonthClick={handleMonthClick}
                 isMobile={isMobile}
               />
