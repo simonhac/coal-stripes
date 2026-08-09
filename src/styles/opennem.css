@@ -573,6 +573,12 @@ header a {
   white-space: nowrap;
 }
 
+/* The MW on a capacity, 30% down on the number it qualifies — small caps in
+   effect, without depending on the face having them. */
+.capacity-unit {
+  font-size: 0.7em;
+}
+
 .facility-hovercard-unit-years {
   white-space: nowrap;
 }
