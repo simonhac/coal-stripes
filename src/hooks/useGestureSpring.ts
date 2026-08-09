@@ -223,22 +223,48 @@ export function useGestureSpring({
     return currentOffsetRef.current;
   }, []);
 
-  // @use-gesture resolves `from` before the handler runs, so phaseRef still holds
-  // the phase we're interrupting. Grabbing the stripes mid-glide must catch them
-  // where they visually are, not at the parent's transition-lagged offset.
+  /**
+   * Pointerdown: seed the gesture AND arrest whatever was moving, at the same
+   * instant and the same position.
+   *
+   * @use-gesture calls `from` from exactly one place — `start()`, on pointerdown,
+   * before bounds and before the handler — so phaseRef still holds the phase we're
+   * interrupting and `currentVisualDays()` can read it. Arresting here rather than
+   * in the handler's `first` block matters twice over:
+   *
+   *  - `first` never fires for a tap at all (@use-gesture bails out of compute()
+   *    for a sub-threshold gesture), so that was the only stop() a tap could have
+   *    reached — and it missed;
+   *  - even for a real drag, `first` arrives only once the finger has crossed 3px,
+   *    tens of milliseconds later. The glide kept travelling in between while the
+   *    seed stayed at the pointerdown position, so the first active emit yanked the
+   *    stripes back by however far it had got.
+   *
+   * Touch stops the glide dead, where it visually is. Everything downstream then
+   * starts from a position that is both true and stationary.
+   */
   const seedFromCurrent = useCallback((): [number, number] => {
-    const days = currentVisualDays();
+    const days = currentVisualDays(); // read before the phase flips
+    api.stop(); // freeze the glide here (onRest sees finished:false and ignores it)
+    cancelScheduledEmit(); // drop any coalesced wheel frame so it can't land later
+    phaseRef.current = 'idle';
+    settleTargetDaysRef.current = null;
     ppdRef.current = getPixelsPerDay(); // runs before bounds + handler → one ppd for the gesture
+    visualDaysRef.current = days;
+    lastActivePRef.current = days * ppdRef.current;
     return [days * ppdRef.current, 0];
-  }, [getPixelsPerDay, currentVisualDays]);
+  }, [api, getPixelsPerDay, currentVisualDays, cancelScheduledEmit]);
 
   // ── Drag (mouse + touch, via pointer events) ────────────────────────────────
   const dragBind = useDrag(
     ({ first, active, tap, offset: [ox], velocity: [vx], direction: [dx] }) => {
       if (first) {
         phaseRef.current = 'drag';
-        api.stop(); // cancel any running decay/spring/navigate before we take over
-        cancelScheduledEmit(); // drop any coalesced wheel frame so it can't land mid-drag
+        // seedFromCurrent already stopped everything at pointerdown; these only cover
+        // the sliver between then and the 3px threshold (a keypress or wheel event
+        // with the finger already down). Both are no-ops otherwise.
+        api.stop();
+        cancelScheduledEmit();
       }
 
       if (active) {
@@ -250,13 +276,23 @@ export function useGestureSpring({
       // ── Release ──
       if (tap) {
         // A tap (e.g. clicking a month label) — don't move; let the click through.
-        // Still land isDragging=false: the pointer-down active emit set it true,
-        // and without this a tap strands isDragging=true and disables keyboard
-        // nav until the next gesture. The day-quantised dedupe makes it a no-op
-        // when no true was emitted (same day, dragging already false).
+        // This is the ONLY handler call a filtered tap makes: @use-gesture bails out
+        // of compute() below the 3px threshold, so `first` and the active branch both
+        // never ran. All this does is commit the arrest seedFromCurrent already made,
+        // and land isDragging=false so keyboard nav re-enables.
+        //
+        // `ox` — the seeded offset, untouched because compute() early-returned — and
+        // emphatically not lastActivePRef: nothing wrote that this gesture, so it still
+        // holds the *previous* drag's release px. After a fling that is the whole
+        // momentum travel behind where the stripes actually are, and emitting it
+        // rewound the entire scroll on the next touch.
+        //
+        // Once settled the day-quantised dedupe makes this a no-op; mid-glide it
+        // publishes the position the glide was stopped at.
         phaseRef.current = 'idle';
-        emit(lastActivePRef.current, false);
-        emitTargetPx(lastActivePRef.current);
+        lastActivePRef.current = ox;
+        emit(ox, false);
+        emitTargetPx(ox);
         return;
       }
 
@@ -301,6 +337,11 @@ export function useGestureSpring({
     {
       axis: 'x',
       filterTaps: true, // taps still reach tile / month-click handlers
+      // @use-gesture emulates a drag from the arrow keys by default, and its keyDown
+      // runs start() → our `from`. An arrow key bubbling from anything focusable inside
+      // the viz would then arrest the keyboard glide at pointerdown-equivalent. We own
+      // keyboard navigation on window (useShortcuts); this emulation is unwanted.
+      keys: false,
       rubberband: RUBBERBAND, // real resistance past bounds while dragging
       transform: ([x, y]) => [-x, -y], // invert: drag content right ⇒ day-offset decreases
       from: seedFromCurrent,

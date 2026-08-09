@@ -118,6 +118,18 @@ async function dragX(
   await page.mouse.up();
 }
 
+/** A tap: pointer down and up at one point, under @use-gesture's 3px tapsThreshold.
+ *  Same code path for a mouse click and a finger, so the desktop harness exercises
+ *  the mobile bug. Returns the point, in the stripes, that was tapped. */
+async function tapViz(page: Page, xFrac = 0.5) {
+  const box = (await page.locator(VIZ).boundingBox())!;
+  const y = Math.min(box.y + 220, page.viewportSize()!.height - 120);
+  const x = box.x + box.width * xFrac;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.up();
+}
+
 test.describe('gesture navigator', () => {
   test('loads at the present (offset == max)', async ({ page }) => {
     await loadApp(page);
@@ -173,6 +185,39 @@ test.describe('gesture navigator', () => {
     expect(after).toBeLessThan(max); // it did move back (non-trivial)
     expect(after).toBeGreaterThan(0); // but NOT to offset 0 / 2006
     expect(max - after).toBeLessThan(700); // stayed within ~2 years of the present
+  });
+
+  // ── REGRESSION: the tap path used to publish `lastActivePRef`, which nothing
+  //    writes during a tap — so it still held the *previous* drag's release px.
+  //    After a flick that is the whole momentum travel behind where the stripes
+  //    are, and the next touch rewound the entire scroll. ──
+  test('a tap after a flick stays put (does not rewind to where the finger lifted)', async ({ page }) => {
+    await loadApp(page);
+    await dragX(page, 0.15, 0.95, { steps: 2 }); // fast flick right, hands off to momentum
+    const settled = await settle(page);
+    expect(await maxOffset(page) - settled).toBeGreaterThan(30); // the glide really travelled
+
+    await tapViz(page);
+    await page.waitForTimeout(500);
+    expect(await offset(page)).toBe(settled);
+    expect(await targetOffset(page)).toBe(settled);
+  });
+
+  test('a tap mid-glide arrests it where it is, and never rewinds', async ({ page }) => {
+    await loadApp(page);
+    const stop = await recordOffsets(page);
+    await dragX(page, 0.15, 0.95, { steps: 2 });
+    await page.waitForTimeout(200); // mid-glide
+    await tapViz(page);
+    await page.waitForTimeout(800); // long enough for the glide to have finished, had it run on
+    const seen = await stop();
+
+    // Dragging right walks back in time, so every reading must be ≤ the one before.
+    // A rewind (the bug) shows up as an upward step; a resumed glide shows up as
+    // continued movement long after the tap.
+    expect(seen.length).toBeGreaterThan(3);
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeLessThanOrEqual(seen[i - 1]);
+    expect(await offset(page)).toBe(seen[seen.length - 1]);
   });
 
   test('trackpad/wheel scrolls the timeline and stays within bounds', async ({ page }) => {
