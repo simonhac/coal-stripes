@@ -23,6 +23,7 @@ import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { formatUnitName } from '@/client/unit-names';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { perfMonitor } from '@/shared/performance-monitor';
+import { emitTooltip, endTooltip } from '@/client/tooltip-bus';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
 import { getPointerPosition } from '@/hooks/useHoverIndicator';
 import { featureFlags } from '@/shared/feature-flags';
@@ -301,11 +302,9 @@ const CompositeTileComponent = ({
         );
       }
       
-      // Broadcast the tooltip data via custom event
-      const event = new CustomEvent('tooltip-data-hover', { 
-        detail: tooltipData
-      });
-      window.dispatchEvent(event);
+      // Broadcast the resolved day. Unlike a region or facility period, a day is
+      // resolved by the cursor, so the value travels with it.
+      emitTooltip(tooltipData);
     } else {
       // Clear mouse position when no tooltip
       lastHoverKeyRef.current = null;
@@ -672,7 +671,7 @@ const CompositeTileComponent = ({
     lastHoverKeyRef.current = null;
     document.documentElement.style.removeProperty('--hover-x');
     tileMonitor.clearMousePosition();
-    window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'));
+    endTooltip();
   }, []);
 
   // Touch handlers for hover functionality

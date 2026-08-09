@@ -12,6 +12,7 @@ import { useQueries, useQueryClient, type NotifyOnChangeProps } from '@tanstack/
 import { yearQueryOptions } from '@/client/year-queries';
 import { getRegionNames } from '@/client/cap-fac-stats';
 import { FleetModeProvider } from '@/client/fleet-mode-context';
+import { endTooltip } from '@/client/tooltip-bus';
 import type { FleetMode } from '@/shared/types';
 import type { CapFacYear } from '@/client/cap-fac-year';
 import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
@@ -301,11 +302,18 @@ function Home() {
   });
 
   // Target date range — the header and the prefetch both want the destination,
-  // so they update on the keystroke rather than trailing the glide.
-  const targetDateRange = targetEndDate ? {
-    start: targetEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
-    end: targetEndDate
-  } : null;
+  // so they update on the keystroke rather than trailing the glide. Memoised for
+  // the same reason as animatedDateRange above: RegionTooltip is React.memo'd,
+  // and a fresh object every render would defeat that on every frame of a pan.
+  const targetDateRange = useMemo(
+    () => targetEndDate
+      ? {
+          start: targetEndDate.subtract({ days: DATE_BOUNDARIES.TILE_WIDTH - 1 }),
+          end: targetEndDate,
+        }
+      : null,
+    [targetEndDate]
+  );
 
   // Prefetch the years around the settled navigation target so scrolling the
   // timeline rarely waits on the network.
@@ -346,8 +354,7 @@ function Home() {
 
       // If touching outside interactive elements, clear any pinned tooltips
       if (!isInteractiveElement) {
-        const event = new CustomEvent('tooltip-data-hover-end');
-        window.dispatchEvent(event);
+        endTooltip();
       }
     };
 

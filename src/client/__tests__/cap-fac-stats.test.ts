@@ -5,6 +5,8 @@ import { CalendarDate } from '@internationalized/date';
 import { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 import * as dateUtils from '@/shared/date-utils';
 import { MockCanvas } from './helpers/mock-canvas';
+import { makeDTO as buildDTO } from './helpers/make-dto';
+import type { UnitSpec } from './helpers/make-dto';
 import { createCapFacYear } from '../cap-fac-year';
 import { yearQueryOptions } from '../year-queries';
 import {
@@ -13,6 +15,7 @@ import {
   calculateAverageCapacityFactor,
   getFacilityCodesInRegion,
   getFacilityLifecycle,
+  getRegionMonthCapacityFactor,
   getRegionNames
 } from '../cap-fac-stats';
 
@@ -32,45 +35,7 @@ const YEAR = 2023;
 // tests exercise a single mode.
 const MODE = 'full' as const;
 
-interface UnitSpec {
-  duid: string;
-  facilityCode: string;
-  region: string;
-  capacity: number;
-  capacityFactor: number | null;
-  network?: string;
-  status?: 'operating' | 'retired';
-  // Lifecycle dates as OpenElectricity serves them: a date known only to the
-  // year arrives as that year's 31 December.
-  commenced?: string | null;
-  lastSeen?: string | null;
-}
-
-const makeDTO = (units: UnitSpec[]): GeneratingUnitCapFacHistoryDTO => ({
-  type: 'capacity_factors',
-  version: '1.0',
-  created_at: '2024-01-01T00:00:00+10:00',
-  data: units.map(unit => ({
-    network: unit.network ?? 'NEM',
-    region: unit.region,
-    data_type: 'capacity_factor',
-    units: 'MW',
-    capacity: unit.capacity,
-    duid: unit.duid,
-    facility_code: unit.facilityCode,
-    facility_name: `${unit.facilityCode} Station`,
-    fueltech: 'coal_black',
-    status: unit.status ?? ('operating' as const),
-    commenced: unit.commenced,
-    last_seen: unit.lastSeen,
-    history: {
-      data: Array(365).fill(unit.capacityFactor),
-      start: `${YEAR}-01-01`,
-      last: `${YEAR}-12-31`,
-      interval: '1d'
-    }
-  }))
-});
+const makeDTO = (units: UnitSpec[]): GeneratingUnitCapFacHistoryDTO => buildDTO(units, YEAR);
 
 describe('cap-fac-stats', () => {
   let queryClient: QueryClient;
@@ -225,6 +190,44 @@ describe('cap-fac-stats', () => {
 
     it('returns null when the year is not cached', () => {
       expect(getFacilityCodesInRegion(queryClient, MODE,'NSW1', YEAR)).toBeNull();
+    });
+  });
+
+  describe('getRegionMonthCapacityFactor', () => {
+    it('reads the month roll-up, capacity-weighted across the region', () => {
+      seedYear(YEAR, makeDTO([
+        { duid: 'A1', facilityCode: 'FACA', region: 'NSW1', capacity: 100, capacityFactor: 60 },
+        { duid: 'B1', facilityCode: 'FACB', region: 'NSW1', capacity: 300, capacityFactor: 20 },
+        { duid: 'C1', facilityCode: 'FACC', region: 'QLD1', capacity: 500, capacityFactor: 90 }
+      ]));
+
+      // (60·100 + 20·300) / 400 = 30
+      expect(getRegionMonthCapacityFactor(queryClient, MODE, 'NSW1', new CalendarDate(YEAR, 6, 1)))
+        .toBe(30);
+      expect(getRegionMonthCapacityFactor(queryClient, MODE, 'QLD1', new CalendarDate(YEAR, 6, 1)))
+        .toBe(90);
+    });
+
+    it('answers the same for any day of the month — the month is the unit', () => {
+      seedYear(YEAR, makeDTO([
+        { duid: 'A1', facilityCode: 'FACA', region: 'NSW1', capacity: 100, capacityFactor: 45 }
+      ]));
+
+      expect(getRegionMonthCapacityFactor(queryClient, MODE, 'NSW1', new CalendarDate(YEAR, 6, 1)))
+        .toBe(45);
+      expect(getRegionMonthCapacityFactor(queryClient, MODE, 'NSW1', new CalendarDate(YEAR, 6, 30)))
+        .toBe(45);
+    });
+
+    it('returns null when the year is not cached, and for an unknown region', () => {
+      expect(getRegionMonthCapacityFactor(queryClient, MODE, 'NSW1', new CalendarDate(YEAR, 6, 1)))
+        .toBeNull();
+
+      seedYear(YEAR, makeDTO([
+        { duid: 'A1', facilityCode: 'FACA', region: 'NSW1', capacity: 100, capacityFactor: 45 }
+      ]));
+      expect(getRegionMonthCapacityFactor(queryClient, MODE, 'TAS1', new CalendarDate(YEAR, 6, 1)))
+        .toBeNull();
     });
   });
 

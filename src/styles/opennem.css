@@ -927,27 +927,49 @@ header a {
 /* ============================================================
    Wordmark — "Coal ⚡ Stripes" (own brand, keeps the OE bolt motif)
    ============================================================ */
+/* The mark's size and its gaps are expressed in `em`, so the whole lockup scales
+   from one number — which is why the font-size lives HERE and not on
+   `.opennem-wordmark`. Put it on the span instead and the mark's `em` resolves
+   against the inherited 14px body size, silently rendering it a third of the
+   intended size.
+
+   The three magic numbers are read off OE's own logo.svg, whose letters are
+   outlined paths (no `<text>`, so the file names no font — the proportions are
+   the only thing to copy, and copying them badly is what made ours read as
+   "Coal — Stripes", a word with a separator, rather than one lockup). In that
+   artwork the cap height is 20.18 units and the baseline sits at 21.41:
+
+     mark height   10.07 / 20.18 = 0.499 cap → 0.349em  (cap is 0.7em in DM Sans)
+     side gaps      4.00 / 20.18 = 0.198 cap → 0.139em, equal on both sides
+     mark bottom  (21.41 - 19.03) = 0.118 cap → 0.0825em above the baseline
+
+   That last one is why the mark is baseline-aligned and then translated: it ends
+   up centred on the x-height band, sitting low between the words like a "~"
+   rather than floating at the centre of the line box. */
 .opennem-brand {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  align-items: baseline;
+  gap: 0.139em;
+  font-size: 24px;
   text-decoration: none;
 }
 
 .opennem-wordmark {
   font-family: var(--font-stack);
   font-weight: 700;
-  font-size: 24px;
+  font-size: inherit;
   line-height: 1;
   letter-spacing: -0.01em;
   color: var(--dark-grey);
 }
 
 .opennem-wordmark-bolt {
-  height: 20px;
+  height: 0.349em;
   width: auto;
   display: block;
   flex-shrink: 0;
+  align-self: baseline;
+  transform: translateY(-0.0825em);
 }
 
 /* ============================================================
@@ -983,47 +1005,69 @@ header a {
   align-items: center;
   gap: 12px;
 }
+/* Text tabs with an active underline, not a segmented pill. A pill carries its
+   own border, fill and padding, and at 402px there is no room for chrome that
+   isn't carrying meaning: the pill alone was 163px of a 370px row, which is what
+   pushed the ⓘ off the page padding. Underlined tabs say the same thing in
+   148px, and match the text nav Open Electricity uses. */
 .opennem-fleet-toggle {
   display: inline-flex;
   align-items: stretch;
-  padding: 2px;
-  background: #f0efe9;
-  border: 1px solid #e5e5e5;
-  border-radius: 8px;
+  gap: 14px;
 }
 .opennem-fleet-toggle-option {
   font-family: var(--font-stack);
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
-  padding: 6px 10px;
+  padding: 4px 0 5px;
   color: #6a6a6a;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-bottom: 2px solid transparent;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
 .opennem-fleet-toggle-option:hover {
   color: var(--dark-grey);
 }
 .opennem-fleet-toggle-option[aria-pressed='true'] {
   color: var(--dark-grey);
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  border-bottom-color: var(--opennem-primary);
 }
 .opennem-fleet-toggle-option:focus-visible {
   outline: 2px solid var(--opennem-primary);
   outline-offset: 2px;
 }
+
+/* Mobile. The row holds three things that all want to be as big as they can be,
+   in a width that varies by 80px across the phones people actually use, so the
+   two text sizes scale with the viewport rather than stepping at a breakpoint —
+   a step leaves one side of it cramped, which is how this started. The vw
+   coefficients are chosen so 402px (iPhone 16 Pro) lands on the design sizes,
+   20px and 13px, and the floors hold 320px together. Measured slack between the
+   wordmark and the controls: 32px at 320, 31px at 360, 50px at 402. */
 @media (max-width: 600px) {
+  .opennem-brand {
+    font-size: clamp(16px, 5vw, 20px);
+  }
   .opennem-header-actions {
-    gap: 8px;
+    gap: 14px;
+  }
+  .opennem-fleet-toggle {
+    gap: clamp(8px, 3vw, 12px);
   }
   .opennem-fleet-toggle-option {
-    padding: 6px 8px;
-    font-size: 12px;
+    font-size: clamp(11px, 3.24vw, 13px);
+  }
+  .opennem-help-button {
+    width: 30px;
+    height: 30px;
+  }
+  .opennem-help-button svg {
+    width: 19px;
+    height: 19px;
   }
 }
 

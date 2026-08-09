@@ -66,17 +66,29 @@ export function getFacilityCodesInRegion(
     return null;
   }
 
-  const facilityCodesInRegion: string[] = [];
+  return yearData.regionFacilityCodes.get(regionCode) ?? [];
+}
 
-  // Check each unit in the raw data to find facilities in this region
-  for (const unit of yearData.data.data) {
-    const unitRegion = unit.network === 'WEM' ? 'WEM' : (unit.region || 'UNKNOWN');
-    if (unitRegion === regionCode && !facilityCodesInRegion.includes(unit.facility_code)) {
-      facilityCodesInRegion.push(unit.facility_code);
-    }
+/**
+ * A region's capacity-weighted average for one calendar month, from the
+ * roll-up computed once per year at tile-build time. O(1), and — unlike
+ * averaging the daily values ourselves — it is the same number the month bar
+ * on the axis is coloured with.
+ *
+ * Returns null when the year isn't cached or the region has no data that month.
+ */
+export function getRegionMonthCapacityFactor(
+  queryClient: QueryClient,
+  mode: FleetMode,
+  regionCode: string,
+  monthStart: CalendarDate
+): number | null {
+  if (!isValidYear(monthStart.year)) {
+    return null;
   }
 
-  return facilityCodesInRegion;
+  const yearData = getCachedYear(queryClient, mode, monthStart.year);
+  return yearData?.regionCapacityFactors.get(regionCode)?.[monthStart.month - 1] ?? null;
 }
 
 /**
@@ -246,9 +258,11 @@ export function calculateRegionStats(
 
   // Accumulate stats across all facilities in the region
   for (const facilityCode of facilitiesInRegion) {
+    // A facility whose year isn't cached makes the region average unanswerable.
+    // Deliberately silent: the readouts re-resolve on every day-crossing while a
+    // tooltip is showing, so a cold year would log this once per region per frame.
     const facilityStats = calculateFacilityStats(queryClient, mode, facilityCode, dateRange);
     if (facilityStats === null) {
-      console.warn(`Unable to get stats for facility ${facilityCode} in region ${regionCode} - cannot calculate region average`);
       return null;
     }
 

@@ -1,15 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
+import { endTooltip, subscribeTooltip } from '@/client/tooltip-bus';
 
 interface UsePinnableTooltipOptions {
   /** Does a broadcast tooltip belong to this label? Drives the pinned state. */
   matches: (data: Record<string, unknown>) => boolean;
-  /** Build and broadcast this label's tooltip; `pinned` marks it sticky. */
+  /** Broadcast this label's tooltip source; `pinned` marks it sticky. */
   sendTooltipData: (pinned: boolean) => void;
-}
-
-/** Broadcast the shared "tooltip closed" event. */
-function endTooltip(): void {
-  window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'));
 }
 
 /**
@@ -28,26 +24,14 @@ export function usePinnableTooltip({ matches, sendTooltipData }: UsePinnableTool
   const touchHandledRef = useRef(false);
 
   // Track whether this label's tooltip is the pinned one.
-  useEffect(() => {
-    const handleTooltipUpdate = (e: Event) => {
-      const data = (e as CustomEvent).detail;
-      if (data && matches(data)) {
-        setIsPinned(data.pinned || false);
-      } else if (data) {
-        // Another tooltip is active, so this one is not pinned
-        setIsPinned(false);
-      }
-    };
-
-    const handleTooltipEnd = () => setIsPinned(false);
-
-    window.addEventListener('tooltip-data-hover', handleTooltipUpdate);
-    window.addEventListener('tooltip-data-hover-end', handleTooltipEnd);
-    return () => {
-      window.removeEventListener('tooltip-data-hover', handleTooltipUpdate);
-      window.removeEventListener('tooltip-data-hover-end', handleTooltipEnd);
-    };
-  }, [matches]);
+  useEffect(() => subscribeTooltip(
+    source => {
+      const data = source as unknown as Record<string, unknown>;
+      // Another label's tooltip displaces this one, pinned or not.
+      setIsPinned(matches(data) ? Boolean(data.pinned) : false);
+    },
+    () => setIsPinned(false)
+  ), [matches]);
 
   const togglePin = () => {
     if (isPinned) {
