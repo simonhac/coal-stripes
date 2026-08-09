@@ -114,9 +114,14 @@ export const TILE_CONFIG = {
 // It rides on the Cache-Tag header (`cf-dto-<version>`), so a change is applied
 // by purging that one tag rather than by forking every URL. Bump it whenever the
 // DTO's *shape* changes in a way the client can't tolerate — e.g. when per-unit
-// `status` was added and the `current` fleet view began depending on it. Deploys
-// alone do NOT need a bump: wrangler.jsonc sets cross_version_cache so entries
-// deliberately survive them.
+// `status` was added and the `current` fleet view began depending on it.
+//
+// Deploys alone do NOT need a bump, but not because entries survive them: they
+// no longer do. Workers Cache keys include the Worker version
+// (`cross_version_cache: false` in wrangler.jsonc), so a deploy starts cold by
+// itself. What this version still buys is the two places a deploy cannot reach —
+// the R2 key namespace (`v1/years/…`) and the TanStack Query key in a tab that
+// has been open across one.
 export const CF_DTO_VERSION = 'v1';
 
 // Cache freshness policy, shared by the server route (Cache-Control headers)

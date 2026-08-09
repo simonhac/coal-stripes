@@ -104,3 +104,51 @@ export function coalStatsHeaders(): Headers {
 
 /** For anything that must never be cached. Never rely on omitting Cache-Control. */
 export const NO_STORE = { 'Cache-Control': 'no-store' } as const;
+
+/** The tag every SSR document carries, so /api/admin/purge can reach them. */
+export const DOCUMENT_TAG = 'html';
+
+/**
+ * The SSR document's policy.
+ *
+ * `max-age=0`: the browser copy is the one layer no purge can reach, and the
+ * document is ~3.5 KB — the same reasoning that keeps the data routes at 60 s,
+ * taken to its limit.
+ *
+ * `s-maxage=3600`: an hour rather than a day because the streamed shell embeds a
+ * per-render timestamp in its `$_TSR.router` payload. Staleness *across deploys*
+ * is not what this bounds — that is `cross_version_cache: false` in
+ * wrangler.jsonc, without which no s-maxage short enough to be safe would be
+ * long enough to be worth having.
+ *
+ * NO `no-transform`, deliberately: Cloudflare's automatic Web Analytics
+ * injection stops silently if the response carries it, and `curl -I` cannot see
+ * that it has (docs/caching-and-diagnostics.md § Analytics).
+ */
+export const DOCUMENT_CACHE_CONTROL = 'public, max-age=0, s-maxage=3600';
+
+/**
+ * Give the SSR document an explicit cache policy on its way out.
+ *
+ * Until this existed the document set no `Cache-Control` at all and was cached
+ * anyway — workerd has no "force-dynamic" equivalent, so omitting the header
+ * chooses a policy rather than declining to. This states the choice.
+ *
+ * Only `text/html` responses that have not already set a policy are touched:
+ * `/api/*` sends its own headers, `NO_STORE` means it, and static assets are
+ * served before the Worker runs and never arrive here at all.
+ *
+ * The body is passed through untouched — never read. The document is streamed,
+ * and buffering it here would put the shell's time-to-first-byte back where #27
+ * found it.
+ */
+export function applyDocumentCacheHeaders(response: Response): Response {
+  const contentType = response.headers.get('Content-Type') ?? '';
+  if (!contentType.startsWith('text/html')) return response;
+  if (response.headers.has('Cache-Control')) return response;
+
+  const withHeaders = new Response(response.body, response);
+  withHeaders.headers.set('Cache-Control', DOCUMENT_CACHE_CONTROL);
+  withHeaders.headers.set('Cache-Tag', DOCUMENT_TAG);
+  return withHeaders;
+}

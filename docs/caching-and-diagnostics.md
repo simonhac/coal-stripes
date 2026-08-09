@@ -103,14 +103,48 @@ Cache-Tag:     capacity-factors,cf-<tier>,cf-year-<year>,cf-dto-<CF_DTO_VERSION>
 
 `max-age` governs the browser, `s-maxage` the shared cache. The key includes the
 path **and the full query string** (in order), so `?year=2024` and `?year=2025`
-are naturally separate entries.
+are naturally separate entries — **and the Worker version**, so a deploy starts
+cold.
 
 **There is no URL cache-buster.** Under the old Vercel setup the URL carried
 `&v=BUILD_ID` so a deploy would rotate it; that was needed because three layers
-could disagree about which deploy's payload shape they held. Here,
-`cross_version_cache` is on precisely so entries **survive** deploys, and shape
-changes are invalidated by bumping `CF_DTO_VERSION` (`src/shared/config.ts`) and
-purging that tag.
+could disagree about which deploy's payload shape they held. Here the version is
+already in the cache key, and shape changes are invalidated by bumping
+`CF_DTO_VERSION` (`src/shared/config.ts`) and purging that tag.
+
+### Why the version is in the key
+
+`cross_version_cache` was **on** until 2026-08-09, so entries survived deploys —
+argued for on the grounds that the app deploys often for client changes while the
+year JSON almost never changes shape. That reasoning holds for the data and is
+wrong for exactly one response: the **SSR document**, which embeds Vite's
+content-hashed asset URLs and is therefore version-specific by construction.
+
+What that cost, measured the day automatic deployment shipped: the document
+cached at 09:38 UTC survived the 11:22 UTC deploy and was still being served at
+11:34, naming five JS chunks and a stylesheet that no longer existed. Every one
+404'd and the site rendered its loading spinner and nothing else. The same
+request with a cache-busting query string returned the correct document with all
+assets 200 — which is the fastest way to tell this failure apart from a bad
+build. `/stats` and `/diagnostics`, cached earlier, had already aged out and were
+fine, so the blast radius is "whatever was cached shortly before a deploy", for
+up to the entry's remaining life.
+
+Turning it off costs one R2 read per year on the first request after a deploy.
+That is the floor doing its job — see the table above — and it is the cheaper
+half of the trade.
+
+The document now also states its own policy rather than relying on the runtime
+caching it anyway (`applyDocumentCacheHeaders` in `src/server/cache-headers.ts`,
+applied in `src/worker.ts`):
+
+```
+Cache-Control: public, max-age=0, s-maxage=3600
+Cache-Tag:     html
+```
+
+The tag is an escape hatch — `/api/admin/purge` can clear documents by hand — not
+the mechanism. Version keying is what makes a deploy correct.
 
 ---
 
@@ -474,8 +508,10 @@ tiles (one `FacilityYearTile` per facility). `staleTime` matches the server tier
 and adjacent years are prefetched in the background.
 
 `CF_DTO_VERSION` is in the key so a payload-shape change invalidates a tab that
-has been open across a deploy. It replaced the old per-deploy build id: deploys
-now deliberately keep their caches, and only a shape change should bust them.
+has been open across a deploy. It replaced the old per-deploy build id, and this
+is the one layer where a deploy genuinely changes nothing: a new Worker version
+resets the *server* cache, but it cannot reach a browser that is already running
+the previous build's JavaScript. Only a shape change should bust this one.
 
 ---
 
@@ -526,9 +562,11 @@ curl -X POST https://stripes.energy/api/admin/purge \
   -H "Authorization: Bearer $CACHE_SECRET"
 ```
 
-It purges the `capacity-factors` and `coal-stats` tags globally via Cloudflare's
-Instant Purge, and clears the facilities-roster memo on whichever isolate served
-the request.
+It purges the `capacity-factors`, `coal-stats` and `html` tags globally via
+Cloudflare's Instant Purge, and clears the facilities-roster memo on whichever
+isolate served the request. (`html` covers the SSR documents. A deploy already
+orphans those by changing the cache key, so this is the escape hatch for when
+that reasoning turns out to be wrong at 10 pm.)
 
 **It does not touch R2**, deliberately — see [The layers](#the-layers). So a
 purge is now cheap: the next request for each year refills the cache from an R2
@@ -602,7 +640,10 @@ Three things about workerd that are not obvious and have already cost time.
 **A response with no `Cache-Control` is cached anyway.** There is no
 "force-dynamic" equivalent. Anything that must not be cached needs an explicit
 `Cache-Control: no-store` (`NO_STORE` in `cache-headers.ts`), which shows up as
-`cf-cache-status: BYPASS`.
+`cf-cache-status: BYPASS`. Omitting the header does not decline to choose a
+policy, it chooses one silently — which is how the SSR document came to be
+cached across a deploy without anyone deciding it should be. It now sets its own
+(`applyDocumentCacheHeaders`), so nothing we serve relies on this behaviour.
 
 **A Worker cannot loop back to itself under miniflare** — which backs both
 `vite dev` and `wrangler dev`. The runtime reads the self-request as a deadlock
@@ -669,8 +710,10 @@ curl -sS -H 'Accept: text/html,application/xhtml+xml' https://stripes.energy/ \
 ```
 
 One further sharp edge: automatic injection fails silently if a response carries
-`Cache-Control: … no-transform`. Our HTML sets no `Cache-Control` at all, so we
-are fine — but check it if analytics ever goes quiet.
+`Cache-Control: … no-transform`. Our HTML now sets a `Cache-Control`
+(`public, max-age=0, s-maxage=3600`) and deliberately omits `no-transform` —
+there is a unit test asserting it stays omitted, because `curl -I` cannot see
+this break. Check it first if analytics ever goes quiet.
 
 Server-side, `observability` is enabled in `wrangler.jsonc`, so Worker logs and
 invocation metrics are in the dashboard under Workers → coal-stripes.
