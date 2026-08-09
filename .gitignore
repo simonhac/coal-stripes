@@ -35,9 +35,6 @@ yarn-error.log*
 # ...but the dev env template (op:// references only, no secrets) is committed.
 !.env.tpl
 
-# vercel
-.vercel
-
 # conductor: shared config is .conductor/settings.toml (committed);
 # per-machine overrides stay local
 .conductor/settings.local.toml

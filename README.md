@@ -133,17 +133,32 @@ pinned, and Node cannot substitute for it.
 
 ## Deployment
 
-The app deploys to **Cloudflare Workers**:
+The app deploys to **Cloudflare Workers**, automatically. Merging to `main`
+triggers a [Workers Build](https://developers.cloudflare.com/workers/ci-cd/builds/):
+Cloudflare watches the repo, runs `bun run build`, then `wrangler deploy`. There
+is no API token in the repo and no deploy workflow to maintain — the build
+settings live in the Cloudflare dashboard (Workers & Pages → `coal-stripes` →
+Settings → Build). Only `main` is built; pull requests get no preview
+deployment.
+
+The manual path still works, and is the escape hatch if the integration is ever
+down:
 
 ```bash
 npm run deploy            # vite build && wrangler deploy
 ```
 
+Pull requests are gated by `.github/workflows/ci.yml`, which runs typecheck,
+lint and the offline tests. It does not deploy — Actions reports, Workers Builds
+ships.
+
 `wrangler.jsonc` configures Workers Cache, the R2 bucket, the 10-minute refresh
-cron and the raised CPU limit. `OPENELECTRICITY_API_KEY` and `CACHE_SECRET` are Worker
-secrets (`wrangler secret put …`), not environment variables. Workers Paid is
-required: the free plan caps CPU at 10 ms and subrequests at 50, and `/api/stats`
-needs more of both.
+cron and the raised CPU limit, and Workers Builds reads it exactly as a laptop
+deploy would. `OPENELECTRICITY_API_KEY` and `CACHE_SECRET` are Worker secrets
+(`wrangler secret put …`), not environment variables — Workers Builds does not
+manage them, and `wrangler deploy` leaves them alone. The build itself needs no
+secrets. Workers Paid is required: the free plan caps CPU at 10 ms and
+subrequests at 50, and `/api/stats` needs more of both.
 
 ## Contributing
 
