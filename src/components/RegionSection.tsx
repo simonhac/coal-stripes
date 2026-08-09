@@ -37,15 +37,12 @@ export function RegionSection({
           tall to ever fire an IntersectionObserver at that moment; this does.
           See useHeaderDateRangeTracker. */}
       <div className="opennem-region-sentinel" data-region-code={regionCode} aria-hidden="true" />
-      <div className="opennem-region-header">
-        <RegionLabel
-          regionCode={regionCode}
-          dateRange={animatedDateRange}
-          isMobile={isMobile}
-        />
+      <div className="opennem-region-header" data-region-code={regionCode}>
+        <RegionLabel regionCode={regionCode} />
         <RegionTooltip
           regionCode={regionCode}
           isMobile={isMobile}
+          animatedDateRange={animatedDateRange}
           targetDateRange={targetDateRange}
         />
       </div>

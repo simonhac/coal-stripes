@@ -9,7 +9,9 @@ import { DATE_BOUNDARIES, PAGE_BACKGROUND_HEX } from '@/shared/config';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { getRegionNames } from '@/client/cap-fac-stats';
+import { emitTooltip, endTooltip } from '@/client/tooltip-bus';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
+import { getPointerPosition } from '@/hooks/useHoverIndicator';
 
 interface CapFacXAxisProps {
   dateRange: { start: CalendarDate; end: CalendarDate };
@@ -90,7 +92,11 @@ function CapFacXAxisComponent({
     const handleMonthHover = (e: Event) => {
       const customEvent = e as CustomEvent;
       const data = customEvent.detail as { year: number; month: number };
-      setHoveredMonth(data);
+      // Deduped: the re-resolve effect below re-broadcasts whenever the window
+      // moves, and a state write per frame would re-render all six axes for a
+      // month that hasn't changed.
+      setHoveredMonth(prev =>
+        prev && prev.year === data.year && prev.month === data.month ? prev : data);
     };
 
     const handleMonthHoverEnd = () => {
@@ -154,25 +160,25 @@ function CapFacXAxisComponent({
     currentDate = monthStart.add({ months: 1 }).set({ day: 1 });
   }
   
-  const handleMouseEnter = (month: typeof monthBars[0]) => {
-    // Clear any hover line from stripes
-    document.documentElement.style.removeProperty('--hover-x');
-    
-    const tooltipData = {
+  // The last month broadcast, so the re-resolve below doesn't re-send an
+  // identical payload every frame of a pan that stays within one month.
+  // Null means "nothing is showing", so re-entering the same cell broadcasts.
+  const lastMonthKeyRef = useRef<string | null>(null);
+
+  const emitMonthTooltip = (month: typeof monthBars[0]) => {
+    const key = `${month.date.year}-${month.date.month}|${month.capacityFactor}`;
+    if (key === lastMonthKeyRef.current) return;
+    lastMonthKeyRef.current = key;
+
+    emitTooltip({
       startDate: month.date,
       endDate: null,
       label: tooltipRegionName,
       capacityFactor: month.capacityFactor,
       tooltipType: 'month',
       regionCode: regionCode
-    };
-    
-    // Broadcast the tooltip data
-    const event = new CustomEvent('tooltip-data-hover', { 
-      detail: tooltipData
     });
-    window.dispatchEvent(event);
-    
+
     // Broadcast month hover for visual synchronization
     const monthHoverEvent = new CustomEvent('month-hover', {
       detail: {
@@ -182,6 +188,40 @@ function CapFacXAxisComponent({
     });
     window.dispatchEvent(monthHoverEvent);
   };
+
+  const endMonthTooltip = () => {
+    lastMonthKeyRef.current = null;
+    endTooltip();
+    window.dispatchEvent(new CustomEvent('month-hover-end'));
+  };
+
+  const handleMouseEnter = (month: typeof monthBars[0]) => {
+    // Clear any hover line from stripes
+    document.documentElement.style.removeProperty('--hover-x');
+    emitMonthTooltip(month);
+  };
+
+  // The months slide under a stationary pointer when the range moves, so
+  // re-resolve which cell it is over and re-broadcast — the same trick
+  // CompositeTile's paint effect does for the stripes. elementFromPoint rather
+  // than a rect scan, because it also proves the cell is the topmost thing
+  // there (not behind the sticky header or a dialog).
+  //
+  // monthBars is deliberately behind a ref and out of the deps: emitMonthTooltip
+  // dispatches 'month-hover', which this component listens for and turns into a
+  // re-render, and a fresh monthBars array every render would make that a loop.
+  const monthBarsRef = useRef(monthBars);
+  monthBarsRef.current = monthBars;
+  useEffect(() => {
+    const pos = getPointerPosition();
+    if (!pos) return;
+    const element = document.elementFromPoint(pos.x, pos.y);
+    const idx = monthRefs.current.indexOf(element as HTMLDivElement | null);
+    if (idx >= 0 && monthBarsRef.current[idx]) {
+      emitMonthTooltip(monthBarsRef.current[idx]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateRange, leftResult.data, rightResult.data]);
 
   const handleMonthClick = (month: typeof monthBars[0]) => {
     if (onMonthClick) {
@@ -216,17 +256,10 @@ function CapFacXAxisComponent({
       if (month) {
         handleMouseEnter(month);
       } else {
-        const event = new CustomEvent('tooltip-data-hover-end');
-        window.dispatchEvent(event);
+        endMonthTooltip();
       }
     },
-    onHoverEnd: () => {
-      const event = new CustomEvent('tooltip-data-hover-end');
-      window.dispatchEvent(event);
-      
-      const monthHoverEndEvent = new CustomEvent('month-hover-end');
-      window.dispatchEvent(monthHoverEndEvent);
-    }
+    onHoverEnd: endMonthTooltip
   });
 
   // Page-background overlay for the "no data" ends. Positioned over the same
@@ -292,15 +325,7 @@ function CapFacXAxisComponent({
                   cursor: onMonthClick ? 'pointer' : 'default'
                 }}
                 onMouseEnter={() => handleMouseEnter(month)}
-                onMouseLeave={() => {
-                  // Broadcast hover end
-                  const event = new CustomEvent('tooltip-data-hover-end');
-                  window.dispatchEvent(event);
-                  
-                  // Broadcast month hover end
-                  const monthHoverEndEvent = new CustomEvent('month-hover-end');
-                  window.dispatchEvent(monthHoverEndEvent);
-                }}
+                onMouseLeave={endMonthTooltip}
                 onClick={() => handleMonthClick(month)}
               >
                 {useShortLabels ? month.labelShort : month.labelLong}

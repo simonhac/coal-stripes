@@ -1,27 +1,22 @@
 import React, { useCallback } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { CalendarDate } from '@internationalized/date';
-import { calculateRegionStats, calculateAverageCapacityFactor, getRegionNames } from '@/client/cap-fac-stats';
-import { useFleetMode } from '@/client/fleet-mode-context';
+import { getRegionNames } from '@/client/cap-fac-stats';
+import { emitTooltip } from '@/client/tooltip-bus';
 import { usePinnableTooltip } from '@/hooks/usePinnableTooltip';
 
 interface RegionLabelProps {
   regionCode: string;
-  dateRange: { start: CalendarDate; end: CalendarDate };
-  isMobile: boolean;
 }
 
 /**
  * A region's name heading its group of facilities. Hovering shows the region's
  * average capacity factor over the displayed period; clicking/tapping pins it.
+ *
+ * The label says only WHICH region is being pointed at — never what it is
+ * worth. Each region header works its own number out from the window on screen
+ * (see RegionTooltip), so a pinned tooltip keeps up as the range moves instead
+ * of freezing at the value it had when the pointer arrived.
  */
-export function RegionLabel({
-  regionCode,
-  dateRange,
-  isMobile
-}: RegionLabelProps) {
-  const queryClient = useQueryClient();
-  const mode = useFleetMode();
+export function RegionLabel({ regionCode }: RegionLabelProps) {
   const regionNames = getRegionNames(regionCode);
 
   const matches = useCallback(
@@ -31,26 +26,7 @@ export function RegionLabel({
   );
 
   const sendTooltipData = (pinned: boolean) => {
-    const stats = calculateRegionStats(queryClient, mode, regionCode, dateRange);
-    if (!stats) {
-      // No data available for this date range - clear tooltip
-      window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'));
-      return;
-    }
-    const avgCapacityFactor = calculateAverageCapacityFactor(stats);
-    if (avgCapacityFactor !== null) {
-      const tooltipData = {
-        startDate: dateRange.start,
-        endDate: dateRange.end,
-        // Use short name for tooltip on mobile
-        label: isMobile ? regionNames.short : regionNames.long,
-        capacityFactor: avgCapacityFactor,
-        tooltipType: 'period' as const,
-        regionCode: regionCode,
-        pinned
-      };
-      window.dispatchEvent(new CustomEvent('tooltip-data-hover', { detail: tooltipData }));
-    }
+    emitTooltip({ tooltipType: 'period', regionCode, pinned });
   };
 
   const { handlers } = usePinnableTooltip({ matches, sendTooltipData });

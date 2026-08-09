@@ -1,4 +1,5 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import { loadApp, scrollTo } from './helpers';
 
 /**
  * The date range readout has two homes: the page head, and — once that has
@@ -6,24 +7,8 @@ import { test, expect, Page } from '@playwright/test';
  * cover the handover, and the tooltip's right to take the slot back.
  */
 
-const VIZ = '[data-testid="stripes-viz"]';
 const PAGE_RANGE = '.opennem-date-range';
 const REGION_RANGE = '.opennem-region-date-range';
-
-async function loadApp(page: Page) {
-  // The welcome dialog auto-opens on a first visit as a full-viewport blocking
-  // scrim; mark it seen before the app mounts.
-  await page.addInitScript(() => localStorage.setItem('welcome-dialog-seen', '1'));
-  await page.goto('/');
-  await page.locator(VIZ).waitFor({ state: 'visible', timeout: 60_000 });
-  await page.locator('canvas').first().waitFor({ timeout: 60_000 });
-}
-
-/** Scroll the window, not the viz — a wheel over the viz is a pan gesture. */
-async function scrollTo(page: Page, y: number) {
-  await page.evaluate(offset => window.scrollTo(0, offset), y);
-  await page.waitForTimeout(200); // IntersectionObserver callbacks are async
-}
 
 test.describe('date range in the pinned region header', () => {
   test('the page head owns the readout until it scrolls out of sight', async ({ page }) => {

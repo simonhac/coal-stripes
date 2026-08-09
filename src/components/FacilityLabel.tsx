@@ -1,11 +1,8 @@
 import React, { useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
-import {
-  calculateFacilityStats,
-  calculateAverageCapacityFactor,
-  getFacilityLifecycle
-} from '@/client/cap-fac-stats';
+import { getFacilityLifecycle } from '@/client/cap-fac-stats';
+import { emitTooltip } from '@/client/tooltip-bus';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { usePinnableTooltip } from '@/hooks/usePinnableTooltip';
 import { useHovercardTrigger } from '@/hooks/useHovercardTrigger';
@@ -15,6 +12,7 @@ interface FacilityLabelProps {
   facilityCode: string;
   facilityName: string;
   regionCode: string;
+  /** The window on screen — the hovercard lists the units visible in it. */
   dateRange: { start: CalendarDate; end: CalendarDate };
 }
 
@@ -39,27 +37,19 @@ export function FacilityLabel({
     [facilityCode, regionCode]
   );
 
+  // Says only WHICH facility is being pointed at — the value and the dates are
+  // worked out from the window on screen, per region header, so the readout
+  // keeps up as the range moves (see RegionTooltip). Emitting unconditionally
+  // matters: bailing here when the year wasn't cached used to cancel the pin
+  // that raised it.
   const sendTooltipData = (pinned: boolean) => {
-    const stats = calculateFacilityStats(queryClient, mode, facilityCode, dateRange);
-    if (!stats) {
-      // No data available for this date range - clear tooltip
-      window.dispatchEvent(new CustomEvent('tooltip-data-hover-end'));
-      return;
-    }
-    const avgCapacityFactor = calculateAverageCapacityFactor(stats);
-    if (avgCapacityFactor !== null) {
-      const tooltipData = {
-        startDate: dateRange.start,
-        endDate: dateRange.end,
-        label: facilityName,
-        capacityFactor: avgCapacityFactor,
-        tooltipType: 'period' as const,
-        regionCode: regionCode,
-        facilityCode: facilityCode,
-        pinned
-      };
-      window.dispatchEvent(new CustomEvent('tooltip-data-hover', { detail: tooltipData }));
-    }
+    emitTooltip({
+      tooltipType: 'period',
+      regionCode,
+      facilityCode,
+      label: facilityName,
+      pinned
+    });
   };
 
   const { togglePin, handlers } = usePinnableTooltip({ matches, sendTooltipData });

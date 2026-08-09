@@ -2,6 +2,7 @@ import React from 'react';
 import { CalendarDate } from '@internationalized/date';
 import { getMonthName } from '@/shared/date-utils';
 
+/** What a region header renders: a date (or range), a label and a value. */
 export interface TooltipData {
   startDate: CalendarDate;
   endDate: CalendarDate | null;
@@ -14,6 +15,30 @@ export interface TooltipData {
   unitName?: string;
   pinned?: boolean;
 }
+
+/**
+ * What travels on the tooltip bus: a description of WHAT is being pointed at,
+ * not a snapshot of what it was worth when the pointer arrived.
+ *
+ * `day` and `month` sources are resolved by the cursor — the pixel under it IS
+ * the date — so they carry their date and value. A `period` source carries
+ * neither: its period is whatever window is on screen right now, so the dates
+ * and the average are derived at render time (see client/tooltip-resolve).
+ * That is what lets a tooltip keep up while the range moves under it.
+ *
+ * `tooltipType` stays the discriminant so usePinnableTooltip's `matches`
+ * predicates keep working unchanged.
+ */
+export type TooltipSource =
+  | (Omit<TooltipData, 'tooltipType'> & { tooltipType: 'day' | 'month' })
+  | {
+      tooltipType: 'period';
+      regionCode: string;
+      facilityCode?: string;
+      /** The facility's name. A region source takes the listening region's own. */
+      label?: string;
+      pinned?: boolean;
+    };
 
 interface CapFacTooltipProps {
   data: TooltipData | null;

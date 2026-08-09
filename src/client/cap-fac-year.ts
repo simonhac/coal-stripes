@@ -25,6 +25,35 @@ export interface CapFacYear {
   // regions are separate data feeds with different reporting spans.
   regionFirstDataDayIndex: Map<string, number>;
   regionLastDataDayIndex: Map<string, number>;
+  // Facility codes in each region, in the order they appear in the payload.
+  // Precomputed because the region capacity-factor readouts resolve on every
+  // day-crossing while a tooltip is showing, and deriving this from `data` there
+  // meant walking every unit in the country per region per frame.
+  regionFacilityCodes: Map<string, string[]>;
+}
+
+/**
+ * The region a unit belongs to, as every map in this file keys it: WEM units are
+ * their own region, since WEM and the NEM regions are separate data feeds.
+ */
+export function regionKeyOf(unit: GeneratingUnitDTO): string {
+  return unit.network === 'WEM' ? 'WEM' : (unit.region || 'UNKNOWN');
+}
+
+/** Facility codes per region, deduped, in payload order. */
+function buildRegionFacilityCodes(units: GeneratingUnitDTO[]): Map<string, string[]> {
+  const byRegion = new Map<string, string[]>();
+  const seen = new Set<string>();
+  for (const unit of units) {
+    const region = regionKeyOf(unit);
+    const key = `${region}|${unit.facility_code}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const codes = byRegion.get(region);
+    if (codes) codes.push(unit.facility_code);
+    else byRegion.set(region, [unit.facility_code]);
+  }
+  return byRegion;
 }
 
 /**
@@ -38,7 +67,7 @@ function buildRegionDataDayBounds(units: GeneratingUnitDTO[]): {
   const first = new Map<string, number>();
   const last = new Map<string, number>();
   for (const unit of units) {
-    const region = unit.network === 'WEM' ? 'WEM' : (unit.region || 'UNKNOWN');
+    const region = regionKeyOf(unit);
     const data = unit.history.data;
     let unitFirst = -1;
     let unitLast = -1;
@@ -106,9 +135,8 @@ function buildMonthlyCapacityFactorsForEachRegion(units: GeneratingUnitDTO[], ye
   const unitsByRegion = new Map<string, GeneratingUnitDTO[]>();
   
   for (const unit of units) {
-    // For WA network (WEM), use "WEM" as the region
-    const region = unit.network === 'WEM' ? 'WEM' : (unit.region || 'UNKNOWN');
-    
+    const region = regionKeyOf(unit);
+
     if (!unitsByRegion.has(region)) {
       unitsByRegion.set(region, []);
     }
@@ -203,7 +231,8 @@ export function createCapFacYear(
   // Build monthly capacity-weighted capacity factors for each region
   const regionCapacityFactors = buildMonthlyCapacityFactorsForEachRegion(data.data, year);
   const regionDataBounds = buildRegionDataDayBounds(data.data);
-  
+  const regionFacilityCodes = buildRegionFacilityCodes(data.data);
+
   // Approximate canvas memory (width × height × 4 per tile).
   let canvasSizeBytes = 0;
   for (const tile of facilityTiles.values()) {
@@ -230,6 +259,7 @@ export function createCapFacYear(
     canvasSizeBytes,
     daysInYear,
     regionFirstDataDayIndex: regionDataBounds.first,
-    regionLastDataDayIndex: regionDataBounds.last
+    regionLastDataDayIndex: regionDataBounds.last,
+    regionFacilityCodes
   };
 }
