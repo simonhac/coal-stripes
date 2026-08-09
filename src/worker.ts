@@ -10,10 +10,23 @@
  * populate a different key from the one visitors read.
  */
 import startEntry from '@tanstack/react-start/server-entry';
+import { applyDocumentCacheHeaders } from '@/server/cache-headers';
 import { refreshAll } from '@/server/store-refresher';
 
+const startFetch = startEntry.fetch;
+
 export default {
-  fetch: startEntry.fetch,
+  /**
+   * Start renders the document; this only stamps a cache policy on it.
+   *
+   * It belongs here rather than in a route because there is no route to put it
+   * in — `/`, `/stats` and `/diagnostics` are all rendered by Start's own
+   * handler, and this is the one place every one of them passes through. The
+   * headers themselves, and why the document needs them at all, are in
+   * @/server/cache-headers.
+   */
+  fetch: async (...args: Parameters<typeof startFetch>) =>
+    applyDocumentCacheHeaders(await startFetch(...args)),
 
   /**
    * Keep the R2 store current.

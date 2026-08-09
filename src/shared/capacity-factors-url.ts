@@ -10,10 +10,10 @@
  * There is deliberately no `&v=` cache-buster any more. Under Vercel the URL had
  * to rotate per deploy, because the browser and edge caches keyed on the URL
  * while the Data Cache keyed on the year — three layers that could disagree
- * about which deploy's payload shape they held. Workers Cache is one layer, and
- * invalidation is by Cache-Tag (`cf-dto-<CF_DTO_VERSION>`, see
- * src/shared/config.ts), so the URL is now stable across deploys — which is the
- * point of `cross_version_cache`.
+ * about which deploy's payload shape they held. Workers Cache is one layer, it
+ * keys on the Worker version by itself, and *shape* invalidation is by Cache-Tag
+ * (`cf-dto-<CF_DTO_VERSION>`, see src/shared/config.ts). Nothing is left for the
+ * URL to carry.
  */
 
 /** Same-origin path. */

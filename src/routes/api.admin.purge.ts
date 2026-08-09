@@ -26,13 +26,19 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { cache } from 'cloudflare:workers';
 import { isAuthorisedPurgeRequest } from '@/server/auth';
-import { NO_STORE } from '@/server/cache-headers';
+import { DOCUMENT_TAG, NO_STORE } from '@/server/cache-headers';
 import { getCapFacDataService } from '@/server/cap-fac-data-service';
 import { getAESTDateTimeString } from '@/shared/date-utils';
 
-// Every tag the data routes emit at the top level. Tier-, year- and
-// DTO-version-specific tags hang off these, so purging the roots covers them.
-const DATA_CACHE_TAGS = ['capacity-factors', 'coal-stats'];
+// Every tag the routes emit at the top level. Tier-, year- and
+// DTO-version-specific tags hang off the data ones, so purging the roots covers
+// them.
+//
+// The document tag is an escape hatch, not the mechanism. Cache keys include the
+// Worker version (`cross_version_cache: false`), so a deploy already orphans the
+// old document rather than leaving it to be purged. This is for the case that
+// reasoning turns out to be wrong at 10 pm.
+const PURGE_TAGS = ['capacity-factors', 'coal-stats', DOCUMENT_TAG];
 
 export const Route = createFileRoute('/api/admin/purge')({
   server: {
@@ -47,7 +53,7 @@ export const Route = createFileRoute('/api/admin/purge')({
 
         const started = performance.now();
 
-        const result = await cache.purge({ tags: DATA_CACHE_TAGS });
+        const result = await cache.purge({ tags: PURGE_TAGS });
 
         // The 24 h facilities roster memo lives in module scope, so this only
         // clears it on the isolate that happens to serve this request. Other
@@ -58,11 +64,11 @@ export const Route = createFileRoute('/api/admin/purge')({
         return Response.json(
           {
             purgedAt: getAESTDateTimeString(new Date()),
-            tags: DATA_CACHE_TAGS,
+            tags: PURGE_TAGS,
             ok: result.success,
             errors: result.errors,
             note:
-              'Workers Cache purged globally. R2 is untouched, so the next request for each year refills the cache from the store, not from OpenElectricity. The in-process facilities memo was cleared only on the isolate that served this request.',
+              'Workers Cache purged globally, data responses and SSR documents alike. R2 is untouched, so the next request for each year refills the cache from the store, not from OpenElectricity. The in-process facilities memo was cleared only on the isolate that served this request.',
             totalMs: Math.round(performance.now() - started),
           },
           { status: result.success ? 200 : 502, headers: NO_STORE },

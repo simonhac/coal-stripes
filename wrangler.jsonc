@@ -23,14 +23,26 @@
   // load-bearing: nothing breaks when it is cold. See
   // docs/caching-and-diagnostics.md.
   //
-  // cross_version_cache: the cache key includes the Worker version by default,
-  // so every deploy would start cold. This app deploys often for client/CSS
-  // changes while the year JSON almost never changes shape, so sharing entries
-  // across versions is the right trade. Invalidation is by Cache-Tag instead
-  // (see CF_DTO_VERSION in src/shared/config.ts).
+  // cross_version_cache: OFF, which is the default, and the default exists for
+  // exactly the reason we learned the hard way. The cache key includes the
+  // Worker version, so a deploy starts cold — and that is the point, because one
+  // response IS version-specific: the SSR document embeds Vite's
+  // content-hashed asset URLs. Shared across versions it outlives the build that
+  // produced it, and every /assets/* it names 404s. Measured 2026-08-09: the
+  // document cached at 09:38 UTC survived the 11:22 UTC deploy and was still
+  // being served two hours later, naming five JS chunks and a stylesheet that no
+  // longer existed. The page rendered nothing but its loading spinner.
+  //
+  // This was on before, on the argument that the year JSON rarely changes shape
+  // so entries may as well be shared. What that traded away was deploy atomicity.
+  // The cost of turning it off is one R2 read per year on the first request after
+  // a deploy (~10 ms), because R2 is the floor and never expires — the very
+  // property that makes a cold cache cheap. Shape changes are still invalidated
+  // by CF_DTO_VERSION (src/shared/config.ts); that lever is unchanged, it simply
+  // stops being the only one.
   "cache": {
     "enabled": true,
-    "cross_version_cache": true
+    "cross_version_cache": false
   },
 
   // Reads are cheap, but the cron builds year payloads from OpenElectricity and

@@ -27,7 +27,7 @@ Wrangler 4.119.0, `compatibility_date: 2026-08-01`, `nodejs_compat`,
 | 4 | Workers Cache MISS→HIT | **PASS.** 878 ms MISS → 312 ms HIT, identical body. |
 | 5 | Query string in the cache key | **PASS.** `?year=1999` is a separate entry from `?year=2024`. |
 | 6 | `cache.purge({ tags })` | **PASS.** `{"success":true,"errors":[]}`. |
-| 7 | `cross_version_cache` | **PASS** (observed accidentally): after a redeploy, the previous version's entry was still served. |
+| 7 | `cross_version_cache` | **The measurement stands; calling it a PASS was the mistake.** After a redeploy the previous version's entry was still served — see the second correction at the end. |
 | 8 | Loopback via `ctx.exports.<Named>` | **PASS.** 542 ms MISS → **6 ms / 4 ms / 3 ms** HIT. |
 | 9 | Loopback via `ctx.exports.default` warms the **public** key | **PASS.** Warmed year → external HIT 304 ms; never-warmed control → MISS 892 ms. |
 | 10 | Warming from a **cron** `scheduled` handler | **WRONG — recorded as a pass, and it is not. See the correction at the end.** |
@@ -199,3 +199,33 @@ OpenElectricity?" from outside, on a request the server did not make. That is th
 signal the spike lacked.
 
 See `docs/caching-and-diagnostics.md` § "Why this is a store and not a warmer".
+
+---
+
+## Correction: `cross_version_cache` was a feature until it shipped an outage
+
+**2026-08-09.** Item 7's observation was correct and its label was not. "After a
+redeploy, the previous version's entry was still served" is a description of a
+bug; it was written down as a PASS because the spike was asking whether the
+setting worked, and never asked what would happen to a response that *depends on*
+its version.
+
+One does. The SSR document embeds Vite's content-hashed asset URLs, so a document
+outliving its build names JS chunks that no longer exist. Measured on the day
+automatic deployment shipped (PR #31):
+
+```
+GET /            cf-cache-status: HIT   age: 7091   -> /assets/opennem-C2DKC3gx.css  404
+GET /?cb=random  cf-cache-status: MISS              -> /assets/opennem-DzPuKKd-.css  200
+```
+
+The entry was cached 1h44m before the deploy and outlived it. The site rendered
+its loading spinner and five 404s. `cross_version_cache` is now **off** — its
+default — and the document sets its own `Cache-Control` rather than relying on
+finding 1 below caching it silently.
+
+The lesson rhymes with the item-10 correction. There, a probe warmed the thing it
+measured; here, a setting was tested in isolation from the only response whose
+correctness depended on it. **"The mechanism works" and "the mechanism is right
+for this response" are different questions**, and the spike only ever asked the
+first.

@@ -86,8 +86,8 @@ describe('year-queries', () => {
     it('keys queries by mode and year, plus the DTO version', () => {
       // CF_DTO_VERSION is part of the key so a payload-shape change invalidates
       // every cached year — see year-queries.ts. It replaced the per-deploy
-      // build id, which no longer exists: deploys deliberately keep their cache
-      // now (cross_version_cache), and only a shape change should bust it.
+      // build id, which no longer exists: a deploy cannot reach the cache of a
+      // tab that is already open, so only a shape change should bust it.
       expect(yearQueryOptions(queryClient, 'full', 2023).queryKey).toEqual([
         'capFacYear',
         'full',
