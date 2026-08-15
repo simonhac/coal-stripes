@@ -109,7 +109,7 @@ export function startFailedYearRecovery(queryClient: QueryClient): () => void {
   };
 
   // Only year-query events can change whether anything is broken, and the
-  // cache emits on every tile fetch across ~28 years × 2 modes, so filter
+  // cache emits on every tile fetch across ~29 years × 2 modes, so filter
   // before touching the cache.
   //
   // Deliberately one-directional: this only ever *starts* the ladder. A query

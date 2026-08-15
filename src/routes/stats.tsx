@@ -300,7 +300,7 @@ function StatsPage() {
             Peak coal generation for each region and network across the National Electricity Market
             and Western Australia, with the most recent period shown as a proportion of that peak.
             Generation (MWh) is reconstructed from daily capacity factors and registered capacity;
-            figures include every plant that ever operated, back to 1999.
+            figures include every plant that ever operated, back to December 1998.
             {data && (
               <>
                 {' '}

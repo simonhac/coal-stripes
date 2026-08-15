@@ -1,7 +1,7 @@
 /**
  * What's in the R2 store, right now.
  *
- * The cache-management page used to answer this by requesting all 28 years the
+ * The cache-management page used to answer this by requesting all 29 years the
  * way a visitor would — ~5 MB of payloads downloaded to read three response
  * headers, slow enough that it had to be a button you pressed rather than
  * something the page just showed you. And it warmed the cache it was measuring.

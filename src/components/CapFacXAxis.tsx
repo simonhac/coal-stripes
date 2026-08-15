@@ -9,6 +9,7 @@ import { DATE_BOUNDARIES, PAGE_BACKGROUND_HEX } from '@/shared/config';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { getRegionNames } from '@/client/cap-fac-stats';
+import { getMonthLabelIndentPercent } from '@/client/month-label-layout';
 import { emitTooltip, endTooltip } from '@/client/tooltip-bus';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
 import { getPointerPosition } from '@/hooks/useHoverIndicator';
@@ -112,7 +113,7 @@ function CapFacXAxisComponent({
     };
   }, []);
 
-  const monthBars: { labelShort: string; labelLong: string; color: string; widthPercent: number; date: CalendarDate; capacityFactor: number | null }[] = [];
+  const monthBars: { labelShort: string; labelLong: string; color: string; startPercent: number; widthPercent: number; date: CalendarDate; capacityFactor: number | null }[] = [];
   
   // Total days in the date range (should be 365)
   const totalDays = getDaysBetween(dateRange.start, dateRange.end) + 1;
@@ -146,11 +147,14 @@ function CapFacXAxisComponent({
     // Calculate width as percentage
     const daysInMonth = getDaysBetween(monthStart, monthEnd) + 1;
     const widthPercent = (daysInMonth / totalDays) * 100;
-    
+    // The cell's left edge, on the same 0-100 basis as the no-data overlays below.
+    const startPercent = (getDaysBetween(dateRange.start, monthStart) / totalDays) * 100;
+
     monthBars.push({
       labelShort: monthLabelShort,
       labelLong: monthLabelLong,
       color: getProportionColorHex(capacityFactor),
+      startPercent,
       widthPercent,
       date: monthStart,
       capacityFactor
@@ -313,15 +317,25 @@ function CapFacXAxisComponent({
       </div>
       <div className="opennem-stripe-data" ref={containerRef} style={{ cursor: 'default' }} {...touchHandlers}>
         <div style={{ display: 'flex', width: '100%', height: '16px' }}>
-            {monthBars.map((month, idx) => (
+            {monthBars.map((month, idx) => {
+              // Start the label clear of the leading no-data overlay rather than
+              // under it. Percentage padding on a flex item resolves against the
+              // flex container's inline size — the same box the overlay's
+              // `width: %` resolves against — so the two edges coincide, and
+              // box-sizing:border-box keeps the padding inside the declared
+              // width, so the cell's own geometry never moves. `undefined` leaves
+              // the stylesheet's 4px alone, making this an exact no-op at rest.
+              const indent = getMonthLabelIndentPercent(month.startPercent, month.widthPercent, pastPct);
+              return (
               <div
                 key={idx}
                 ref={(el) => { monthRefs.current[idx] = el; }}
                 className={`opennem-month-label ${hoveredMonth && hoveredMonth.year === month.date.year && hoveredMonth.month === month.date.month ? 'hovered' : ''}`}
-                style={{ 
+                style={{
                   backgroundColor: month.color,
                   width: idx === monthBars.length - 1 ? 'auto' : `${month.widthPercent}%`,
                   flex: idx === monthBars.length - 1 ? '1' : 'none',
+                  paddingLeft: indent > 0 ? `calc(${indent}% + 4px)` : undefined,
                   cursor: onMonthClick ? 'pointer' : 'default'
                 }}
                 onMouseEnter={() => handleMouseEnter(month)}
@@ -330,7 +344,8 @@ function CapFacXAxisComponent({
               >
                 {useShortLabels ? month.labelShort : month.labelLong}
               </div>
-            ))}
+              );
+            })}
         </div>
         {futurePct < 100 && (
           <div

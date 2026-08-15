@@ -99,9 +99,9 @@ describe('yearIsDueAt', () => {
     expect([...phases].sort((a, b) => a - b)).toEqual([0, 17280, 34560, 51840, 69120]);
   });
 
-  it('spreads 22 archive years over seven daily slots, 3 or 4 per day', () => {
+  it('spreads 23 archive years over seven daily slots, 3 or 4 per day', () => {
     const perSlot = new Map<number, number>();
-    for (let year = 1999; year <= 2020; year++) {
+    for (let year = 1998; year <= 2020; year++) {
       const phase = refreshPhaseSeconds(year, 'archive', YEAR_CACHE_TIERS.archive.revalidateSeconds);
       perSlot.set(phase, (perSlot.get(phase) ?? 0) + 1);
     }

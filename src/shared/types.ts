@@ -158,7 +158,7 @@ export interface StatsSources {
  *
  * Whole-of-history records over every coal unit that ever operated. There is no
  * fleet view here and no `?fleet=` parameter: /stats has only ever asked for the
- * full fleet, and a "records since 1999" table that excluded retired plants
+ * full fleet, and a "records since 1998" table that excluded retired plants
  * would omit most of the records worth reporting — Hazelwood and Liddell are the
  * point, not an edge case.
  *

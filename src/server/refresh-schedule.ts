@@ -43,9 +43,9 @@ const BRISBANE_OFFSET_SECONDS = 10 * 60 * 60;
  * Chosen to match the size of each tier, so a year's slot is simply
  * `year % slots` — and because tiers are runs of *consecutive* years, that
  * spreads them perfectly evenly with no hashing. `recent` is exactly five years
- * over five slots, so one is rebuilt every 4.8 hours. `archive` is twenty-two
+ * over five slots, so one is rebuilt every 4.8 hours. `archive` is twenty-three
  * years over seven daily slots, so three or four are rebuilt each day instead of
- * all twenty-two in one tick.
+ * all twenty-three in one tick.
  *
  * `current` gets a single slot deliberately: phase 0 puts it on the hour, and
  * therefore on Brisbane midnight, which is the only moment it gains new data.
