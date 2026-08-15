@@ -35,10 +35,16 @@ import { getAESTDateTimeString } from '@/shared/date-utils';
 // DTO-version-specific tags hang off the data ones, so purging the roots covers
 // them.
 //
-// The document tag is an escape hatch, not the mechanism. Cache keys include the
-// Worker version (`cross_version_cache: false`), so a deploy already orphans the
-// old document rather than leaving it to be purged. This is for the case that
-// reasoning turns out to be wrong at 10 pm.
+// The document tag was here as an escape hatch, on the reasoning that cache keys
+// include the Worker version (`cross_version_cache: false`) so a deploy already
+// orphans the old document — "for the case that reasoning turns out to be wrong
+// at 10 pm". On 2026-08-15 it was wrong at 10 pm: version keying starts a deploy
+// cold but does not cover the flip itself, and one document written a second
+// after it was served, 404ing, for the rest of its hour.
+//
+// So the tag is now also the mechanism — @/server/deploy-purge purges it from the
+// cron on the ticks following a deploy. This endpoint keeps it because ten
+// minutes is not the same as now.
 const PURGE_TAGS = ['capacity-factors', 'coal-stats', DOCUMENT_TAG];
 
 /**

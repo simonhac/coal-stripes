@@ -9,8 +9,10 @@
  * key includes which entrypoint served a request, so a named entrypoint would
  * populate a different key from the one visitors read.
  */
+import { now } from '@internationalized/date';
 import startEntry from '@tanstack/react-start/server-entry';
 import { applyDocumentCacheHeaders } from '@/server/cache-headers';
+import { purgeDocumentsAfterDeploy } from '@/server/deploy-purge';
 import { refreshAll } from '@/server/store-refresher';
 
 const startFetch = startEntry.fetch;
@@ -41,8 +43,16 @@ export default {
    * control-plane call that neither reads nor writes the cache, and without it
    * an R2 rewrite stays invisible behind the edge copy for a further full
    * `s-maxage`.
+   *
+   * The document purge runs FIRST, and not because it is more important — it is
+   * a no-op on all but the one or two ticks that follow a deploy. It runs first
+   * because a sweep may take minutes, and on the tick that matters those are
+   * minutes of the site rendering nothing but its spinner. See
+   * @/server/deploy-purge.
    */
-  async scheduled(_event: ScheduledController, _env: unknown, ctx: ExecutionContext) {
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    await purgeDocumentsAfterDeploy(env.CF_VERSION, now('UTC'), ctx.cache);
+
     const summary = await refreshAll(ctx.cache);
     console.log(JSON.stringify({ log: 'refresh', ...summary }));
   },

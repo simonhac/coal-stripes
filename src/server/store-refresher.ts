@@ -18,9 +18,9 @@
  * `x-cf-source` header on a real request, which is observable from outside and
  * cannot be fooled by the prober warming what it measures.
  */
-import { cache } from 'cloudflare:workers';
 import { COAL_STATS_TAG, yearTag } from '@/server/cache-headers';
 import { allDataYears, currentDataYear } from '@/server/data-years';
+import { resolvePurgeTarget } from '@/server/purge';
 import { mapPool } from '@/shared/map-pool';
 import { computeCoalStats } from '@/server/coal-stats-service';
 import { STALE_WINDOW_MULTIPLE, windowsOverdue } from '@/server/refresh-schedule';
@@ -118,13 +118,10 @@ async function refreshYear(year: number): Promise<YearResult> {
 async function purgeChanged(tags: string[], from?: CacheContext): Promise<number> {
   if (tags.length === 0) return 0;
 
-  // `ctx.cache` is typed optional and the module-level export is a stub under
-  // miniflare, where `purge` is not a function at all. Resolve rather than
-  // assume, and say so once instead of throwing per batch: a local sweep should
-  // not look like a production failure.
-  const target = [from, cache].find(
-    (candidate) => typeof candidate?.purge === 'function',
-  );
+  // Resolve rather than assume — see @/server/purge for why neither candidate
+  // can be trusted on its own. Say so once instead of throwing per batch: a
+  // local sweep should not look like a production failure.
+  const target = resolvePurgeTarget(from);
   if (!target) {
     console.log(JSON.stringify({ log: 'refresh:purge-unavailable', tags: tags.length }));
     return 0;
