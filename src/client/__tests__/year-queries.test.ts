@@ -166,7 +166,15 @@ describe('year-queries', () => {
       // one failing year would be 4 payload attempts retried 4 times — 16
       // requests behind a single tile.
       expect(yearQueryOptions(queryClient, 'full', 2023).retry).toBe(false);
-      expect(yearDataQueryOptions(2023).retry).toBeUndefined();
+      expect(yearDataQueryOptions(2023).retry).toBe(5);
+    });
+
+    it('caps the payload retry backoff so a mobile handover is ridden out', () => {
+      // The default ladder doubles to 30s, which would strand the last attempt
+      // long after the reader has given up looking at the tile.
+      const { retryDelay } = yearDataQueryOptions(2023);
+      const delayAt = retryDelay as (attempt: number) => number;
+      expect([0, 1, 2, 3, 4].map(delayAt)).toEqual([1000, 2000, 4000, 8000, 8000]);
     });
 
     it('does not build canvases for a year nobody is waiting for any more', async () => {
