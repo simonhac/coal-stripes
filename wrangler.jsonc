@@ -19,6 +19,13 @@
   // Located in Oceania, alongside the readers and the Sydney colo.
   "r2_buckets": [{ "binding": "DATA", "bucket_name": "coal-stripes-data" }],
 
+  // Yields { id, tag, timestamp } for the running Worker version. Read by the
+  // cron for one question only — "did we deploy in the last twenty minutes?" —
+  // which is the trigger for purging the SSR documents a deploy can strand. The
+  // timestamp IS the state, so nothing has to be stored to answer it. See
+  // src/server/deploy-purge.ts and the cache note below.
+  "version_metadata": { "binding": "CF_VERSION" },
+
   // Workers Cache sits in front of R2 purely for latency. It is no longer
   // load-bearing: nothing breaks when it is cold. See
   // docs/caching-and-diagnostics.md.
@@ -40,6 +47,18 @@
   // property that makes a cold cache cheap. Shape changes are still invalidated
   // by CF_DTO_VERSION (src/shared/config.ts); that lever is unchanged, it simply
   // stops being the only one.
+  //
+  // CORRECTION, measured 2026-08-15: version keying starts a deploy cold, but it
+  // does NOT cover the flip itself. Version 93ad4084 was created at 12:06:20
+  // UTC; the document being served three minutes later, naming the previous
+  // build's five chunks and its stylesheet, had been written at 12:06:21 — one
+  // second AFTER the flip, by the outgoing version, into the incoming version's
+  // namespace. One poisoned entry per deploy per colo, held for the document's
+  // full s-maxage. The cron now purges the `html` tag on the ticks that follow a
+  // deploy (src/server/deploy-purge.ts, hence the version_metadata binding
+  // above), and the document carries a script that reloads itself when its own
+  // assets 404 (src/client/stale-document-tripwire.ts). This setting is still
+  // right and still load-bearing; it is just no longer the whole answer.
   "cache": {
     "enabled": true,
     "cross_version_cache": false

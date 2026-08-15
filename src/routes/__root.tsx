@@ -5,8 +5,14 @@ import {
   Scripts,
   createRootRoute,
 } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Providers } from '@/client/providers';
+import {
+  BOOT_FLAG,
+  FRESH_PARAM,
+  SELF_HEAL_GUARD,
+  STALE_DOCUMENT_TRIPWIRE,
+} from '@/client/stale-document-tripwire';
 import globalsCss from '@/styles/globals.css?url';
 import opennemCss from '@/styles/opennem.css?url';
 
@@ -72,6 +78,11 @@ export const Route = createRootRoute({
       { rel: 'stylesheet', href: globalsCss },
       { rel: 'stylesheet', href: opennemCss },
     ],
+
+    // Inline, and in the head, because it has to run in the one case where
+    // nothing else on the page can: when every hashed asset this document names
+    // has 404ed. See @/client/stale-document-tripwire.
+    scripts: [{ children: STALE_DOCUMENT_TRIPWIRE }],
   }),
   component: RootComponent,
 });
@@ -94,6 +105,8 @@ function RootComponent() {
  * report to different endpoints.
  */
 function RootDocument({ children }: { children: ReactNode }) {
+  useStaleDocumentTripwireDisarm();
+
   return (
     <html lang="en">
       <head>
@@ -105,4 +118,40 @@ function RootDocument({ children }: { children: ReactNode }) {
       </body>
     </html>
   );
+}
+
+/**
+ * Tell the tripwire the app came up, and tidy up after it if it fired.
+ *
+ * This runs on hydration rather than on first paint or first data, and that is
+ * the right moment: the tripwire's question is "did the JavaScript load", not
+ * "did the chart appear". A page still waiting on OpenElectricity has booted
+ * fine.
+ *
+ * Clearing the guard here is what makes the self-heal repeatable — it is set
+ * once per failed load and would otherwise sit in sessionStorage for the rest of
+ * the tab's life, disarming the tripwire for the *next* bad deploy.
+ *
+ * The `_fresh` parameter is stripped with a raw `replaceState` rather than a
+ * router navigation: it exists only to be a different cache key, the router
+ * should never see it as state, and `/`'s validateSearch would drop it on the
+ * next navigation anyway (`/stats` and `/diagnostics` have no validator, so
+ * doing it here covers all three in one place).
+ */
+function useStaleDocumentTripwireDisarm() {
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>)[BOOT_FLAG] = true;
+
+    try {
+      window.sessionStorage.removeItem(SELF_HEAL_GUARD);
+    } catch {
+      // Unavailable in some privacy modes. The tripwire copes; so do we.
+    }
+
+    const url = new URL(window.location.href);
+    if (url.searchParams.has(FRESH_PARAM)) {
+      url.searchParams.delete(FRESH_PARAM);
+      window.history.replaceState(window.history.state, '', url.toString());
+    }
+  }, []);
 }

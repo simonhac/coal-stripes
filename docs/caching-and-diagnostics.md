@@ -113,7 +113,8 @@ Cache-Tag:     capacity-factors,cf-<tier>,cf-year-<year>,cf-dto-<CF_DTO_VERSION>
 `max-age` governs the browser, `s-maxage` the shared cache. The key includes the
 path **and the full query string** (in order), so `?year=2024` and `?year=2025`
 are naturally separate entries — **and the Worker version**, so a deploy starts
-cold.
+cold. (Starts cold, but is not atomic: an entry written in the second either side
+of a version flip can still cross it. See the 2026-08-15 correction below.)
 
 **There is no URL cache-buster.** Under the old Vercel setup the URL carried
 `&v=BUILD_ID` so a deploy would rotate it; that was needed because three layers
@@ -152,8 +153,44 @@ Cache-Control: public, max-age=0, s-maxage=3600
 Cache-Tag:     html
 ```
 
-The tag is an escape hatch — `/api/admin/purge` can clear documents by hand — not
-the mechanism. Version keying is what makes a deploy correct.
+### Correction, 2026-08-15: version keying does not cover the flip
+
+Version keying makes a deploy start cold. It does **not** make the deploy atomic,
+and the same symptom came back six days later.
+
+Deployment `93ad4084` was created at 12:06:20 UTC. At 12:09 the document being
+served was a HIT with `age: 181` — i.e. written at **12:06:21**, one second
+*after* the flip — and it named the previous build's `opennem-LaDgLB7m.css` and
+`index-uN0Sv-iA.js`, both 404. A cache-busting query string returned the current
+build's `opennem-NG3wRnIl.css` and `index-Bx2TOUQz.js`, both 200. So this was not
+an entry that survived the deploy: it was one **created during** it, by the
+outgoing version, into the incoming version's namespace. The one chunk that
+loaded, `capacity-factors-url-Co4_t0lT.js`, was the one whose contents had not
+changed between builds and so kept its hash.
+
+One poisoned entry per deploy, per colo, pinned for the document's full
+`s-maxage` of an hour.
+
+Two things now cover it, because a race we cannot observe from outside does not
+deserve a single defence:
+
+1. **The cron purges the `html` tag after a deploy.** `src/server/deploy-purge.ts`,
+   called from `scheduled` in `src/worker.ts`. The `version_metadata` binding
+   (`CF_VERSION`) reports when the running version was uploaded, so no state has
+   to be stored to answer "did we just deploy?". It purges while the version is
+   younger than **two** cron intervals — two, because the poisoning write lands
+   after the flip and a tick firing in that same second would purge too early.
+   Worst case a stranded document now lives ten minutes rather than sixty.
+2. **The document heals itself.** `src/client/stale-document-tripwire.ts`, inlined
+   into the head by `src/routes/__root.tsx`. A classic inline script — it has to
+   be, since the modules are what 404 — reloads once with a `_fresh=<ts>`
+   parameter when an `/assets/*` resource fails or nothing has booted in 10 s. The
+   parameter is load-bearing: a plain `location.reload()` is answered by the same
+   poisoned entry. A `sessionStorage` guard caps it at one attempt.
+
+So the `html` tag is no longer only an escape hatch — `/api/admin/purge` still
+clears documents by hand, but the cron now clears them on schedule. Version
+keying remains necessary and is no longer claimed to be sufficient.
 
 ---
 
@@ -573,9 +610,12 @@ curl -X POST https://stripes.energy/api/admin/purge \
 
 It purges the `capacity-factors`, `coal-stats` and `html` tags globally via
 Cloudflare's Instant Purge, and clears the facilities-roster memo on whichever
-isolate served the request. (`html` covers the SSR documents. A deploy already
-orphans those by changing the cache key, so this is the escape hatch for when
-that reasoning turns out to be wrong at 10 pm.)
+isolate served the request. (`html` covers the SSR documents. That was the escape
+hatch for when version keying turned out to be wrong at 10 pm; on 2026-08-15 it
+did, so the cron now purges the same tag automatically after every deploy — see
+the correction under [Why the version is in the key](#why-the-version-is-in-the-key).
+This remains the way to do it by hand, and the way to do it *now* rather than
+within ten minutes.)
 
 **It does not touch R2**, deliberately — see [The layers](#the-layers). So a
 purge is now cheap: the next request for each year refills the cache from an R2

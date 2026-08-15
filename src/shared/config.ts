@@ -157,7 +157,11 @@ export const TILE_CONFIG = {
 // Deploys alone do NOT need a bump, but not because entries survive them: they
 // no longer do. Workers Cache keys include the Worker version
 // (`cross_version_cache: false` in wrangler.jsonc), so a deploy starts cold by
-// itself. What this version still buys is the two places a deploy cannot reach —
+// itself — for the data, at least. The SSR document turned out to need more than
+// that, because an entry written in the second after a version flip can still
+// cross it; see @/server/deploy-purge. Nothing here changes: a document is not a
+// payload, and this version has never been what protected it.
+// What this version still buys is the two places a deploy cannot reach —
 // the R2 key namespace (`v1/years/…`) and the TanStack Query key in a tab that
 // has been open across one.
 // v1 → v2: year payloads gained folded-member rows (Playford B's PLAYFB1-4),
