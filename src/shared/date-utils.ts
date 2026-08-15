@@ -234,6 +234,107 @@ export function formatAgeFromAEST(
   return plural(Math.round(hours / 24), 'day');
 }
 
+/** An exact elapsed duration, split across calendar units. */
+export interface ElapsedParts {
+  years: number;
+  months: number;
+  days: number;
+  hours: number;
+  minutes: number;
+}
+
+/**
+ * How much time elapsed between two instants, split across calendar units —
+ * exactly, with no "a month is 30 days" anywhere.
+ *
+ * @internationalized/date has no `since`/`until`, only arithmetic, but that is
+ * the half that is hard to get right: `add({months: n})` already knows that
+ * February is short, that leap years exist, and how to clamp the 31st into a
+ * 30-day month. So rather than dividing by an average month, this *counts* in
+ * the library's own calendar: propose a figure from the calendar fields, then
+ * correct by one if it overshot.
+ *
+ * The same add-and-correct handles days, which makes the result right in a zone
+ * with DST too — a 23-hour day is a whole day here, as it should be. Brisbane
+ * has none, but a function that only works in one timezone is a trap for
+ * whoever moves it.
+ *
+ * Hours and minutes below that are fixed-length by definition, so plain
+ * division is exact.
+ */
+export function elapsedSince(
+  from: ZonedDateTime,
+  to: ZonedDateTime,
+): ElapsedParts {
+  // Whole months by calendar position, then one correction: adding this many
+  // months lands in `to`'s own calendar month, so it can only ever be one too
+  // many (when `to`'s day-of-month or time-of-day is earlier).
+  let months = (to.year - from.year) * 12 + (to.month - from.month);
+  if (months > 0 && from.add({ months }).compare(to) > 0) months -= 1;
+
+  const afterMonths = from.add({ months });
+
+  // Whole days, proposed from elapsed milliseconds and corrected in the
+  // calendar, so a DST-shortened or -lengthened day counts as one day.
+  let days = Math.floor(
+    (to.toDate().getTime() - afterMonths.toDate().getTime()) / 86_400_000,
+  );
+  if (days > 0 && afterMonths.add({ days }).compare(to) > 0) days -= 1;
+  else if (afterMonths.add({ days: days + 1 }).compare(to) <= 0) days += 1;
+
+  const remainderMs =
+    to.toDate().getTime() - afterMonths.add({ days }).toDate().getTime();
+
+  return {
+    years: Math.floor(months / 12),
+    months: months % 12,
+    days,
+    hours: Math.floor(remainderMs / 3_600_000),
+    minutes: Math.floor((remainderMs % 3_600_000) / 60_000),
+  };
+}
+
+/** Largest first, so the first non-zero one is the one to lead with. */
+const AGE_UNITS: readonly [keyof ElapsedParts, string][] = [
+  ['years', 'y'],
+  ['months', 'mon'],
+  ['days', 'd'],
+  ['hours', 'h'],
+  // `mon` above rather than `mo` so that `m` is unambiguously minutes — the two
+  // shortest suffixes are the ones a reader scanning a column would confuse.
+  ['minutes', 'm'],
+];
+
+/**
+ * The same age, compact enough to sit in a table column: "54m ago",
+ * "7d 4h ago", "2y 3mon ago". Null when the stamp can't be parsed.
+ *
+ * Two units at most, and the second is dropped when it is zero, so the width
+ * stays near-constant down a column and rows can be compared by scanning rather
+ * than reading. `formatAgeFromAEST` stays for prose, where "3 hours ago" reads
+ * better than "3h ago".
+ */
+export function formatCompactAgeFromAEST(
+  stamp: string,
+  reference: ZonedDateTime = now('Australia/Brisbane'),
+): string | null {
+  const when = parseAESTDateTime(stamp);
+  if (!when) return null;
+  if (when.compare(reference) > 0) return 'just now';
+
+  const parts = elapsedSince(when, reference);
+  const index = AGE_UNITS.findIndex(([unit]) => parts[unit] > 0);
+  if (index === -1) return 'just now';
+
+  const [unit, suffix] = AGE_UNITS[index];
+  const next = AGE_UNITS[index + 1];
+  const remainder = next ? parts[next[0]] : 0;
+
+  return remainder > 0
+    ? `${parts[unit]}${suffix} ${remainder}${next![1]} ago`
+    : `${parts[unit]}${suffix} ago`;
+}
+
 /**
  * Get the short month name (3 letters) for a CalendarDate
  *

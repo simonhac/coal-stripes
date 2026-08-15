@@ -21,23 +21,13 @@
 import { cache } from 'cloudflare:workers';
 import { COAL_STATS_TAG, yearTag } from '@/server/cache-headers';
 import { allDataYears, currentDataYear } from '@/server/data-years';
-import { mapPool } from '@/server/map-pool';
+import { mapPool } from '@/shared/map-pool';
 import { computeCoalStats } from '@/server/coal-stats-service';
-import { windowsOverdue } from '@/server/refresh-schedule';
+import { STALE_WINDOW_MULTIPLE, windowsOverdue } from '@/server/refresh-schedule';
 import { buildYear, putStats, statsIsDue, yearFreshness } from '@/server/year-store';
 
 /** Stop starting new work after this long, so a sweep can't overrun its cron. */
 const REFRESH_BUDGET_MS = 240_000;
-
-/**
- * How far past its window a year may drift before the sweep says so.
- *
- * A healthy sweep rebuilds within one cron interval of a slot boundary, so
- * anything at twice its window has been failing for a while — an expired API
- * key, an upstream outage, a budget that keeps running out. Until now that only
- * showed up as an `x-cf-built-at` header nobody was watching.
- */
-const STALE_WINDOW_MULTIPLE = 2;
 
 /** Cloudflare caps a purge at 100 operations per request, on every plan. */
 const PURGE_TAGS_PER_CALL = 100;

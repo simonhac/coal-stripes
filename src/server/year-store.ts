@@ -19,10 +19,15 @@
  * where the header can reach it without touching the body.
  */
 import { getCapFacDataService } from '@/server/cap-fac-data-service';
-import { currentDataYear } from '@/server/data-years';
-import { yearIsDueAt } from '@/server/refresh-schedule';
+import { allDataYears, currentDataYear } from '@/server/data-years';
+import {
+  STALE_WINDOW_MULTIPLE,
+  windowsOverdue,
+  yearIsDueAt,
+} from '@/server/refresh-schedule';
 import { CF_DTO_VERSION } from '@/shared/config';
 import { parseAESTDateTime } from '@/shared/date-utils';
+import { mapPool } from '@/shared/map-pool';
 import type { CoalGenerationStatsDTO, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 import { now, type ZonedDateTime } from '@internationalized/date';
 
@@ -274,4 +279,93 @@ export async function yearIsDue(
   reference: ZonedDateTime = now('Australia/Brisbane'),
 ): Promise<boolean> {
   return (await yearFreshness(year, reference)).due;
+}
+
+/** One stored file, as reported to the cache-management page. */
+export interface StoreEntry {
+  /** `year` rows carry a year; the single `stats` row does not. */
+  kind: 'year' | 'stats';
+  year?: number;
+  /** When we last fetched this from OpenElectricity. Null = never built. */
+  builtAt: string | null;
+  /** When its numbers last actually moved. */
+  dataChangedAt: string | null;
+  sizeBytes: number | null;
+  /**
+   * Past twice its freshness window, so earlier cron ticks must have been
+   * failing. Always false for the stats row, which has no per-year tier.
+   */
+  stale: boolean;
+}
+
+/**
+ * Everything in the store, in one sweep of HEADs.
+ *
+ * The point is that this costs a few hundred bytes rather than ~5 MB. A `head`
+ * carries `customMetadata` without the body, which is how the refresher checks
+ * all 28 years every ten minutes; the cache-management page wants the same
+ * three stamps for the same price. Reading the payloads to answer "how old is
+ * this?" — which is what probing every year used to do — downloads the entire
+ * store to look at three strings.
+ *
+ * It lives here rather than in a route because `bucket()` is private to this
+ * module, and it deliberately reports rather than judges: a missing object is a
+ * null `builtAt`, not an error. An empty bucket is a legitimate state (a fresh
+ * local `wrangler dev`), and the page should show it as one.
+ */
+export async function storeStatus(
+  reference: ZonedDateTime = now('Australia/Brisbane'),
+): Promise<StoreEntry[]> {
+  const b = await bucket();
+  const years = allDataYears();
+  if (!b) {
+    return [
+      ...years.map((year): StoreEntry => ({
+        kind: 'year',
+        year,
+        builtAt: null,
+        dataChangedAt: null,
+        sizeBytes: null,
+        stale: false,
+      })),
+      { kind: 'stats', builtAt: null, dataChangedAt: null, sizeBytes: null, stale: false },
+    ];
+  }
+
+  // Bounded because 29 concurrent HEADs against one bucket is a stampede for no
+  // gain; the same limit the refresher fans out with.
+  const yearEntries = await mapPool(years, 5, async (year): Promise<StoreEntry> => {
+    const head = await b.head(yearKey(year));
+    const builtAt = head?.customMetadata?.builtAt ?? null;
+    const when = builtAt ? parseAESTDateTime(builtAt) : null;
+    const ageSeconds = when
+      ? (reference.toDate().getTime() - when.toDate().getTime()) / 1000
+      : null;
+
+    return {
+      kind: 'year',
+      year,
+      builtAt,
+      dataChangedAt: head?.customMetadata?.dataChangedAt ?? null,
+      sizeBytes: head?.size ?? null,
+      // A future year is never stored, so its absence is correct rather than
+      // alarming — see isStorable.
+      stale:
+        isStorable(year) &&
+        (ageSeconds === null ||
+          windowsOverdue(year, currentDataYear(), ageSeconds) >= STALE_WINDOW_MULTIPLE),
+    };
+  });
+
+  const statsHead = await b.head(statsKey());
+  return [
+    ...yearEntries,
+    {
+      kind: 'stats',
+      builtAt: statsHead?.customMetadata?.builtAt ?? null,
+      dataChangedAt: statsHead?.customMetadata?.dataChangedAt ?? null,
+      sizeBytes: statsHead?.size ?? null,
+      stale: false,
+    },
+  ];
 }

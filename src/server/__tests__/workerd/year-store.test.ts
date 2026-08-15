@@ -14,8 +14,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { now } from '@internationalized/date';
-import { getStats, getYear, putStats, putYear, statsIsDue, statsKey, yearFreshness, yearIsDue, yearKey } from '@/server/year-store';
-import { currentDataYear } from '@/server/data-years';
+import { getStats, getYear, putStats, putYear, statsIsDue, statsKey, storeStatus, yearFreshness, yearIsDue, yearKey } from '@/server/year-store';
+import { allDataYears, currentDataYear } from '@/server/data-years';
 import { CF_DTO_VERSION, YEAR_CACHE_TIERS } from '@/shared/config';
 import { getAESTDateTimeString } from '@/shared/date-utils';
 import type { CoalGenerationStatsDTO, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
@@ -242,6 +242,55 @@ describe('year-store', () => {
       expect((await putStats(stats('2026-08-08T01:00:00+10:00', 0))).changed).toBe(true);
       expect((await putStats(stats('2026-08-08T02:00:00+10:00', 0))).changed).toBe(false);
       expect((await putStats(stats('2026-08-08T03:00:00+10:00', 5))).changed).toBe(true);
+    });
+  });
+
+  // What the cache-management page reads. The value of this sweep is that it
+  // costs HEADs rather than 5 MB of payloads, so the assertions worth making are
+  // about completeness and about the metadata surviving without a body read.
+  describe('storeStatus', () => {
+    it('reports every year plus the stats file, oldest year first', async () => {
+      const entries = await storeStatus();
+      const years = allDataYears();
+
+      expect(entries).toHaveLength(years.length + 1);
+      expect(entries.slice(0, years.length).map((e) => e.year)).toEqual(years);
+      expect(entries[entries.length - 1]).toMatchObject({ kind: 'stats' });
+    });
+
+    it('reports a never-built file as null rather than an error', async () => {
+      const entries = await storeStatus();
+
+      // An empty bucket is a legitimate state — a fresh local `wrangler dev` —
+      // and the page shows it as "never built", not as a failure.
+      for (const entry of entries) {
+        expect(entry.builtAt).toBeNull();
+        expect(entry.dataChangedAt).toBeNull();
+        expect(entry.sizeBytes).toBeNull();
+      }
+    });
+
+    it('carries both stamps and the size, read from metadata without the body', async () => {
+      const year = currentDataYear() - 3;
+      await putYear(year, payload('2026-08-08T01:00:00+10:00'));
+      await putYear(year, payload('2026-08-08T02:00:00+10:00'));
+
+      const entry = (await storeStatus()).find((e) => e.year === year);
+      expect(entry?.builtAt).toBe('2026-08-08T02:00:00+10:00');
+      // The numbers never moved, so only the build stamp advanced.
+      expect(entry?.dataChangedAt).toBe('2026-08-08T01:00:00+10:00');
+      expect(entry?.sizeBytes).toBeGreaterThan(0);
+    });
+
+    it('flags a year past twice its window as stale', async () => {
+      const archiveYear = currentDataYear() - 10;
+      const week = YEAR_CACHE_TIERS.archive.revalidateSeconds;
+
+      await putYear(archiveYear, payload(stampSecondsAgo(60)));
+      expect((await storeStatus()).find((e) => e.year === archiveYear)?.stale).toBe(false);
+
+      await putYear(archiveYear, payload(stampSecondsAgo(week * 2 + 60)));
+      expect((await storeStatus()).find((e) => e.year === archiveYear)?.stale).toBe(true);
     });
   });
 });

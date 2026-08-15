@@ -28,7 +28,7 @@ ENABLE_FILE_LOGGING=true
 # no HTTP route, so there is nothing to authorise. To run it by hand, use
 # `wrangler dev` and its scheduled-trigger endpoint.
 #
-# POST /api/admin/purge and the /diagnostics purge button do still take a
-# secret. The real one is prod-only (coal-stripes-prod vault) and is
+# POST /api/admin/purge, POST /api/admin/rebuild and the buttons for both on
+# /diagnostics do still take a secret. The real one is prod-only (coal-stripes-prod vault) and is
 # deliberately NOT written here — this file is committed to a public repo.
 # CACHE_SECRET=local-dev-only
