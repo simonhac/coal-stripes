@@ -7,14 +7,14 @@ import { getStats, putStats } from '@/server/year-store';
  * Whole-of-history coal generation records.
  *
  * Precomputed into R2 by the cron, so the normal path here is a single R2 read
- * streamed through — no folding of 28 years, and no reading of 28 year payloads
+ * streamed through — no folding of 29 years, and no reading of 29 year payloads
  * to fold. Only a cold bucket reaches computeCoalStats, and that result is
  * stored on the way out.
  *
  * The route takes no parameters. There used to be a `?fleet=full|current`,
  * which forked the cache entry and doubled the warmer's work for a payload
  * nothing ever requested — /stats has only ever asked for the full fleet, and
- * a records-since-1999 table without Hazelwood and Liddell in it would be
+ * a records-since-1998 table without Hazelwood and Liddell in it would be
  * missing the point. FleetMode stays what it is elsewhere: a client-side view
  * selector over the capacity-factors roster, in no server URL.
  */

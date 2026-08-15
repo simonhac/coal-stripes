@@ -47,7 +47,9 @@ import type {
  * that distinction. It has never arisen — every year from 1999 to 2026 was
  * checked against the old two-roster prod API and no `current` payload has ever
  * contained an all-null row — and it describes how OpenElectricity chose to
- * serialise an absence, not anything true of the power station.
+ * serialise an absence, not anything true of the power station. (1998 was added
+ * to the record later, when OpenElectricity extended its history back to 7 Dec
+ * 1998; that check has not been re-run for it.)
  */
 export function isInFleet(unit: GeneratingUnitDTO, mode: FleetMode): boolean {
   if (mode === 'full') return true;

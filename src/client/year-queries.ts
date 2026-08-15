@@ -37,7 +37,7 @@ export interface YearPayload {
   /**
    * Approximate bytes of `data`, for the performance overlay. Taken here
    * because it is the one place the payload is known to be new; the overlay
-   * polls on a timer and must not re-stringify ~28 years a tick. It is a proxy:
+   * polls on a timer and must not re-stringify ~29 years a tick. It is a proxy:
    * JSON.stringify().length counts UTF-16 code units, not bytes, and ignores
    * in-memory object overhead.
    */

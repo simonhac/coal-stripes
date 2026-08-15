@@ -78,6 +78,12 @@ export function capacityFactorHeaders(
   if (year > currentYear) {
     // Future years: never cache, the data does not exist yet. This must be
     // explicit — a response with NO Cache-Control gets cached anyway.
+    //
+    // Unreachable from /api/capacity-factors, which now rejects a future year
+    // with a 400 rather than serving nulls. Kept because the trap it guards is
+    // silent: if that validation is ever loosened, the absence of this branch
+    // would not fail a test, it would just start caching a year of nulls for
+    // the rest of the year.
     headers.set('Cache-Control', 'no-store');
   } else {
     headers.set(

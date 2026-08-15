@@ -185,10 +185,10 @@ server-only: the client has no use for it.
 
 Dueness compares **absolute slot boundaries**, not elapsed time since the last
 write. That distinction is the whole point. Age-based dueness makes the schedule
-a function of when the last build happened, so a cold bucket stamps all 28 years
+a function of when the last build happened, so a cold bucket stamps all 29 years
 at one instant and they stay locked together for good — on 2026-08-08, 2006,
 2019, 2021 and 2025 were all built within 26 seconds of each other, and the
-archive tier rebuilt all 22 years in a single tick every week.
+archive tier rebuilt all 23 years in a single tick every week.
 
 Each tier's window is cut into as many slots as the tier has years, and a year
 takes slot `year % slots`. Because tiers are runs of *consecutive* years that is
@@ -198,7 +198,7 @@ a bijection, so they spread perfectly evenly with no hashing:
 |---|---|---|
 | `current` | 1 | on the hour |
 | `recent` | 5 | one of the five years every 4.8 hours |
-| `archive` | 7 | three or four of the twenty-two years each day |
+| `archive` | 7 | three or four of the twenty-three years each day |
 
 Aggregate work is unchanged — ~32 year-builds a day either way — but it is
 spread over the 144 daily ticks instead of arriving in a weekly burst.
@@ -249,7 +249,7 @@ rebuild is buying nothing. Both are visible from outside as `x-cf-built-at` and
 `src/worker.ts`, which calls `refreshAll()` (`src/server/store-refresher.ts`).
 Each tick:
 
-1. `HEAD` each of the 28 years, compare `builtAt` against the year's slot, and
+1. `HEAD` each of the 29 years, compare `builtAt` against the year's slot, and
    rebuild only what is due. Most ticks write nothing. A year already past twice
    its window logs `refresh:stale` — a healthy sweep rebuilds within one cron
    interval of a boundary, so that means earlier ticks have been failing.
@@ -292,9 +292,9 @@ drop: objects stored before the hash existed have no `contentHash` to compare
 against, so each year's first rebuild under the new code reports a change once.
 An archive year does not reach that point until its next weekly slot.
 
-**Cost.** 28 HEADs every ten minutes is ~121k class-B ops a month against a 10M
-free allowance; the writes are ~1k class-A a month against 1M. 28 years × ~200 KB
-is ~5.6 MB against 10 GB. The storage is comfortably free. What is *not* free is
+**Cost.** 29 HEADs every ten minutes is ~125k class-B ops a month against a 10M
+free allowance; the writes are ~1k class-A a month against 1M. 29 years × ~200 KB
+is ~5.8 MB against 10 GB. The storage is comfortably free. What is *not* free is
 the CPU to build a payload — see below.
 
 ### Where the Worker actually runs
@@ -423,7 +423,7 @@ than `@import`-ed (see § Static assets below).
 **Why Workers Paid is still required.** The free plan caps CPU at **10 ms per
 invocation, including cron invocations**, and 50 subrequests. Reads now fit
 inside that easily (an R2 get and a stream). Builds never will: assembling one
-year is ~50 units × 365 days of fill logic, and `/api/stats` folds 28 of them.
+year is ~50 units × 365 days of fill logic, and `/api/stats` folds 29 of them.
 `wrangler.jsonc` sets `limits.cpu_ms: 300000`, which is a Paid-only setting. The
 only way onto the free plan would be to build payloads outside Cloudflare and
 upload them via the S3 API, making the Worker read-only.
@@ -527,7 +527,7 @@ the previous build's JavaScript. Only a shape change should bust this one.
 ## The stats layer
 
 `/stats` sits **on top of** everything above. `computeCoalStats`
-(`src/server/coal-stats-service.ts`) reads each year from the store, 1999→current,
+(`src/server/coal-stats-service.ts`) reads each year from the store, 1998→current,
 and reconstructs MWh from capacity factor × capacity × 24.
 
 Normally that computation is **not on a request path at all**: the refresher
@@ -538,7 +538,7 @@ and stores its result on the way out.
 **There is no `?fleet=` parameter.** There used to be `full` and `current`, which
 forked the cache entry and doubled the refresher's work for a payload nothing ever
 requested — `/stats` has only ever asked for the full fleet, and a
-records-since-1999 table without Hazelwood and Liddell in it would be missing the
+records-since-1998 table without Hazelwood and Liddell in it would be missing the
 point. `FleetMode` stays what it is elsewhere: a **client-side view selector**
 over the capacity-factors roster, applied by `filterFleet`
 (`src/shared/fleet-filter.ts`), appearing in the client's query key and in no
@@ -612,7 +612,7 @@ curl -X POST https://stripes.energy/api/admin/rebuild \
 inside Cloudflare's 100 s request ceiling; twenty-eight of them in one request
 would not be. So `/diagnostics` issues one request per year at concurrency 5,
 100 ms apart — the same numbers as `REFRESH_CONCURRENCY` and
-`queued-oeclient` — and 28 years finish in about a minute with visible progress.
+`queued-oeclient` — and 29 years finish in about a minute with visible progress.
 The bounding *has* to happen client-side: each request is its own Worker
 invocation, and the upstream queue is scoped per fan-out, not per isolate, so
 nothing on the server can see the other 27.
@@ -639,7 +639,7 @@ and this button exists precisely for when you want to override it.
 ## Cache management (`/diagnostics`)
 
 One table: a passcode field (`CACHE_SECRET`, kept in the tab, never stored), a
-**Flush all** button, and one row per stored file — 1999…the current year, plus
+**Flush all** button, and one row per stored file — 1998…the current year, plus
 **Stats**.
 
 | Column | |
@@ -650,7 +650,7 @@ One table: a passcode field (`CACHE_SECRET`, kept in the tab, never stored), a
 | Status | at rest `—`, `never built` or `stale`; during a flush `queued` → `fetching…`; after, **`updated`** or **`unchanged`** |
 
 Both stamps are ages — `54m ago`, `7d 4h ago`, `2y 3mon ago` — at most two
-adjacent units wide, with the exact AEST timestamp on hover. 29 rows are read by
+adjacent units wide, with the exact AEST timestamp on hover. 30 rows are read by
 scanning, so a near-constant column width matters as much as precision
 (`formatCompactAgeFromAEST` in `src/shared/date-utils.ts`; `formatAgeFromAEST`
 stays for prose on `/stats`).
@@ -672,7 +672,7 @@ purge — the refresher's order, for the refresher's reasons.
 
 The passcode is settled first, in a single `POST /api/admin/auth` that returns
 204 or 401 and nothing else. Without that pre-flight, a mistyped passcode spent
-29 requests discovering the same 401 twenty-nine times and painted the failure
+30 requests discovering the same 401 thirty times and painted the failure
 across every row, which reads like a broken store rather than a typo. A 401
 *during* a sweep — the secret rotated mid-run — stops it the same way a cancel
 does, since every remaining file would fail identically. Every other failure

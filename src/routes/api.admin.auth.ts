@@ -2,7 +2,7 @@
  * Is this passcode right? Nothing else.
  *
  * Exists so the cache-management page can find out *before* it fans out. Without
- * it, a mistyped passcode spends 29 requests discovering the same 401 twenty-nine
+ * it, a mistyped passcode spends 30 requests discovering the same 401 thirty
  * times and paints the failure across every row, which reads like the store is
  * broken rather than like a typo.
  *

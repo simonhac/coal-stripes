@@ -27,8 +27,8 @@ describe('year-queries', () => {
   });
 
   describe('year bounds', () => {
-    it('should return 1999 as the earliest year (start of facility-level data)', () => {
-      expect(getEarliestYear()).toBe(1999);
+    it('should return 1998 as the earliest year (a partial year: data starts 7 Dec 1998)', () => {
+      expect(getEarliestYear()).toBe(1998);
     });
 
     it('should return the current year as the latest year', () => {
@@ -41,14 +41,16 @@ describe('year-queries', () => {
     });
 
     it('should accept valid years', () => {
+      // 1998 holds only 7–31 December, but it is a real, fetchable year.
+      expect(isValidYear(1998)).toBe(true);
       expect(isValidYear(1999)).toBe(true);
       expect(isValidYear(2005)).toBe(true);
       expect(isValidYear(2015)).toBe(true);
       expect(isValidYear(2024)).toBe(true);
     });
 
-    it('should reject years before 1999', () => {
-      expect(isValidYear(1998)).toBe(false);
+    it('should reject years before 1998', () => {
+      expect(isValidYear(1997)).toBe(false);
       expect(isValidYear(1990)).toBe(false);
     });
 

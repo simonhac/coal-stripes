@@ -137,6 +137,23 @@ describe('FacilityYearTile', () => {
 
       expect(rgbAt(0)).toEqual(PAGE_BACKGROUND);
     });
+
+    it('knows nothing about the global earliest date, and paints 1998 as a gap', () => {
+      // 1998 is the partial first year: the record starts on 7 December, so the
+      // payload's first 340 days are null. From the tile's point of view that is
+      // indistinguishable from a hole in a unit that ran through the 1980s, and
+      // it deliberately paints it as one. Hiding those days is CompositeTile's
+      // job — it fills page background over every column before earliestDataDay.
+      // If this ever starts returning PAGE_BACKGROUND the tile has grown a
+      // second, competing notion of where the data begins.
+      const partialFirstYear = [...Array(340).fill(null), ...Array(25).fill(60)];
+      const unit = { ...mockUnit('BW01', 660, partialFirstYear), commenced: '1985-01-01' };
+      new FacilityYearTile(createFacility('BAYSW', [unit]), 1998);
+
+      expect(rgbAt(0)).toEqual(NO_DATA_BLUE);
+      expect(rgbAt(339)).toEqual(NO_DATA_BLUE);
+      expect(rgbAt(340)).not.toEqual(NO_DATA_BLUE);
+    });
   });
 
   describe('Performance Tests', () => {

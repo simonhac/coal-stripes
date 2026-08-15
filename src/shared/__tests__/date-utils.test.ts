@@ -316,7 +316,7 @@ describe('Date Utilities', () => {
     });
   });
 
-  // The age column on /diagnostics. Width matters as much as accuracy: 29 rows
+  // The age column on /diagnostics. Width matters as much as accuracy: 30 rows
   // are read by scanning, so the format is at most two units and the second is
   // dropped when it is zero.
   describe('formatCompactAgeFromAEST', () => {

@@ -235,7 +235,7 @@ export interface YearFreshness {
  * Whether a year is due for a rewrite, per its freshness tier.
  *
  * A HEAD carries customMetadata without the body, so the refresher can check
- * all 28 years for a few hundred bytes of traffic. Keeping the answer in the
+ * all 29 years for a few hundred bytes of traffic. Keeping the answer in the
  * object itself means the refresher holds no state of its own — nothing to get
  * out of sync with what is actually stored.
  *
@@ -303,7 +303,7 @@ export interface StoreEntry {
  *
  * The point is that this costs a few hundred bytes rather than ~5 MB. A `head`
  * carries `customMetadata` without the body, which is how the refresher checks
- * all 28 years every ten minutes; the cache-management page wants the same
+ * all 29 years every ten minutes; the cache-management page wants the same
  * three stamps for the same price. Reading the payloads to answer "how old is
  * this?" — which is what probing every year used to do — downloads the entire
  * store to look at three strings.

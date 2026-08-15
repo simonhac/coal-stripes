@@ -17,7 +17,7 @@
  * stripe renderer (which colours pre-commission ends as page background and
  * everything else null as pale blue, per single-year semantics) and the
  * server-side stats aggregation (which counts interior gaps as holes across the
- * whole 1999→now history).
+ * whole 1998→now history).
  *
  * Inferring the span from the values alone is only correct when the values span
  * the unit's whole life. A single-year tile does not: the first data day *in

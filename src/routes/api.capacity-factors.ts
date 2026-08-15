@@ -3,7 +3,7 @@ import { capacityFactorHeaders } from '@/server/cache-headers';
 import { NO_STORE } from '@/server/cache-headers';
 import { envFlag } from '@/server/runtime-env';
 import { buildYear, getYear } from '@/server/year-store';
-import { getTodayAEST } from '@/shared/date-utils';
+import { currentDataYear, earliestDataYear } from '@/server/data-years';
 
 // Opt-in verbose logging: set DEBUG_OE=1 to trace requests locally.
 const debug = (...args: unknown[]): void => {
@@ -82,10 +82,25 @@ export const Route = createFileRoute('/api/capacity-factors')({
             );
           }
 
+          // Bound to the years we actually hold, not a nominal 1900..2100. A
+          // year outside the record has no data upstream either, so the old
+          // range bought nothing and cost two things: `?year=1900` spent a
+          // 3-9s OpenElectricity fetch per request (both networks return
+          // NoDataFound, which the builder tolerates), and then *stored* the
+          // resulting all-null payload as `v1/years/1900.json` — permanent
+          // bucket litter, creatable by anyone with a URL. `isStorable` only
+          // ever guarded the upper end.
+          //
+          // The upper bound is `currentDataYear()`, deliberately not
+          // `latestDataYear` — they differ on 1 January, and the current year is
+          // served (it has real data for the days that have elapsed) rather than
+          // rejected. Matches the range /api/admin/rebuild enforces.
           const year = Number.parseInt(yearParam);
-          if (Number.isNaN(year) || year < 1900 || year > 2100) {
+          const earliest = earliestDataYear();
+          const latest = currentDataYear();
+          if (Number.isNaN(year) || year < earliest || year > latest) {
             return Response.json(
-              { error: 'Invalid year parameter' },
+              { error: `"year" must be between ${earliest} and ${latest}.` },
               { status: 400, headers: NO_STORE },
             );
           }
@@ -97,7 +112,9 @@ export const Route = createFileRoute('/api/capacity-factors')({
           // gets a valid payload — but note it forks the cache entry, since the
           // key includes the whole query string.
 
-          const currentYear = getTodayAEST().year;
+          // Same value the upper bound was checked against, so the freshness
+          // tier and the validation can never disagree about what "current" is.
+          const currentYear = latest;
 
           // The stored object streams straight through: 180 KB of JSON never
           // gets parsed, and `builtAt` rides in metadata where the header can

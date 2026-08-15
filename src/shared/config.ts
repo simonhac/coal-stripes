@@ -66,25 +66,63 @@ export const DATE_BOUNDARIES = {
   // number of days displayed in the tile
   TILE_WIDTH: 365,
 
-  // The earliest date we have data from. The NEM commenced on 13 Dec 1998, but
-  // OpenElectricity's record begins at 1999-01-01T00:00:00+10:00 exactly — the
-  // market's first 19 days are absent. Verified 2026-08-07 against every
-  // endpoint and resolution: facility energy at 5m/1h/1d, facility power at 5m,
-  // network energy, and market demand all clip to that same instant, and a
-  // 5-minute query straddling the boundary returns its first interval there
-  // rather than any earlier one. A request confined to December 1998 returns
-  // NoDataFound; one that straddles is silently clipped instead.
+  // The earliest date we have data from. OpenElectricity's record now reaches
+  // back to 1998-12-07 — earlier than the NEM's own commencement of trading on
+  // 13 Dec 1998. (It used to stop at 1999-01-01; that was verified 2026-08-07
+  // and extended upstream some time after.) Re-verified 2026-08-15 against the
+  // live API: 76 of the 80 coal unit rows begin 1998-12-07, CALL_A_2 begins
+  // 1998-12-21, and six more first appear in Jan/Feb 1999. Nothing exists
+  // before 1998-12-07 at any resolution.
   //
-  // Do NOT trust the facilities metadata here: 71 of 99 coal units report a
-  // `data_first_seen` in December 1998 (67 of them 1998-12-07), which is both
-  // earlier than any data the API will serve and earlier than the NEM itself.
+  // The one thing that makes this cheap: a request for the whole of 1998
+  // SUCCEEDS and is silently clipped to 1998-12-07 — it does not return
+  // NoDataFound. So buildCapacityFactors(1998) needs no special case; it asks
+  // for 1998-01-01 → 1998-12-31 as it does for any year and gets back a
+  // 365-entry array whose first 340 days are null.
   //
-  // The WEM series only starts on 20 September 2006, so 1999–2005 render WEM as
+  // 7 December is a PARTIAL day, and we show it anyway. The 5-minute series
+  // starts at 1998-12-07T02:40:00+10:00, so the day is ~89% covered and its
+  // daily energy is correspondingly short: fleet capacity factor reads 60.0% on
+  // the 7th against 66.5% and 67.4% on the 8th and 9th (60.0 ÷ 0.889 = 67.5%,
+  // which is the 9th almost exactly). That first stripe is therefore about 7
+  // percentage points pale — one pixel column. Withholding a real day of the
+  // record to avoid it would trade a fact for an aesthetic.
+  //
+  // Do NOT trust the facilities metadata here: `data_first_seen` reports the
+  // start of a unit's later contiguous run, not its first reading (MM4 claims
+  // 2000-02-28 when data exists from 1999-01-06). It happens to agree with the
+  // 7 Dec boundary for most units; that is not a reason to start believing it.
+  //
+  // Two non-obvious consequences of a mid-December start:
+  //
+  //   • earliestDataEndDay is 1999-12-06, NOT a year boundary. Under the old
+  //     1999-01-01 it landed on 1999-12-31 by coincidence (1999 is not a leap
+  //     year, so +364 days reached year end). The leftmost resting window now
+  //     spans two calendar years, and S / Home / [ land on 7 Dec 1998 –
+  //     6 Dec 1999. Everything downstream is day-offset arithmetic, so nothing
+  //     breaks — but do not reintroduce an assumption that offset 0 is a year.
+  //
+  //   • The 1998 tile's first 340 days are null and classify as 'interior-gap'
+  //     (pale blue), not pre-commission: lifecycleBounds clamps a decades-earlier
+  //     commencement date to index 0, so the whole year reads as "alive". They
+  //     are never seen — at rest the window starts exactly at earliestDataDay,
+  //     and during an overstep CompositeTile paints page background over every
+  //     column before it. The tile deliberately does not know about this global
+  //     boundary; the composite overlay is what enforces it.
+  //
+  // The WEM series only starts on 20 September 2006, so 1998–2005 render WEM as
   // blank page background, not pale blue: with no data at all in the year, every
   // day of those tiles classifies as pre-commission (see @/shared/data-gaps).
-  EARLIEST_START_DATE: new CalendarDate(1999, 1, 1),
+  // WEM's 1998 fetch returns NoDataFound, which cap-fac-data-service tolerates.
+  EARLIEST_START_DATE: new CalendarDate(1998, 12, 7),
 
-  // Buffer months to allow beyond data boundaries for UI flexibility
+  // Buffer months to allow beyond data boundaries for UI flexibility.
+  // CURRENTLY UNUSED: the earliestDisplay*/latestDisplay* values and the
+  // *DisplayBounds helpers derived from this in @/shared/date-boundaries have no
+  // callers outside their own tests. The overstep a reader can actually reach is
+  // set by the gesture layer — WHEEL_STRETCH_DAYS (60) for the wheel, and the
+  // @use-gesture rubberband (~54 days) for a drag. Keyboard and month clicks
+  // clamp hard and never overstep at all.
   DISPLAY_SLOP_MONTHS: 9,
 } as const;
 

@@ -160,7 +160,7 @@ async function purgeChanged(tags: string[], from?: CacheContext): Promise<number
  * to replace.
  *
  * Most ticks write nothing. Each year costs one R2 HEAD to find out it is not
- * due yet — 28 HEADs every ten minutes is ~121k class-B ops a month against a
+ * due yet — 29 HEADs every ten minutes is ~125k class-B ops a month against a
  * 10M allowance, and the writes that do happen are ~1k class-A a month against
  * 1M. The free tier covers this comfortably; the Workers Paid plan is needed
  * for the CPU to build a payload, not for the storage.
