@@ -74,6 +74,13 @@ export function yearDataQueryOptions(year: number) {
     // past), so even past years go stale — on the same tiers the server
     // route uses. Held here, on the layer that actually fetches.
     staleTime: yearCachePolicy(year, getTodayAEST().year).revalidateSeconds * 1000,
+    // Wider than the client-wide default of 3 (providers.tsx), and capped
+    // rather than doubling to 30s: a phone handing over between cells is out
+    // for a few seconds, and the default ladder (1s, 2s, 4s) gives up inside
+    // that window. Six attempts over ~23s rides out the common blip. Longer
+    // outages are the job of failed-year-recovery, which picks up from here.
+    retry: 5,
+    retryDelay: attempt => Math.min(1000 * 2 ** attempt, 8000),
   });
 }
 

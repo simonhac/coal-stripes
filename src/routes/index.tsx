@@ -20,6 +20,8 @@ import { useShortcuts, type ShortcutHandlers } from '@/hooks/useShortcuts';
 import type { ShortcutScope } from '@/shared/shortcuts';
 import { useGestureSpring, type OffsetEmitMeta } from '@/hooks/useGestureSpring';
 import { usePrefetchAdjacentYears } from '@/hooks/usePrefetchAdjacentYears';
+import { useRecoverFailedYears } from '@/hooks/useRecoverFailedYears';
+import { isFailedYearQuery } from '@/client/failed-year-recovery';
 import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities';
 import { useHoverIndicator } from '@/hooks/useHoverIndicator';
 import { useHeaderDateRangeTracker } from '@/hooks/useHeaderDateRange';
@@ -323,6 +325,12 @@ function Home() {
     targetDateRange?.end.year ?? null
   );
 
+  // Retry years that have exhausted the fetch layer's own attempts. Without
+  // this a year that fails while on screen stays a pale-blue block until the
+  // page is reloaded — nothing else re-fetches a query the reader is already
+  // watching.
+  useRecoverFailedYears();
+
   // On the first load, position the timeline. On a later mode switch, keep the
   // current navigation target.
   useEffect(() => {
@@ -387,13 +395,21 @@ function Home() {
     }
   }, []);
 
-  if (rosterError) {
+  // Only when there is nothing to show. A roster year can fail on a *background
+  // revalidation* (staleTime is an hour for the current year), and replacing an
+  // already-rendered timeline with a full-page error over that would be a far
+  // worse failure than the pale-blue tile the error otherwise degrades to.
+  if (rosterError && facilitiesByRegion.size === 0) {
     return (
       <div className="opennem-error">
         <div>
           <h2>Unable to load data</h2>
           <p>{rosterError instanceof Error ? rosterError.message : 'Failed to load data'}</p>
-          <button onClick={() => window.location.reload()}>
+          <button
+            onClick={() => {
+              void queryClient.refetchQueries({ predicate: isFailedYearQuery });
+            }}
+          >
             Try again
           </button>
         </div>
