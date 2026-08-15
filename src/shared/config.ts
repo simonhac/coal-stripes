@@ -160,7 +160,12 @@ export const TILE_CONFIG = {
 // itself. What this version still buys is the two places a deploy cannot reach —
 // the R2 key namespace (`v1/years/…`) and the TanStack Query key in a tab that
 // has been open across one.
-export const CF_DTO_VERSION = 'v1';
+// v1 → v2: year payloads gained folded-member rows (Playford B's PLAYFB1-4),
+// `selfHistory` on absorbing rows and `suppressedNullDays`, so /stats can report
+// what OpenElectricity holds rather than what survives our folding. A bump is
+// required rather than merely tidy: pre-deploy JS has no `foldedInto` filter, so
+// serving it a v2 payload would draw Playford B as five rows.
+export const CF_DTO_VERSION = 'v2';
 
 // Cache freshness policy, shared by the server route (Cache-Control headers)
 // and the client (TanStack Query staleTime).

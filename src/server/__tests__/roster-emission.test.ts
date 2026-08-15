@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import { CapFacDataService } from '@/server/cap-fac-data-service';
+import { filterFleet } from '@/shared/fleet-filter';
 import { parseDate } from '@internationalized/date';
 import { getDaysBetween, getTodayAEST } from '@/shared/date-utils';
 import { setupTestLogger, cleanupTestLogger } from '../test-helpers';
@@ -336,19 +337,38 @@ describe('aggregate DUIDs (Playford B)', () => {
       ),
     ]);
 
-  it('emits one station row and never a superseded member', async () => {
+  it('shows one station row, and carries the members only as folded rows', async () => {
     getFacilities.mockResolvedValue(playford());
     getFacilityData.mockResolvedValue({ datatable: { getRows: () => [] } });
 
     const service = new CapFacDataService('key');
     const full = await service.getCapacityFactors(YEAR);
-    const duids = full.data.map((u) => u.duid);
 
-    expect(duids).toEqual(['PLAYB-AG']);
-    // A 240 MW station must not be drawn as 480 MW of rows.
-    expect(full.data[0].capacity).toBe(240);
+    // A 240 MW station must not be drawn as 480 MW of rows. The members are in
+    // the payload (the stats fold needs their nulls; see
+    // GeneratingUnitDTO.foldedInto) but belong to no fleet, `full` included.
+    expect(filterFleet(full, 'full').data.map((u) => u.duid)).toEqual(['PLAYB-AG']);
+    // `current` additionally drops the station itself here: this fixture returns
+    // no rows at all, so its year is entirely null.
+    for (const mode of ['full', 'current'] as const) {
+      const shown = filterFleet(full, mode).data.map((u) => u.duid);
+      expect(shown.filter((d) => d.startsWith('PLAYFB'))).toEqual([]);
+    }
+
+    const station = full.data.find((u) => u.duid === 'PLAYB-AG')!;
+    expect(station.capacity).toBe(240);
     // ...and it has existed since 1963, not since the aggregate was registered.
-    expect(full.data[0].commenced).toBe('1962-12-31');
+    expect(station.commenced).toBe('1962-12-31');
+    expect(station.foldedInto).toBeUndefined();
+
+    const members = full.data.filter((u) => u.foldedInto);
+    expect(members.map((u) => u.duid).sort()).toEqual([
+      'PLAYFB1',
+      'PLAYFB2',
+      'PLAYFB3',
+      'PLAYFB4',
+    ]);
+    expect(members.every((u) => u.foldedInto === 'PLAYB-AG')).toBe(true);
   });
 
   it('never synthesises red zeros for a member after its metering moved', async () => {

@@ -52,6 +52,11 @@ import type {
  * 1998; that check has not been re-run for it.)
  */
 export function isInFleet(unit: GeneratingUnitDTO, mode: FleetMode): boolean {
+  // A folded member belongs to NO fleet view, `full` included: its readings are
+  // already in the absorbing row, so showing it would draw Playford B as five
+  // rows and count its generation twice. It rides in the payload purely so the
+  // stats fold can see its own nulls — see GeneratingUnitDTO.foldedInto.
+  if (unit.foldedInto) return false;
   if (mode === 'full') return true;
   return unit.status === 'operating' && unit.history.data.some((v) => v !== null);
 }
@@ -59,14 +64,20 @@ export function isInFleet(unit: GeneratingUnitDTO, mode: FleetMode): boolean {
 /**
  * A year's payload as the given fleet view sees it.
  *
- * `full` is returned unchanged (same object, no copy). `current` gets a new
- * envelope around a filtered array — the unit objects themselves are shared,
- * not cloned, so holding both views of a year costs one payload plus one array.
+ * A payload that loses nothing is returned unchanged (same object, no copy);
+ * otherwise a new envelope wraps a filtered array — the unit objects themselves
+ * are shared, not cloned, so holding both views of a year costs one payload plus
+ * one array.
+ *
+ * Note there is no `mode === 'full'` fast path. `full` keeps every unit the
+ * visualisation has a row for, which is not the same as every unit in the
+ * payload: folded members ride along for the stats fold and must be dropped from
+ * both views. Short-circuiting here is what would put them on screen.
  */
 export function filterFleet(
   dto: GeneratingUnitCapFacHistoryDTO,
   mode: FleetMode,
 ): GeneratingUnitCapFacHistoryDTO {
-  if (mode === 'full') return dto;
-  return { ...dto, data: dto.data.filter((unit) => isInFleet(unit, mode)) };
+  const data = dto.data.filter((unit) => isInFleet(unit, mode));
+  return data.length === dto.data.length ? dto : { ...dto, data };
 }

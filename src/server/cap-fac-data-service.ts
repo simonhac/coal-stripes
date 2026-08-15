@@ -71,6 +71,80 @@ const asDate = (stamp: string | null | undefined): string | null =>
   stamp ? stamp.slice(0, 10) : null;
 
 /**
+ * Total energy per network-local calendar day across a set of DUIDs' rows.
+ *
+ * A day is null only when NONE of them reported: where some did and others did
+ * not, the silent ones count as 0. That is a deliberate exception to the
+ * null-is-not-zero rule, confined to the one facility that needs it — Playford
+ * B's four unit DUIDs, only ever partially metered over the broken early-1999
+ * window. It biases the station low (on those days the metered units were nearly
+ * always running, so their silent siblings probably were too) rather than
+ * inventing output for a unit nobody measured. For a single DUID the rule is
+ * inert: one source, so "none reported" and "it reported null" coincide.
+ */
+function energyByDay(rows: EnergyRow[], network: string): Map<string, number | null> {
+  const byDay = new Map<string, number | null>();
+  for (const row of rows) {
+    const day = networkDayFromInterval(row.interval, network).toString();
+    const running = byDay.get(day);
+    if (row.energy === null) {
+      if (running === undefined) byDay.set(day, null);
+    } else {
+      byDay.set(day, (running ?? 0) + row.energy);
+    }
+  }
+  return byDay;
+}
+
+/** The latest day in `byDay` carrying a real reading; null if none does. */
+function lastReadingDay(byDay: Map<string, number | null>): CalendarDate | null {
+  let latest: CalendarDate | null = null;
+  for (const [day, value] of byDay) {
+    if (value === null) continue;
+    const d = parseDate(day);
+    if (!latest || d.compare(latest) > 0) latest = d;
+  }
+  return latest;
+}
+
+/**
+ * A unit's readings with no synthetic fill: a capacity factor on every day
+ * OpenElectricity reported energy for, null on every other day.
+ *
+ * This is deliberately NOT the main fill loop. The rows built from it exist only
+ * so /stats can count what OpenElectricity actually holds — a folded member's
+ * own series, and an absorbing row's `selfHistory` — and there a synthetic 0
+ * (pre-commission blanking, or the retired-unit fill) would erase the very holes
+ * being counted. Future days are still null: they are unknown, not missing.
+ */
+function rawCapacityFactors(
+  dataByDay: Map<string, number | null>,
+  capacity: number | null,
+  start: CalendarDate,
+  end: CalendarDate,
+  today: CalendarDate
+): (number | null)[] {
+  const out: (number | null)[] = [];
+  let day = start;
+  while (day.compare(end) <= 0) {
+    const energy = dataByDay.get(day.toString());
+    if (
+      day.compare(today) >= 0 ||
+      energy === undefined ||
+      energy === null ||
+      !capacity ||
+      capacity <= 0
+    ) {
+      out.push(null);
+    } else {
+      out.push(Math.round(((energy / 24) / capacity) * 100 * 1000) / 1000);
+    }
+    day = day.add({ days: 1 });
+  }
+  return out;
+}
+
+/**
  * The record holding the earliest (or latest) of some date field, so the value
  * and its companions — a commencement date and its specificity — stay together.
  * Records with no date are ignored; undefined when none has one.
@@ -468,25 +542,15 @@ export class CapFacDataService {
         // the absorbed members add nothing here.
         const capacity = unit.unit_capacity;
 
-        // Total energy per network-local calendar day across the row's DUIDs.
-        // A day is null only when none of them reported: where some did and
-        // others did not, the silent ones count as 0. That is a deliberate
-        // exception to the null-is-not-zero rule, and it is confined to the one
-        // facility that needs it — Playford B's four unit DUIDs, which are only
-        // ever partially metered over the broken early-1999 window. It biases
-        // the station low (on those days the metered units were nearly always
-        // running, so their silent siblings probably were too) rather than
-        // inventing output for a unit nobody measured.
-        const dataByDay = new Map<string, number | null>();
-        for (const row of unitData) {
-          const day = networkDayFromInterval(row.interval, facility.facility_network).toString();
-          const running = dataByDay.get(day);
-          if (row.energy === null) {
-            if (running === undefined) dataByDay.set(day, null);
-          } else {
-            dataByDay.set(day, (running ?? 0) + row.energy);
-          }
-        }
+        // Total energy per network-local calendar day across the row's DUIDs —
+        // see energyByDay for the partial-metering rule this applies.
+        const dataByDay = energyByDay(unitData, facility.facility_network);
+
+        // The last day this row has a real reading, used below to tell a hole
+        // the retired-unit fill papers over from the genuine post-shutdown days
+        // after it. Only meaningful within the requested range, which is all the
+        // fill loop can speak to anyway.
+        const lastReading = lastReadingDay(dataByDay);
 
         // A retired unit is switched off after its last day of data: emit 0
         // (generated nothing) there rather than null, so the client can tell a
@@ -523,10 +587,19 @@ export class CapFacDataService {
         //   4. retired & past its end → 0      (decommissioned: red from last
         //                                        generation up to today)
         //   5. otherwise              → null   (collection gap / not yet commissioned)
+        // Days branch 4 writes 0 over a day OpenElectricity explicitly returned
+        // as null, BEFORE this row's last real reading — i.e. holes this payload
+        // hides. Days after the last reading are genuinely post-shutdown and are
+        // not counted; nor are days upstream omitted entirely, which carry no
+        // claim either way. Surfaced so /stats can add them back rather than
+        // present the fill as coverage. See GeneratingUnitDTO.suppressedNullDays.
+        let suppressedNullDays = 0;
+
         const capacityFactors: (number | null)[] = [];
         let currentDate = requestedStartDate;
         while (currentDate.compare(requestedEndDate) <= 0) {
-          const energy = dataByDay.get(currentDate.toString());
+          const key = currentDate.toString();
+          const energy = dataByDay.get(key);
           const preCommissioningZero =
             energy === 0 && commissionedOn !== null && currentDate.compare(commissionedOn) < 0;
           if (currentDate.compare(todayBrisbane) >= 0) {
@@ -542,6 +615,9 @@ export class CapFacDataService {
             const capacityFactor = (energy / 24) / capacity * 100;
             capacityFactors.push(Math.round(capacityFactor * 1000) / 1000);
           } else if (decommissionedAfter && currentDate.compare(decommissionedAfter) > 0) {
+            if (energy === null && lastReading && currentDate.compare(lastReading) < 0) {
+              suppressedNullDays++;
+            }
             capacityFactors.push(0);
           } else {
             capacityFactors.push(null);
@@ -553,6 +629,29 @@ export class CapFacDataService {
         // existed since its oldest member was commissioned, not since the
         // aggregate identifier was registered.
         const commissioned = earliestBy(sources, (u) => u.commencement_date);
+
+        // A row that absorbs members starts at the EARLIEST member's first
+        // reading, so its holes include ones that belong to the members rather
+        // than to it. Carry its own unabsorbed series so the fold can tell the
+        // two apart instead of attributing everything to the aggregate.
+        const selfHistory =
+          absorbed.length > 0
+            ? {
+                start: requestedStartDate.toString(),
+                last: requestedEndDate.toString(),
+                interval: '1d',
+                data: rawCapacityFactors(
+                  energyByDay(
+                    data.filter((row) => row.unit_code === unit.unit_code),
+                    facility.facility_network
+                  ),
+                  capacity,
+                  requestedStartDate,
+                  requestedEndDate,
+                  todayBrisbane
+                )
+              }
+            : undefined;
 
         coalUnits.push({
           network: facility.facility_network.toLowerCase(),
@@ -577,8 +676,51 @@ export class CapFacDataService {
             last: requestedEndDate.toString(),
             interval: '1d',
             data: capacityFactors
-          }
+          },
+          ...(selfHistory ? { selfHistory } : {}),
+          ...(suppressedNullDays > 0 ? { suppressedNullDays } : {})
         });
+      }
+
+      // Finally the absorbed members themselves — no row in any fleet view, no
+      // generation (already counted in the absorbing row), and a RAW series so
+      // the fold can see the nulls that folding would otherwise hide. Emitted
+      // last so they never displace a real row in the roster's display order.
+      for (const [aggregate, members] of absorbedBy) {
+        for (const member of members) {
+          coalUnits.push({
+            network: facility.facility_network.toLowerCase(),
+            region: facility.facility_region || undefined,
+            data_type: 'energy',
+            units: 'MW',
+            capacity: member.unit_capacity ?? 0,
+            duid: member.unit_code,
+            facility_code: facility.facility_code,
+            facility_name: facility.facility_name,
+            fueltech: member.unit_fueltech === 'coal_brown' ? 'coal_brown' : 'coal_black',
+            status: member.unit_status === 'retired' ? 'retired' : 'operating',
+            commenced: asDate(member.commencement_date),
+            commenced_specificity: member.commencement_date_specificity ?? null,
+            first_seen: asDate(member.unit_first_seen),
+            last_seen: asDate(member.unit_last_seen),
+            foldedInto: aggregate,
+            history: {
+              start: requestedStartDate.toString(),
+              last: requestedEndDate.toString(),
+              interval: '1d',
+              data: rawCapacityFactors(
+                energyByDay(
+                  data.filter((row) => row.unit_code === member.unit_code),
+                  facility.facility_network
+                ),
+                member.unit_capacity,
+                requestedStartDate,
+                requestedEndDate,
+                todayBrisbane
+              )
+            }
+          });
+        }
       }
     }
 

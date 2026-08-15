@@ -27,6 +27,7 @@ import { CalendarDate, parseDate } from '@internationalized/date';
 import type {
   CoalGenerationStatsDTO,
   DataGap,
+  GapAdjustment,
   GeneratingUnitCapFacHistoryDTO,
   GranularityStat,
   PeriodCoverage,
@@ -95,6 +96,103 @@ interface RowAccum {
  */
 export type YearReader = (year: number) => Promise<GeneratingUnitCapFacHistoryDTO | null>;
 
+/**
+ * Null days strictly between a series' first and last reading — the same
+ * interior-gap rule the roster loop applies, for the side-ledgers that must be
+ * scored without contributing to any row. 0 when the series never reported.
+ */
+function interiorNullDays(cf: Float64Array): number {
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < cf.length; i++) {
+    if (!Number.isNaN(cf[i])) {
+      if (first < 0) first = i;
+      last = i;
+    }
+  }
+  if (first < 0) return 0;
+  let holes = 0;
+  for (let i = first; i <= last; i++) if (Number.isNaN(cf[i])) holes++;
+  return holes;
+}
+
+/**
+ * The signed corrections from "holes in the rows we emit" to "holes
+ * OpenElectricity actually holds, counted per DUID".
+ *
+ * Every entry is derived from the payloads, never hardcoded. That is not
+ * fastidiousness: these values move on their own. When OpenElectricity extended
+ * its record back to 7 Dec 1998 the Playford figures went from +327/−57 to
+ * +403/−68 within hours, with no code change — a table carrying pasted constants
+ * would have quietly stopped adding up.
+ *
+ * An adjustment worth zero is omitted rather than rendered as a no-op row.
+ */
+function buildAdjustments(
+  folded: Map<string, { into: string; cf: Float64Array }>,
+  self: Map<string, Float64Array>,
+  units: Map<string, UnitSeries>,
+  suppressedUnitDays: number,
+  suppressedDuids: Set<string>
+): GapAdjustment[] {
+  const adjustments: GapAdjustment[] = [];
+  const list = (duids: string[]): string => [...duids].sort().join(', ');
+
+  // 1. Members folded into an aggregate have no row, so their own nulls are
+  //    invisible to the roster loop. Add them back, grouped by absorbing DUID.
+  const byAggregate = new Map<string, { duids: string[]; days: number }>();
+  for (const [duid, { into, cf }] of folded) {
+    const entry = byAggregate.get(into) ?? { duids: [], days: 0 };
+    entry.duids.push(duid);
+    entry.days += interiorNullDays(cf);
+    byAggregate.set(into, entry);
+  }
+  for (const [aggregate, { duids, days }] of byAggregate) {
+    if (days === 0) continue;
+    adjustments.push({
+      key: `folded-into-${aggregate}`,
+      label: `${list(duids)} folded into ${aggregate}`,
+      unitDays: days,
+      note:
+        `${duids.length} DUIDs whose readings are counted in ${aggregate}'s row, so their ` +
+        `own gaps are never counted. OpenElectricity serves them as separate units.`
+    });
+  }
+
+  // 2. …and the absorbing row is scored from its earliest member's first
+  //    reading, so it inherits holes that are not its own. Credit the excess
+  //    back, or the same days are counted twice.
+  for (const [duid, own] of self) {
+    const combined = units.get(duid);
+    if (!combined) continue;
+    const excess = interiorNullDays(own) - interiorNullDays(combined.cf);
+    if (excess === 0) continue;
+    adjustments.push({
+      key: `absorbing-span-${duid}`,
+      label: `${duid} scored from its members' first reading`,
+      unitDays: excess,
+      note:
+        `${duid}'s row begins when the earliest DUID it absorbs began, not when ${duid} ` +
+        `itself did, so it carries gaps that belong to the members counted above.`
+    });
+  }
+
+  // 3. Days the retired-unit 0-fill wrote over a null OpenElectricity did serve.
+  if (suppressedUnitDays > 0) {
+    adjustments.push({
+      key: 'retired-fill',
+      label: `${list([...suppressedDuids])} hidden by the retired-unit 0-fill`,
+      unitDays: suppressedUnitDays,
+      note:
+        `We emit 0 after a retired unit's last day of data so a decommissioned unit reads ` +
+        `as "generated nothing". Where OpenElectricity's data_last_seen under-reports that ` +
+        `day, the fill starts early and covers real nulls.`
+    });
+  }
+
+  return adjustments;
+}
+
 export async function computeCoalStats(
   read: YearReader = readYear,
 ): Promise<CoalGenerationStatsDTO> {
@@ -127,10 +225,55 @@ export async function computeCoalStats(
 
   // Every unit that ever operated, retired ones included — see the note on
   // CoalGenerationStatsDTO for why there is no fleet filter here.
+  //
+  // Three side-ledgers ride alongside, and none of them feeds generation: they
+  // exist only to reconcile what we count with what OpenElectricity holds.
+  // `folded` and `self` are whole-of-history series scored by the same
+  // interior-gap rule as the main roster; `suppressed` is a running total of
+  // days the retired-unit 0-fill papered over. See buildAdjustments.
   const units = new Map<string, UnitSeries>();
+  const folded = new Map<string, { into: string; cf: Float64Array }>();
+  const self = new Map<string, Float64Array>();
+  let suppressedUnitDays = 0;
+  const suppressedDuids = new Set<string>();
+
+  const blank = (): Float64Array => new Float64Array(totalDays).fill(Number.NaN);
+  const paint = (target: Float64Array, start: string, values: (number | null)[]): void => {
+    const base = getDaysBetween(EARLIEST, parseDate(start));
+    for (let i = 0; i < values.length; i++) {
+      const gi = base + i;
+      if (gi < 0 || gi >= totalDays) continue;
+      const v = values[i];
+      if (v !== null) target[gi] = v;
+    }
+  };
+
   for (const dto of dtos) {
     if (!dto) continue;
     for (const u of dto.data) {
+      if (u.foldedInto) {
+        let entry = folded.get(u.duid);
+        if (!entry) {
+          entry = { into: u.foldedInto, cf: blank() };
+          folded.set(u.duid, entry);
+        }
+        paint(entry.cf, u.history.start, u.history.data);
+        continue; // never a row, never generation — see GeneratingUnitDTO.foldedInto
+      }
+
+      if (u.selfHistory) {
+        let own = self.get(u.duid);
+        if (!own) {
+          own = blank();
+          self.set(u.duid, own);
+        }
+        paint(own, u.selfHistory.start, u.selfHistory.data);
+      }
+      if (u.suppressedNullDays) {
+        suppressedUnitDays += u.suppressedNullDays;
+        suppressedDuids.add(u.duid);
+      }
+
       const region = u.network === 'wem' ? 'WEM' : (u.region ?? 'UNKNOWN');
       let series = units.get(u.duid);
       if (!series) {
@@ -138,7 +281,7 @@ export async function computeCoalStats(
           duid: u.duid,
           region,
           network: u.network,
-          cf: new Float64Array(totalDays).fill(Number.NaN),
+          cf: blank(),
           cap: new Float64Array(totalDays),
         };
         units.set(u.duid, series);
@@ -209,6 +352,17 @@ export async function computeCoalStats(
   const totalHoleUnitDays = gaps.reduce((sum, g) => sum + g.days, 0);
   const sortedGaps = [...gaps].sort((a, b) => b.days - a.days);
 
+  // What we count, corrected to what OpenElectricity holds per DUID.
+  const adjustments = buildAdjustments(
+    folded,
+    self,
+    units,
+    suppressedUnitDays,
+    suppressedDuids
+  );
+  const totalUnitDaysAtSource =
+    totalHoleUnitDays + adjustments.reduce((sum, a) => sum + a.unitDays, 0);
+
   // 3. Precompute the "most recent complete period" start for each granularity.
   const recentStart: Record<Granularity, CalendarDate | null> = {
     day: latestDataDay,
@@ -244,7 +398,7 @@ export async function computeCoalStats(
     latestDataDay: latestDataDay.toString(),
     units: 'MWh',
     rows: statRows,
-    dataQuality: { totalHoleUnitDays, gaps: sortedGaps },
+    dataQuality: { totalHoleUnitDays, gaps: sortedGaps, adjustments, totalUnitDaysAtSource },
     sources,
   };
 }
