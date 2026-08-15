@@ -1,27 +1,518 @@
 /**
- * Diagnostics.
+ * Cache management: one table of stored files, one button per row.
  *
- * Much smaller than the Vercel version, because most of what it existed to
- * answer no longer needs asking. It used to reconcile four caches with three
- * invalidation mechanisms, and `/api/diagnostics/tiles` had to probe each year
- * TWICE — once cache-busted at the origin, once plain at the edge — because no
- * single response could tell you which layer had answered. Workers Cache reports
- * that itself in `cf-cache-status`, so one plain request per year is enough.
+ * This replaces four sections and ~750 lines. The old page was organised around
+ * *how the caching works* — a purge button, a rebuild button, a 28-request cache
+ * probe and a client render log, each with a paragraph explaining itself. What
+ * an operator actually wants is to see the stored data files and force one to
+ * recompute, so that is all this is.
  *
- * What remains: purge (one button, one call), a per-year cache probe, and the
- * client-side tile render timings, which have no server equivalent.
+ * Two things went, and both were load-bearing mistakes rather than features:
+ *
+ * - **The probe.** Nothing was visible until you pressed it, and it downloaded
+ *   28 × ~180 KB of real payloads to read three response headers — while warming
+ *   the very cache it was measuring. /api/admin/store answers the same question
+ *   from HEADs, so the table just loads. The one thing the probe told us that
+ *   the store can't — did the edge actually clear? — survives as a single
+ *   verification request after a flush.
+ * - **The standalone purge button.** It implied you might want to clear the edge
+ *   *without* recomputing, which is never what you want; the reverse — writing
+ *   new objects and leaving the edge serving the old ones — is a bug. Flushing
+ *   now always does both.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Link, createFileRoute } from '@tanstack/react-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAESTDateTimeString, getTodayAEST } from '@/shared/date-utils';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { capacityFactorsPath } from '@/shared/capacity-factors-url';
-import { DATE_BOUNDARIES } from '@/shared/config';
-import {
-  tileTimingRecorder,
-  type TileTimingRecord,
-} from '@/client/tile-timing-recorder';
+import { formatCompactAgeFromAEST } from '@/shared/date-utils';
+import { mapPool } from '@/shared/map-pool';
+import type { StoreEntry } from '@/server/year-store';
 
+/**
+ * How many files to flush at once, and how far apart to start them.
+ *
+ * The same numbers the server uses: REFRESH_CONCURRENCY in
+ * @/server/store-refresher and one start per 100 ms in @/server/queued-oeclient.
+ * OpenElectricity never rate-limits us but serves about one heavy request a
+ * second, so past ~5 in flight the extra parallelism buys no throughput.
+ *
+ * The bounding has to happen here. Each flush is its own HTTP request and so its
+ * own Worker invocation, and the upstream queue is scoped per fan-out, not per
+ * isolate — nothing on the server can see the other 27.
+ */
+const FLUSH_CONCURRENCY = 5;
+const FLUSH_STAGGER_MS = 100;
+
+/** Every row's transient state. Absent means at rest. */
+type RowStatus =
+  | { state: 'queued' }
+  | { state: 'running' }
+  | { state: 'done'; changed: boolean }
+  | { state: 'failed'; error: string };
+
+interface FlushResult {
+  target: 'year' | 'stats';
+  year?: number;
+  changed: boolean;
+  cacheTag: string;
+  builtAt: string;
+  dataChangedAt: string;
+}
+
+/** Shared so the flush can patch the rows the table is rendering from. */
+const STORE_QUERY_KEY = ['store-status'];
+
+/**
+ * A rejected passcode, which is the one failure that must stop everything.
+ *
+ * Every other failure is per-file — one year timing out upstream must not
+ * abandon the other 27 — but a 401 will be a 401 for all of them, so retrying
+ * it 28 more times only buys 28 more identical error messages.
+ */
+class UnauthorisedError extends Error {
+  constructor() {
+    super('Wrong passcode.');
+    this.name = 'UnauthorisedError';
+  }
+}
+
+/**
+ * `fetch` rejects with a bare TypeError when it never reached the server at all
+ * — the dev server is down, the network dropped. "Failed to fetch" is what the
+ * browser calls that, and it reads like an application error rather than an
+ * absent server, so say what it actually means.
+ */
+function describeFetchError(e: unknown): string {
+  if (e instanceof TypeError) return 'Could not reach the server.';
+  return e instanceof Error ? e.message : String(e);
+}
+
+const rowKey = (entry: StoreEntry): string =>
+  entry.kind === 'stats' ? 'stats' : String(entry.year);
+
+const rowLabel = (entry: StoreEntry): string =>
+  entry.kind === 'stats' ? 'Stats' : String(entry.year);
+
+export const Route = createFileRoute('/diagnostics')({ component: CacheManagement });
+
+function CacheManagement() {
+  const queryClient = useQueryClient();
+
+  // React state only, never localStorage — it lives no longer than the tab.
+  const [secret, setSecret] = useState('');
+  const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const cancelled = useRef(false);
+
+  const store = useQuery({
+    queryKey: STORE_QUERY_KEY,
+    queryFn: async (): Promise<StoreEntry[]> => {
+      const res = await fetch('/api/admin/store');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return ((await res.json()) as { entries: StoreEntry[] }).entries;
+    },
+  });
+
+  const entries = store.data ?? [];
+  // `refetch` is stable across renders; the query object is not, and depending
+  // on it would rebuild `flush` on every tick of the table.
+  const refetchStore = store.refetch;
+
+  const flushOne = useCallback(
+    async (body: unknown): Promise<FlushResult> => {
+      const res = await fetch('/api/admin/rebuild', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 401) throw new UnauthorisedError();
+      const json = (await res.json()) as { error?: string } | null;
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${json?.error ?? res.statusText}`);
+      return json as unknown as FlushResult;
+    },
+    [secret],
+  );
+
+  /**
+   * Recompute the given files, clear the edge, and say whether it worked.
+   *
+   * Order is the refresher's, and for its reasons. Years first; then the stats
+   * fold, which reads the years back out of R2 and would otherwise fold the
+   * generation it was about to replace; then the purge, which if it ran first
+   * would refill the edge from the copy we were about to overwrite.
+   */
+  const flush = useCallback(
+    async (targets: StoreEntry[]) => {
+      if (!secret) {
+        setError('Enter CACHE_SECRET first.');
+        return;
+      }
+      cancelled.current = false;
+      setBusy(true);
+      setError(null);
+      setNote(null);
+      setStatuses({});
+
+      // Settle the passcode in one request before spending 29 on it. Checking
+      // costs nothing and has no side effects; discovering the same 401 once per
+      // file costs 29 round trips and paints an identical failure across every
+      // row, which reads as a broken store rather than a typo.
+      try {
+        const check = await fetch('/api/admin/auth', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${secret}` },
+        });
+        if (check.status === 401) throw new UnauthorisedError();
+        if (!check.ok) throw new Error(`HTTP ${check.status}`);
+      } catch (e) {
+        setError(describeFetchError(e));
+        setBusy(false);
+        return;
+      }
+
+      setStatuses(
+        Object.fromEntries(targets.map((t) => [rowKey(t), { state: 'queued' } as RowStatus])),
+      );
+
+      const years = targets.filter((t) => t.kind === 'year');
+      const wantsStats = targets.some((t) => t.kind === 'stats');
+
+      // One start per FLUSH_STAGGER_MS across the whole pool, so five requests
+      // don't leave the browser in the same millisecond.
+      let nextStart = 0;
+      const gate = async () => {
+        const at = Math.max(performance.now(), nextStart);
+        nextStart = at + FLUSH_STAGGER_MS;
+        const wait = at - performance.now();
+        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      };
+
+      const setStatus = (key: string, status: RowStatus) =>
+        setStatuses((prev) => ({ ...prev, [key]: status }));
+
+      /**
+       * Move the row's own stamps the moment its rebuild lands.
+       *
+       * Without this the whole table sits at its old ages until the sweep
+       * finishes and the store is re-read, so a row could say `unchanged` next
+       * to a Built of "21m ago" — the status claiming the file was just
+       * rewritten and the timestamp flatly contradicting it.
+       *
+       * No extra request: the rebuild response already carries both stamps,
+       * because it is the thing that wrote them. The refetch at the end still
+       * happens and still wins; this only closes the gap until then.
+       */
+      const patchRow = (key: string, result: FlushResult) =>
+        queryClient.setQueryData<StoreEntry[]>(STORE_QUERY_KEY, (prev) =>
+          prev?.map((entry) =>
+            rowKey(entry) === key
+              ? {
+                  ...entry,
+                  builtAt: result.builtAt,
+                  dataChangedAt: result.dataChangedAt,
+                  // It was just built, so whatever it was before, it isn't now.
+                  stale: false,
+                }
+              : entry,
+          ),
+        );
+
+      let changed = 0;
+      let failed = 0;
+      let rejected = false;
+
+      const drop = (key: string) =>
+        setStatuses((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+
+      // Caught per file, so mapPool always resolves: one year failing upstream
+      // must not abandon the rest. The exception is a 401 — the secret can be
+      // rotated mid-run, and once it has been, every remaining file would fail
+      // the same way — so that stops the sweep like a cancel.
+      await mapPool(years, FLUSH_CONCURRENCY, async (entry) => {
+        const key = rowKey(entry);
+        if (cancelled.current || rejected) {
+          drop(key);
+          return;
+        }
+        await gate();
+        setStatus(key, { state: 'running' });
+        try {
+          const result = await flushOne({ year: entry.year });
+          if (result.changed) changed += 1;
+          patchRow(key, result);
+          setStatus(key, { state: 'done', changed: result.changed });
+        } catch (e) {
+          if (e instanceof UnauthorisedError) {
+            rejected = true;
+            drop(key);
+            return;
+          }
+          failed += 1;
+          setStatus(key, { state: 'failed', error: describeFetchError(e) });
+        }
+      });
+
+      if (rejected) {
+        setError('Wrong passcode — the sweep stopped.');
+        setBusy(false);
+        void refetchStore();
+        return;
+      }
+
+      let statsFolded = false;
+      try {
+        // Refold when a year moved, or when the stats row was flushed on its
+        // own. Nothing but the years feeds the fold, so an unchanged set folds
+        // to an identical answer.
+        if (wantsStats && (changed > 0 || years.length === 0) && !cancelled.current) {
+          setStatus('stats', { state: 'running' });
+          const stats = await flushOne({ stats: true });
+          if (stats.changed) changed += 1;
+          statsFolded = true;
+          patchRow('stats', stats);
+          setStatus('stats', { state: 'done', changed: stats.changed });
+        } else if (wantsStats) {
+          drop('stats');
+        }
+
+        // Always purge, even when nothing changed. The cron purges only what
+        // moved — right for something that runs 144 times a day and shouldn't
+        // cost readers a miss for no new data. Wrong for a button a human just
+        // pressed, where the question is "is the edge clean now?" and the answer
+        // has to be yes. Costs the same either way: one batched call, and the
+        // Free plan caps purge *requests* per minute, not tags.
+        const tags =
+          years.length > 1
+            ? ['capacity-factors', 'coal-stats']
+            : targets.map((t) => (t.kind === 'stats' ? 'coal-stats' : `cf-year-${t.year}`));
+
+        const purged = await fetch('/api/admin/purge', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tags }),
+        });
+        if (purged.status === 401) throw new UnauthorisedError();
+        if (!purged.ok) throw new Error(`Purge failed: HTTP ${purged.status}`);
+
+        // Count what actually ran. Stats is skipped when no year moved — there
+        // is nothing new to fold — so counting the row we didn't touch would
+        // report 29 of 28.
+        setNote(
+          [
+            `${years.length - failed + (statsFolded ? 1 : 0)} flushed, ${changed} changed` +
+              (failed > 0 ? `, ${failed} failed` : '') +
+              (wantsStats && !statsFolded ? ', stats already current' : '') +
+              '.',
+            await verifyEdge(years[0]?.year),
+          ]
+            .filter(Boolean)
+            .join(' '),
+        );
+
+        await queryClient.invalidateQueries();
+      } catch (e) {
+        setError(describeFetchError(e));
+      } finally {
+        setBusy(false);
+        void refetchStore();
+      }
+    },
+    [flushOne, queryClient, refetchStore, secret],
+  );
+
+  return (
+    <main style={page}>
+      <header style={{ marginBottom: '20px' }}>
+        {/* On its own line, not trailing the sentence: inline it read as a
+            fragment of the description rather than as a way back to the site. */}
+        <Link to="/" style={{ fontSize: '13px' }}>
+          ← Back to the visualisation
+        </Link>
+        <h1 style={{ margin: '10px 0 4px', fontSize: '22px' }}>Cache management</h1>
+        <p style={{ margin: 0, color: '#555', fontSize: '13px' }}>
+          Every file in the R2 store. <strong>Flush</strong> re-fetches it from OpenElectricity,
+          rewrites it, and clears the edge cache.
+        </p>
+      </header>
+
+      <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '14px' }}>
+        <input
+          type="password"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+          placeholder="CACHE_SECRET"
+          autoComplete="off"
+          style={input}
+        />
+        <button onClick={() => void flush(entries)} disabled={busy || !secret} style={button}>
+          {busy ? 'Flushing…' : 'Flush all'}
+        </button>
+        {busy && (
+          <button onClick={() => (cancelled.current = true)} style={button}>
+            Cancel
+          </button>
+        )}
+      </div>
+
+      {/* One error line. A failed flush usually knocks out the table's own
+          refetch as well, so rendering both slots showed the same sentence
+          twice and made one fault look like two. The flush error wins: it is
+          the thing the operator just did. */}
+      {(error ?? store.error) && (
+        <p style={{ color: '#c00', fontSize: '13px', margin: '0 0 10px' }}>
+          {error ?? describeFetchError(store.error)}
+        </p>
+      )}
+      {note && <p style={{ color: '#555', fontSize: '13px', margin: '0 0 10px' }}>{note}</p>}
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={table}>
+          <thead>
+            <tr>
+              <th style={headCell}>File</th>
+              <th style={headCell}>Built</th>
+              <th style={headCell}>Changed</th>
+              <th style={headCell}>Status</th>
+              <th style={headCell}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry) => (
+              <Row
+                key={rowKey(entry)}
+                entry={entry}
+                status={statuses[rowKey(entry)]}
+                disabled={busy || !secret}
+                onFlush={() => void flush([entry])}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {store.isFetching && entries.length === 0 && (
+        <p style={{ color: '#555', fontSize: '13px' }}>Reading the store…</p>
+      )}
+    </main>
+  );
+}
+
+/**
+ * Did the purge actually land?
+ *
+ * The one question the old 28-year probe answered that the store table can't.
+ * `cache: 'reload'` is required: the data routes send `max-age=60`, so without
+ * it the browser answers from its own copy — the one layer no purge can reach —
+ * and we'd learn nothing. It doesn't change the URL, so the edge cache key is
+ * still the visitor's, and Cloudflare ignores a client `no-cache`, so the status
+ * stays truthful. This request refills the entry it reports on, which is fine
+ * and expected: MISS means it was empty when we asked.
+ */
+async function verifyEdge(year: number | undefined): Promise<string> {
+  if (year === undefined) return '';
+  try {
+    const res = await fetch(capacityFactorsPath(year), { cache: 'reload' });
+    await res.arrayBuffer();
+    const status = res.headers.get('cf-cache-status');
+    // No Workers Cache in front of a local dev server, so there is nothing to
+    // report rather than something to worry about.
+    if (!status) return 'No edge cache in this environment.';
+    if (status === 'HIT') return `Edge still serving ${year} (age ${res.headers.get('age') ?? '?'}s).`;
+    return `Edge cleared (${year}: ${status}).`;
+  } catch {
+    return 'Could not verify the edge.';
+  }
+}
+
+function Row({
+  entry,
+  status,
+  disabled,
+  onFlush,
+}: {
+  entry: StoreEntry;
+  status: RowStatus | undefined;
+  disabled: boolean;
+  onFlush: () => void;
+}) {
+  return (
+    <tr>
+      <td style={cell}>{rowLabel(entry)}</td>
+      <td style={cell} title={entry.builtAt ?? ''}>
+        {age(entry.builtAt)}
+      </td>
+      <td style={cell} title={entry.dataChangedAt ?? ''}>
+        {age(entry.dataChangedAt)}
+      </td>
+      <td style={{ ...cell, color: statusColour(entry, status) }}>{statusText(entry, status)}</td>
+      <td style={cell}>
+        <button
+          onClick={onFlush}
+          disabled={disabled}
+          title={disabled ? 'Enter CACHE_SECRET first' : `Recompute ${rowLabel(entry)} and clear the edge`}
+          style={button}
+        >
+          Flush
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+const age = (stamp: string | null): string =>
+  stamp ? formatCompactAgeFromAEST(stamp) ?? stamp : '—';
+
+/**
+ * The status cell is where the two date columns stop needing an explanation:
+ * after a flush it says `updated` or `unchanged`, which is exactly the
+ * difference between them. Most flushes re-fetch identical numbers, so
+ * `unchanged` — Built at moved, Changed at didn't — is the normal result.
+ */
+function statusText(entry: StoreEntry, status: RowStatus | undefined): string {
+  if (status) {
+    switch (status.state) {
+      case 'queued':
+        return 'queued';
+      case 'running':
+        return entry.kind === 'stats' ? 'folding…' : 'fetching…';
+      case 'done':
+        return status.changed ? 'updated' : 'unchanged';
+      case 'failed':
+        return status.error;
+    }
+  }
+  if (!entry.builtAt) return 'never built';
+  if (entry.stale) return 'stale';
+  return '—';
+}
+
+function statusColour(entry: StoreEntry, status: RowStatus | undefined): string {
+  if (status?.state === 'failed') return '#c00';
+  if (status?.state === 'done') return status.changed ? '#137333' : '#777';
+  if (status) return '#b06000';
+  if (!entry.builtAt || entry.stale) return '#c00';
+  return '#777';
+}
+
+const page: React.CSSProperties = {
+  maxWidth: '760px',
+  margin: '0 auto',
+  padding: '32px 20px 80px',
+  fontFamily: 'var(--font-body, system-ui, sans-serif)',
+  color: '#1a1a1a',
+};
+const table: React.CSSProperties = {
+  borderCollapse: 'collapse',
+  fontSize: '13px',
+  fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+  minWidth: '520px',
+};
 const cell: React.CSSProperties = {
   padding: '4px 10px',
   borderBottom: '1px solid #e5e5e5',
@@ -36,331 +527,7 @@ const headCell: React.CSSProperties = {
   top: 0,
   background: '#fff',
 };
-const numCell: React.CSSProperties = {
-  ...cell,
-  textAlign: 'right',
-  fontVariantNumeric: 'tabular-nums',
-};
-
-/** Cloudflare's own vocabulary — no local classification to keep in sync. */
-const STATUS_COLOUR: Record<string, string> = {
-  HIT: '#137333',
-  MISS: '#b06000',
-  EXPIRED: '#b06000',
-  STALE: '#b06000',
-  UPDATING: '#b06000',
-  REVALIDATED: '#137333',
-  BYPASS: '#999',
-};
-
-interface PurgeResponse {
-  purgedAt: string;
-  tags: string[];
-  ok: boolean;
-  errors: unknown[];
-  note: string;
-  totalMs: number;
-}
-
-/**
- * One-click purge of the server-side cache.
- *
- * The secret is held in React state only — never localStorage — so it lives no
- * longer than the tab. A purge forces cold, rate-limited OpenElectricity
- * fetches, hence the auth and the confirm step.
- *
- * One mutation, not two. The Vercel version had to purge and re-warm in
- * separate requests because `revalidateTag` also discarded entries written
- * later in the same request. Workers Cache has no such behaviour, and purging
- * is cheap now anyway: R2 is untouched, so the next request for each year
- * refills the cache from a stored object rather than from OpenElectricity.
- */
-function PurgeCaches() {
-  const queryClient = useQueryClient();
-  const [secret, setSecret] = useState('');
-  const [precondition, setPrecondition] = useState<string | null>(null);
-
-  const purge = useMutation({
-    mutationFn: async (): Promise<PurgeResponse> => {
-      const res = await fetch('/api/admin/purge', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${secret}` },
-      });
-      const json = (await res.json()) as { error?: string } | null;
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${json?.error ?? res.statusText}`);
-      return json as unknown as PurgeResponse;
-    },
-    // Drop this tab's own query cache too, so the app reflects the purge
-    // without a reload.
-    onSuccess: () => queryClient.invalidateQueries(),
-  });
-
-  const error = precondition ?? purge.error?.message ?? null;
-
-  function run() {
-    if (!secret) {
-      setPrecondition('Enter CACHE_SECRET first.');
-      return;
-    }
-    if (
-      !window.confirm(
-        'Purge every cached year and the stats payload?\n\n' +
-          'The R2 store is not touched, so the next request for each year is ' +
-          'refilled from a stored object, not from OpenElectricity.',
-      )
-    ) {
-      return;
-    }
-    setPrecondition(null);
-    purge.mutate();
-  }
-
-  return (
-    <section style={{ marginBottom: '40px' }}>
-      <h2 style={{ margin: '0 0 8px', fontSize: '18px' }}>Purge server cache</h2>
-      <p style={{ margin: '0 0 12px', color: '#555', fontSize: '13px', maxWidth: '760px' }}>
-        Purges the <code>capacity-factors</code> and <code>coal-stats</code> tags from Workers
-        Cache globally, and clears the facilities-roster memo on whichever isolate serves the
-        request. The browser&rsquo;s own HTTP cache can never be purged, which is why the data
-        routes keep their browser <code>max-age</code> at 60&nbsp;s. Requires{' '}
-        <code>CACHE_SECRET</code> (its own secret, not the cron token); it is kept in this tab
-        only, never stored.
-      </p>
-
-      <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <input
-          type="password"
-          value={secret}
-          onChange={(e) => setSecret(e.target.value)}
-          placeholder="CACHE_SECRET"
-          autoComplete="off"
-          style={{ ...inputStyle, width: '220px' }}
-        />
-        <button onClick={run} disabled={purge.isPending} style={buttonStyle}>
-          {purge.isPending ? 'Purging…' : 'Purge'}
-        </button>
-      </div>
-
-      {error && (
-        <p style={{ color: '#c00', fontSize: '13px', marginTop: '10px' }}>{error}</p>
-      )}
-      {purge.data && (
-        <p style={{ color: '#555', fontSize: '13px', marginTop: '10px' }}>
-          Purged {purge.data.tags.join(', ')} at {purge.data.purgedAt} in {purge.data.totalMs} ms.{' '}
-          {purge.data.note}
-        </p>
-      )}
-    </section>
-  );
-}
-
-interface Probe {
-  year: number;
-  ok: boolean;
-  status: number;
-  cacheStatus: string;
-  source: string;
-  age: string | null;
-  builtAt: string | null;
-  dataChangedAt: string | null;
-  ms: number;
-}
-
-/**
- * Per-year cache health, by asking for exactly what a visitor would ask for.
- *
- * The request must be identical to the client's — same path, same query string —
- * because the cache key includes the whole query string. Adding a cache-buster
- * here, as the old origin probe did, would measure an entry nobody else reads.
- */
-async function probeYear(year: number): Promise<Probe> {
-  const started = performance.now();
-  const res = await fetch(capacityFactorsPath(year));
-  await res.arrayBuffer();
-  return {
-    year,
-    ok: res.ok,
-    status: res.status,
-    cacheStatus: res.headers.get('cf-cache-status') ?? '—',
-    // Survives a HIT: the header was stored with the cached response, so it
-    // keeps reporting what originally produced the entry even though the Worker
-    // did not run this time. Measured, not assumed.
-    source: res.headers.get('x-cf-source') ?? '—',
-    age: res.headers.get('age'),
-    builtAt: res.headers.get('x-cf-built-at'),
-    dataChangedAt: res.headers.get('x-cf-data-changed-at'),
-    ms: Math.round(performance.now() - started),
-  };
-}
-
-function ServerCacheHealth() {
-  const firstYear = DATE_BOUNDARIES.EARLIEST_START_DATE.year;
-  const lastYear = getTodayAEST().year;
-
-  const { data, isFetching, refetch, error } = useQuery({
-    queryKey: ['cache-probe', firstYear, lastYear],
-    // Deliberately manual: probing every year issues ~28 requests and, on a cold
-    // cache, makes the visitor pay for them.
-    enabled: false,
-    queryFn: async () => {
-      const years: number[] = [];
-      for (let y = firstYear; y <= lastYear; y++) years.push(y);
-      const out: Probe[] = [];
-      for (const y of years) out.push(await probeYear(y));
-      return out;
-    },
-  });
-
-  const warm = data?.filter((p) => p.cacheStatus === 'HIT').length ?? 0;
-
-  return (
-    <section style={{ marginBottom: '40px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '8px' }}>
-        <h2 style={{ margin: 0, fontSize: '18px' }}>Server cache health</h2>
-        <button onClick={() => refetch()} disabled={isFetching} style={buttonStyle}>
-          {isFetching ? 'Probing…' : `Probe ${firstYear}–${lastYear}`}
-        </button>
-      </div>
-      <p style={{ margin: '0 0 10px', color: '#555', fontSize: '13px', maxWidth: '760px' }}>
-        Requests each year exactly as the visualisation does and reports Cloudflare&rsquo;s own{' '}
-        <code>cf-cache-status</code> and our own <code>x-cf-source</code>. <code>HIT</code> is a
-        warm entry; <code>MISS</code> means that request rebuilt it — which is now cheap, because{' '}
-        <code>x-cf-source: r2</code> says it was rebuilt from the store rather than from
-        OpenElectricity. An <code>upstream</code> on an established year is the one result worth
-        investigating. <code>x-cf-built-at</code> is when the payload was last assembled from
-        OpenElectricity, and travels with the body, so it stays honest however many times the
-        response is replayed. <code>x-cf-data-changed-at</code> is when the numbers last actually
-        moved: the gap between the two is how much of the refresh schedule is re-fetching data
-        that never changes, and is the evidence for whether the archive tier&rsquo;s weekly
-        rebuild is worth keeping.
-      </p>
-
-      {error && <p style={{ color: '#c00', fontSize: '13px' }}>{error.message}</p>}
-
-      {data && (
-        <>
-          <p style={{ margin: '0 0 10px', color: '#555', fontSize: '13px' }}>
-            {warm} of {data.length} years warm.
-          </p>
-          {/* One row per year, so the whole table fits inline. A vertical scroll
-              pane here reads as a truncated table, because macOS hides the
-              scrollbar until you scroll. */}
-          <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={headCell}>Year</th>
-                  <th style={headCell}>Cache</th>
-                  <th style={headCell}>Source</th>
-                  <th style={numCell}>Age</th>
-                  <th style={numCell}>Time</th>
-                  <th style={headCell}>Built at (AEST)</th>
-                  <th style={headCell}>Data changed (AEST)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((p) => (
-                  <tr key={p.year}>
-                    <td style={cell}>{p.year}</td>
-                    <td style={{ ...cell, color: STATUS_COLOUR[p.cacheStatus] ?? '#1a1a1a' }}>
-                      {p.ok ? p.cacheStatus : `HTTP ${p.status}`}
-                    </td>
-                    <td style={{ ...cell, color: p.source === 'upstream' ? '#c00' : '#1a1a1a' }}>
-                      {p.source}
-                    </td>
-                    <td style={numCell}>{p.age ?? '—'}</td>
-                    <td style={numCell}>{p.ms} ms</td>
-                    <td style={cell}>{p.builtAt ?? '—'}</td>
-                    <td style={cell}>{p.dataChangedAt ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-const MAX_CLIENT_ROWS = 300;
-
-function ClientRenderTimes() {
-  const [records, setRecords] = useState<readonly TileTimingRecord[]>([]);
-
-  useEffect(() => {
-    // Poll (rather than subscribe) so a burst of tile-builds during one year
-    // load coalesces into ~2 re-renders/second, matching the Shift+P overlay.
-    const tick = () => setRecords(tileTimingRecorder.getRecords().slice());
-    tick();
-    const id = setInterval(tick, 500);
-    return () => clearInterval(id);
-  }, []);
-
-  const newestFirst = records.slice().reverse();
-  const shown = newestFirst.slice(0, MAX_CLIENT_ROWS);
-
-  return (
-    <section>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '8px' }}>
-        <h2 style={{ margin: 0, fontSize: '18px' }}>Client tile renders (this session)</h2>
-        <button onClick={() => tileTimingRecorder.clear()} style={buttonStyle}>
-          Clear
-        </button>
-      </div>
-
-      {records.length === 0 ? (
-        <p style={{ color: '#555', fontSize: '14px', maxWidth: '760px' }}>
-          No client render timings captured in this browser session yet. These populate only as
-          tiles are built. Open the <Link to="/">visualisation</Link>, navigate between years (e.g.
-          jump to the start year), then return here <strong>in the same tab</strong> — a hard
-          refresh or a new tab starts empty.
-        </p>
-      ) : (
-        <>
-          <p style={{ margin: '0 0 10px', color: '#555', fontSize: '13px' }}>
-            {records.length} record{records.length === 1 ? '' : 's'} retained
-            {records.length > MAX_CLIENT_ROWS ? ` (showing newest ${MAX_CLIENT_ROWS})` : ''}. Newest
-            first. <code>tile-build</code> = one facility canvas; <code>year-build</code> = all tiles
-            for a year; <code>fetch-build</code> = network + parse + build.
-          </p>
-          <div style={{ overflowX: 'auto', maxHeight: '520px', overflowY: 'auto' }}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={headCell}>Time (AEST)</th>
-                  <th style={headCell}>Kind</th>
-                  <th style={headCell}>Year</th>
-                  <th style={headCell}>Facility</th>
-                  <th style={numCell}>Duration</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((r, i) => (
-                  <tr key={`${r.at}-${r.kind}-${r.facility ?? ''}-${i}`}>
-                    <td style={cell}>{getAESTDateTimeString(new Date(r.at))}</td>
-                    <td style={cell}>{r.kind}</td>
-                    <td style={cell}>{r.year}</td>
-                    <td style={cell}>{r.facility ?? '—'}</td>
-                    <td style={numCell}>{r.ms.toFixed(1)} ms</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-const tableStyle: React.CSSProperties = {
-  borderCollapse: 'collapse',
-  fontSize: '13px',
-  fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-  minWidth: '640px',
-};
-const buttonStyle: React.CSSProperties = {
+const button: React.CSSProperties = {
   fontSize: '12px',
   padding: '3px 10px',
   border: '1px solid #999',
@@ -368,39 +535,11 @@ const buttonStyle: React.CSSProperties = {
   background: '#f4f4f4',
   cursor: 'pointer',
 };
-const inputStyle: React.CSSProperties = {
+const input: React.CSSProperties = {
   fontSize: '12px',
   padding: '3px 8px',
   border: '1px solid #999',
   borderRadius: '4px',
   fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+  width: '200px',
 };
-
-export const Route = createFileRoute('/diagnostics')({ component: DiagnosticsPage });
-
-function DiagnosticsPage() {
-  return (
-    <main
-      style={{
-        maxWidth: '900px',
-        margin: '0 auto',
-        padding: '32px 20px 80px',
-        fontFamily: 'var(--font-body, system-ui, sans-serif)',
-        color: '#1a1a1a',
-      }}
-    >
-      <header style={{ marginBottom: '28px' }}>
-        <h1 style={{ margin: '0 0 6px', fontSize: '24px' }}>Cache and render diagnostics</h1>
-        <p style={{ margin: 0, color: '#555', fontSize: '14px' }}>
-          Server cache health answers “does a cold cache cost an R2 read or an upstream fetch?” and
-          “how old is the data we hold?”; the client table lists how long each tile took to render
-          in this browser.{' '}
-          <Link to="/">← back to the visualisation</Link>
-        </p>
-      </header>
-      <PurgeCaches />
-      <ServerCacheHealth />
-      <ClientRenderTimes />
-    </main>
-  );
-}

@@ -39,7 +39,7 @@ import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getAESTDateTimeString, getDaysBetween, getQuarter } from '@/shared/date-utils';
 import { formatPeriodLabel, type Granularity } from '@/shared/energy-format';
 import { currentDataYear, earliestDataYear, yearRange } from '@/server/data-years';
-import { mapPool } from '@/server/map-pool';
+import { mapPool } from '@/shared/map-pool';
 import { readYear } from '@/server/year-store';
 
 const STATS_VERSION = '1.0';

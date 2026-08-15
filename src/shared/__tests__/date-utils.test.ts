@@ -1,5 +1,5 @@
-import { getAESTDateTimeString, getDaysBetween, getDayIndex, getDateFromIndex, isLeapYear, networkDayFromInterval, getTodayAEST } from '@/shared/date-utils';
-import { CalendarDate, today } from '@internationalized/date';
+import { elapsedSince, formatCompactAgeFromAEST, getAESTDateTimeString, getDaysBetween, getDayIndex, getDateFromIndex, isLeapYear, networkDayFromInterval, getTodayAEST } from '@/shared/date-utils';
+import { CalendarDate, parseAbsolute, today } from '@internationalized/date';
 
 describe('Date Utilities', () => {
   describe('getAESTDateTimeString', () => {
@@ -311,8 +311,126 @@ describe('Date Utilities', () => {
     test('should be consistent across multiple calls', () => {
       const result1 = getTodayAEST();
       const result2 = getTodayAEST();
-      
+
       expect(result1.toString()).toBe(result2.toString());
+    });
+  });
+
+  // The age column on /diagnostics. Width matters as much as accuracy: 29 rows
+  // are read by scanning, so the format is at most two units and the second is
+  // dropped when it is zero.
+  describe('formatCompactAgeFromAEST', () => {
+    const at = (iso: string) => parseAbsolute(iso, 'Australia/Brisbane');
+    const reference = at('2026-08-15T12:00:00+10:00');
+
+    const ago = (seconds: number): string | null =>
+      formatCompactAgeFromAEST(reference.subtract({ seconds }).toAbsoluteString(), reference);
+
+    const between = (fromIso: string, toIso: string): string | null =>
+      formatCompactAgeFromAEST(at(fromIso).toAbsoluteString(), at(toIso));
+
+    test.each([
+      [30, 'just now'],
+      [60, '1m ago'],
+      [54 * 60, '54m ago'],
+      [3600, '1h ago'],
+      [3600 + 59 * 60, '1h 59m ago'],
+      [7 * 86400 + 4 * 3600, '7d 4h ago'],
+    ])('renders %i seconds as "%s"', (seconds, expected) => {
+      expect(ago(seconds)).toBe(expected);
+    });
+
+    test('drops a zero second unit rather than padding it', () => {
+      expect(ago(3 * 86400)).toBe('3d ago');
+      expect(ago(2 * 3600)).toBe('2h ago');
+    });
+
+    test('truncates rather than rounds, so 1h 59m never becomes 1h 60m', () => {
+      for (let seconds = 3600; seconds < 3 * 3600; seconds += 7) {
+        expect(ago(seconds)).not.toMatch(/ 60m ago$/);
+      }
+    });
+
+    // The display only ever shows two ADJACENT units, so a year-old file reads
+    // "1y ago" even when there is a stray day on the end: at that magnitude the
+    // day is noise, and skipping months to show it would read oddly.
+    test('drops the smaller unit when the adjacent one is zero', () => {
+      expect(between('2026-08-15T12:00:00+10:00', '2027-08-16T12:00:00+10:00')).toBe('1y ago');
+      expect(between('2024-05-15T12:00:00+10:00', '2026-08-15T12:00:00+10:00')).toBe('2y 3mon ago');
+    });
+
+    test('reads a future stamp as "just now" rather than a negative age', () => {
+      expect(formatCompactAgeFromAEST(reference.add({ days: 1 }).toAbsoluteString(), reference))
+        .toBe('just now');
+    });
+
+    test('returns null for an unparseable stamp', () => {
+      expect(formatCompactAgeFromAEST('not a date')).toBeNull();
+    });
+  });
+
+  // The whole point of counting in the calendar rather than dividing by an
+  // average: months are 28-31 days and years are 365 or 366, so "1mon" has to
+  // mean a real month or the readout is simply wrong.
+  describe('elapsedSince', () => {
+    const at = (iso: string) => parseAbsolute(iso, 'Australia/Brisbane');
+    const parts = (fromIso: string, toIso: string) => elapsedSince(at(fromIso), at(toIso));
+
+    test('one calendar month is one month however many days that month has', () => {
+      // February 2027 has 28 days, July has 31. Both are exactly one month, and
+      // a fixed 30-day block is neither.
+      expect(parts('2027-02-01T09:00:00+10:00', '2027-03-01T09:00:00+10:00')).toMatchObject({
+        months: 1, days: 0,
+      });
+      expect(parts('2026-07-01T09:00:00+10:00', '2026-08-01T09:00:00+10:00')).toMatchObject({
+        months: 1, days: 0,
+      });
+      expect(parts('2026-07-01T09:00:00+10:00', '2026-07-31T09:00:00+10:00')).toMatchObject({
+        months: 0, days: 30,
+      });
+    });
+
+    test('does not claim a month before the day-of-month is reached', () => {
+      expect(parts('2027-02-01T09:00:00+10:00', '2027-02-28T09:00:00+10:00')).toMatchObject({
+        months: 0, days: 27,
+      });
+      expect(parts('2026-01-31T12:00:00+10:00', '2026-02-28T11:00:00+10:00')).toMatchObject({
+        months: 0, days: 27, hours: 23,
+      });
+    });
+
+    test('an exact year is one year with nothing left over, leap or not', () => {
+      // 2027→2028 spans 29 February: 366 days, still exactly a year.
+      expect(parts('2027-08-15T12:00:00+10:00', '2028-08-15T12:00:00+10:00')).toMatchObject({
+        years: 1, months: 0, days: 0,
+      });
+      // 2026→2027 is 365 days, also exactly a year. A fixed divisor cannot make
+      // both of these come out right.
+      expect(parts('2026-08-15T12:00:00+10:00', '2027-08-15T12:00:00+10:00')).toMatchObject({
+        years: 1, months: 0, days: 0,
+      });
+      // 366 days from a non-leap start therefore has a day left over.
+      expect(parts('2026-08-15T12:00:00+10:00', '2027-08-16T12:00:00+10:00')).toMatchObject({
+        years: 1, months: 0, days: 1,
+      });
+    });
+
+    test('handles the end of a long month landing in a short one', () => {
+      // 31 January + 1 month clamps to 28 February, and that is a whole month.
+      expect(parts('2026-01-31T12:00:00+10:00', '2026-02-28T12:00:00+10:00')).toMatchObject({
+        months: 1, days: 0,
+      });
+    });
+
+    test('never leaves a remainder that should have carried', () => {
+      const from = at('2020-01-31T12:00:00+10:00');
+      for (let days = 0; days < 800; days += 1) {
+        const p = elapsedSince(from, from.add({ days }));
+        expect(p.months, `day ${days}`).toBeLessThan(12);
+        expect(p.hours, `day ${days}`).toBeLessThan(24);
+        expect(p.minutes, `day ${days}`).toBeLessThan(60);
+        expect(p.days, `day ${days}`).toBeGreaterThanOrEqual(0);
+      }
     });
   });
 });

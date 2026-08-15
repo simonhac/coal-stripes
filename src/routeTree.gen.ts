@@ -15,7 +15,10 @@ import { Route as StatsRouteImport } from './routes/stats'
 import { Route as ApiCapacityFactorsRouteImport } from './routes/api.capacity-factors'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiStatsRouteImport } from './routes/api.stats'
+import { Route as ApiAdminAuthRouteImport } from './routes/api.admin.auth'
 import { Route as ApiAdminPurgeRouteImport } from './routes/api.admin.purge'
+import { Route as ApiAdminRebuildRouteImport } from './routes/api.admin.rebuild'
+import { Route as ApiAdminStoreRouteImport } from './routes/api.admin.store'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -47,9 +50,24 @@ const ApiStatsRoute = ApiStatsRouteImport.update({
   path: '/api/stats',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminAuthRoute = ApiAdminAuthRouteImport.update({
+  id: '/api/admin/auth',
+  path: '/api/admin/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminPurgeRoute = ApiAdminPurgeRouteImport.update({
   id: '/api/admin/purge',
   path: '/api/admin/purge',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminRebuildRoute = ApiAdminRebuildRouteImport.update({
+  id: '/api/admin/rebuild',
+  path: '/api/admin/rebuild',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminStoreRoute = ApiAdminStoreRouteImport.update({
+  id: '/api/admin/store',
+  path: '/api/admin/store',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -60,7 +78,10 @@ export interface FileRoutesByFullPath {
   '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
   '/api/stats': typeof ApiStatsRoute
+  '/api/admin/auth': typeof ApiAdminAuthRoute
   '/api/admin/purge': typeof ApiAdminPurgeRoute
+  '/api/admin/rebuild': typeof ApiAdminRebuildRoute
+  '/api/admin/store': typeof ApiAdminStoreRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -69,7 +90,10 @@ export interface FileRoutesByTo {
   '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
   '/api/stats': typeof ApiStatsRoute
+  '/api/admin/auth': typeof ApiAdminAuthRoute
   '/api/admin/purge': typeof ApiAdminPurgeRoute
+  '/api/admin/rebuild': typeof ApiAdminRebuildRoute
+  '/api/admin/store': typeof ApiAdminStoreRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -79,7 +103,10 @@ export interface FileRoutesById {
   '/api/capacity-factors': typeof ApiCapacityFactorsRoute
   '/api/health': typeof ApiHealthRoute
   '/api/stats': typeof ApiStatsRoute
+  '/api/admin/auth': typeof ApiAdminAuthRoute
   '/api/admin/purge': typeof ApiAdminPurgeRoute
+  '/api/admin/rebuild': typeof ApiAdminRebuildRoute
+  '/api/admin/store': typeof ApiAdminStoreRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -90,7 +117,10 @@ export interface FileRouteTypes {
     | '/api/capacity-factors'
     | '/api/health'
     | '/api/stats'
+    | '/api/admin/auth'
     | '/api/admin/purge'
+    | '/api/admin/rebuild'
+    | '/api/admin/store'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -99,7 +129,10 @@ export interface FileRouteTypes {
     | '/api/capacity-factors'
     | '/api/health'
     | '/api/stats'
+    | '/api/admin/auth'
     | '/api/admin/purge'
+    | '/api/admin/rebuild'
+    | '/api/admin/store'
   id:
     | '__root__'
     | '/'
@@ -108,7 +141,10 @@ export interface FileRouteTypes {
     | '/api/capacity-factors'
     | '/api/health'
     | '/api/stats'
+    | '/api/admin/auth'
     | '/api/admin/purge'
+    | '/api/admin/rebuild'
+    | '/api/admin/store'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -118,7 +154,10 @@ export interface RootRouteChildren {
   ApiCapacityFactorsRoute: typeof ApiCapacityFactorsRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiStatsRoute: typeof ApiStatsRoute
+  ApiAdminAuthRoute: typeof ApiAdminAuthRoute
   ApiAdminPurgeRoute: typeof ApiAdminPurgeRoute
+  ApiAdminRebuildRoute: typeof ApiAdminRebuildRoute
+  ApiAdminStoreRoute: typeof ApiAdminStoreRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -165,11 +204,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiStatsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/auth': {
+      id: '/api/admin/auth'
+      path: '/api/admin/auth'
+      fullPath: '/api/admin/auth'
+      preLoaderRoute: typeof ApiAdminAuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/purge': {
       id: '/api/admin/purge'
       path: '/api/admin/purge'
       fullPath: '/api/admin/purge'
       preLoaderRoute: typeof ApiAdminPurgeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/rebuild': {
+      id: '/api/admin/rebuild'
+      path: '/api/admin/rebuild'
+      fullPath: '/api/admin/rebuild'
+      preLoaderRoute: typeof ApiAdminRebuildRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/store': {
+      id: '/api/admin/store'
+      path: '/api/admin/store'
+      fullPath: '/api/admin/store'
+      preLoaderRoute: typeof ApiAdminStoreRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -182,7 +242,10 @@ const rootRouteChildren: RootRouteChildren = {
   ApiCapacityFactorsRoute: ApiCapacityFactorsRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiStatsRoute: ApiStatsRoute,
+  ApiAdminAuthRoute: ApiAdminAuthRoute,
   ApiAdminPurgeRoute: ApiAdminPurgeRoute,
+  ApiAdminRebuildRoute: ApiAdminRebuildRoute,
+  ApiAdminStoreRoute: ApiAdminStoreRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

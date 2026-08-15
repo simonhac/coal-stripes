@@ -118,3 +118,14 @@ export function windowsOverdue(
 ): number {
   return ageSeconds / yearCachePolicy(year, currentYear).revalidateSeconds;
 }
+
+/**
+ * How far past its window a year may drift before we say so.
+ *
+ * A healthy sweep rebuilds within one cron interval of a slot boundary, so
+ * anything at twice its window has been failing for a while — an expired API
+ * key, an upstream outage, a budget that keeps running out. Shared by the
+ * refresher's log line and the cache-management page's `stale` flag, so the two
+ * can't disagree about what stale means.
+ */
+export const STALE_WINDOW_MULTIPLE = 2;

@@ -76,7 +76,9 @@ src/
 │   ├── diagnostics.tsx   # Cache + render diagnostics
 │   ├── api.capacity-factors.ts  # The one data route the client uses
 │   ├── api.stats.ts
-│   └── api.admin.purge.ts
+│   ├── api.admin.purge.ts
+│   ├── api.admin.rebuild.ts  # Force one R2 data file to be rebuilt
+│   └── api.admin.store.ts    # What's in the store, from HEADs
 ├── worker.ts             # Worker entry: Start's fetch handler + the cron
 │                         #   `scheduled` handler
 ├── server/               # Server-only: OpenElectricity client, data service,
@@ -95,7 +97,7 @@ Data flows through three layers of caching so users (almost) never wait on OpenE
 2. **The R2 store**: every year's payload also lives in the `DATA` bucket, where nothing expires, so a cache miss costs an R2 read rather than a 3–9 s OpenElectricity fetch. A `scheduled` handler rebuilds each year on its tier's schedule and purges the edge tags it changed (`src/server/store-refresher.ts`, `src/server/refresh-schedule.ts`). This is a *store*, not a warmer: Cloudflare runs scheduled invocations without cache involvement, so no cron can warm Workers Cache by any means — the fix is to make a miss cheap instead.
 3. **Client**: each year is cached with [TanStack Query](https://tanstack.com/query) (`src/client/year-queries.ts`) — the cached value is the fully pre-rendered set of canvas tiles — with adjacent years prefetched in the background.
 
-Cache health can be inspected at any time from the **`/diagnostics`** page, which probes each year and reports Cloudflare's own `cf-cache-status` — see the [caching doc](docs/caching-and-diagnostics.md).
+The **`/diagnostics`** page is one table: every file in the R2 store, how old it is, and a **Flush** button per row (plus Flush all). Flushing re-fetches that file from OpenElectricity, rewrites it and clears the edge cache, updating the row as it goes. See the [caching doc](docs/caching-and-diagnostics.md).
 
 Dates use `@internationalized/date` (not the built-in `Date`) throughout, with helpers in `src/shared/date-utils.ts` handling the NEM (AEST) and WEM (AWST) network timezones.
 
@@ -111,7 +113,7 @@ Dates use `@internationalized/date` (not the built-in `Date`) throughout, with h
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `OPENELECTRICITY_API_KEY` | Your OpenElectricity API key | Yes |
-| `CACHE_SECRET` | Shared secret authorising `POST /api/admin/purge` and the purge button on `/diagnostics`. It gets typed by hand, so it is deliberately not reused anywhere else | For the purge button |
+| `CACHE_SECRET` | Shared secret authorising `POST /api/admin/purge` and `POST /api/admin/rebuild`, and the Flush buttons on `/diagnostics`. It gets typed by hand, so it is deliberately not reused anywhere else | For the Flush buttons |
 | `ENABLE_FILE_LOGGING` | Historical name; now just toggles structured request logging to the console. Set `false` to silence | No |
 | `DEBUG_OE` | Set to `1` for verbose server logging of fetches and cache hits | No |
 

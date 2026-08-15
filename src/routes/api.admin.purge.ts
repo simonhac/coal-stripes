@@ -15,9 +15,10 @@
  * the next request rebuilds the cache entry from an R2 read rather than from
  * OpenElectricity. This endpoint does NOT touch R2 — the objects are the
  * durable copy, and dropping them would put the next visitor back on the slow
- * path this whole design exists to remove. To force a genuine rebuild, bump
- * CF_DTO_VERSION (which renames the key namespace) or delete objects directly
- * with `wrangler r2 object delete`.
+ * path this whole design exists to remove. To make a stored payload actually
+ * change, rebuild it: POST /api/admin/rebuild, or the buttons on /diagnostics.
+ * (The blunt instruments still work — bump CF_DTO_VERSION to rename the key
+ * namespace, or `wrangler r2 object delete`.)
  *
  * The browser's own copy remains unreachable by any purge, which is why the data
  * routes send only a 60 s browser max-age and keep the long window on the
@@ -40,6 +41,35 @@ import { getAESTDateTimeString } from '@/shared/date-utils';
 // reasoning turns out to be wrong at 10 pm.
 const PURGE_TAGS = ['capacity-factors', 'coal-stats', DOCUMENT_TAG];
 
+/**
+ * Cloudflare caps a purge at 100 tags per request on every plan. The refresher
+ * batches to stay under it; here it is a validation bound.
+ */
+const MAX_TAGS = 100;
+
+/**
+ * An optional `{ "tags": [...] }` body narrows the purge; no body means the
+ * roots above, which is what the /diagnostics button and every curl in the docs
+ * send. It exists so a single-year rebuild can drop just `cf-year-2004` rather
+ * than every cached year and the SSR documents along with it.
+ *
+ * Anything unparseable falls back to the roots rather than erroring: this is the
+ * escape hatch you reach for at 10 pm, and it should be hard to hold wrong.
+ */
+async function requestedTags(request: Request): Promise<string[]> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return PURGE_TAGS;
+  }
+  const tags = (body as { tags?: unknown } | null)?.tags;
+  if (!Array.isArray(tags)) return PURGE_TAGS;
+
+  const clean = tags.filter((t): t is string => typeof t === 'string' && t !== '');
+  return clean.length === 0 ? PURGE_TAGS : clean.slice(0, MAX_TAGS);
+}
+
 export const Route = createFileRoute('/api/admin/purge')({
   server: {
     handlers: {
@@ -53,7 +83,17 @@ export const Route = createFileRoute('/api/admin/purge')({
 
         const started = performance.now();
 
-        const result = await cache.purge({ tags: PURGE_TAGS });
+        const tags = await requestedTags(request);
+
+        // Under miniflare — which backs both `vite dev` and `wrangler dev` —
+        // the module-level `cache` is a stub and `purge` is not a function at
+        // all. Say so instead of throwing: a local purge should read as "there
+        // is no edge here", not as a production failure. Same check as
+        // purgeChanged in @/server/store-refresher.
+        const available = typeof cache?.purge === 'function';
+        const result = available
+          ? await cache.purge({ tags })
+          : { success: true, errors: [] as unknown[] };
 
         // The 24 h facilities roster memo lives in module scope, so this only
         // clears it on the isolate that happens to serve this request. Other
@@ -64,11 +104,13 @@ export const Route = createFileRoute('/api/admin/purge')({
         return Response.json(
           {
             purgedAt: getAESTDateTimeString(new Date()),
-            tags: PURGE_TAGS,
+            tags,
             ok: result.success,
             errors: result.errors,
-            note:
-              'Workers Cache purged globally, data responses and SSR documents alike. R2 is untouched, so the next request for each year refills the cache from the store, not from OpenElectricity. The in-process facilities memo was cleared only on the isolate that served this request.',
+            purgeAvailable: available,
+            note: !available
+              ? 'No Workers Cache in this runtime (miniflare), so there was nothing to purge. The facilities memo was cleared.'
+              : 'Workers Cache purged globally for the tags listed. R2 is untouched by design, so the next request refills the cache from the store rather than from OpenElectricity — and every payload keeps the x-cf-built-at it already had. To make that stamp move, rebuild the file (POST /api/admin/rebuild). The in-process facilities memo was cleared only on the isolate that served this request.',
             totalMs: Math.round(performance.now() - started),
           },
           { status: result.success ? 200 : 502, headers: NO_STORE },

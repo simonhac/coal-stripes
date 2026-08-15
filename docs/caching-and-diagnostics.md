@@ -16,7 +16,8 @@ check, at any moment, whether it is working.
 - [The stats layer](#the-stats-layer)
 - [How old is the data?](#how-old-is-the-data)
 - [Purging the cache](#purging-the-cache)
-- [Diagnostics](#diagnostics)
+- [Rebuilding the store](#rebuilding-the-store)
+- [Cache management (`/diagnostics`)](#cache-management-diagnostics)
 - [Confirming caching works on prod](#confirming-caching-works-on-prod)
 - [Runtime traps worth knowing](#runtime-traps-worth-knowing)
 - [Analytics](#analytics)
@@ -88,8 +89,16 @@ never that the cache went cold, it was that a *miss* cost 12.8 s.
 
 R2 is deliberately **not** cleared by `/api/admin/purge`: the objects are the
 durable copy, and dropping them would put the next visitor back on the slow path.
-To force a genuine rebuild, bump `CF_DTO_VERSION` (which renames the whole key
-namespace) or delete objects with `wrangler r2 object delete`.
+The corollary trips people up, so state it plainly: **a purge never changes what
+a payload says.** It changes which layer answers. `x-cf-built-at` is a property of
+the stored object and comes back identical afterwards, which reads as "the purge
+did nothing" when in fact it did exactly its job.
+
+To make that stamp move you have to rebuild the object — `POST
+/api/admin/rebuild`, or the buttons on `/diagnostics` (see [Rebuilding the
+store](#rebuilding-the-store)). The blunt instruments still work: bump
+`CF_DTO_VERSION` (which renames the whole key namespace) or delete objects with
+`wrangler r2 object delete`.
 
 Workers Cache is **tiered internally** — a lower tier near the reader, an upper
 tier that aggregates fills network-wide — but it is one cache with one
@@ -576,27 +585,128 @@ app.
 The browser's own copy is unreachable by any purge, which is why the data routes
 keep their browser `max-age` at 60 s.
 
+An optional `{"tags": [...]}` body narrows the purge; anything unusable falls
+back to the roots rather than erroring, because this is the button you reach for
+at 10 pm. That is what lets a single-year rebuild drop just `cf-year-2004`
+instead of every cached year and the SSR documents with it.
+
 ---
 
-## Diagnostics
+## Rebuilding the store
 
-**`/diagnostics`** has three sections:
+`POST /api/admin/rebuild`, same `CACHE_SECRET`, or the buttons on
+`/diagnostics`. This is the one that makes `x-cf-built-at` move.
 
-- **Purge server cache** — the button described above.
-- **Server cache health** — requests each year exactly as the visualisation does
-  and reports Cloudflare's own `cf-cache-status` (`HIT` warm; `MISS`/`EXPIRED`
-  means that request rebuilt it), plus `age` and `x-cf-built-at`. It is manual:
-  probing ~28 years issues ~28 requests and, on a cold cache, makes you pay for
-  them.
-- **Client tile renders** — how long each canvas tile took to build in *this
-  browser session*, from `tileTimingRecorder`. Also available as the Shift+P
-  overlay. A hard refresh or a new tab starts empty.
+```bash
+curl -X POST https://stripes.energy/api/admin/rebuild \
+  -H "Authorization: Bearer $CACHE_SECRET" \
+  -H 'Content-Type: application/json' -d '{"year":2004}'
+# → {"target":"year","year":2004,"changed":false,"cacheTag":"cf-year-2004",
+#    "builtAt":"...","dataChangedAt":"...","ms":4210}
+```
 
-This used to be much larger. `GET /api/diagnostics/tiles` probed every year
-**twice** — once cache-busted at the origin, once plain at the edge — because
-with four layers no single response could tell you which one had answered, and it
-carried its own warm/cold classification thresholds. `cf-cache-status` reports
-that directly, so the endpoint and its 143 lines are gone.
+`{"stats":true}` refolds `stats.json` instead. Exactly one target per request.
+
+**One data file per request, and the fan-out lives in the browser.** A year is a
+3–9 s upstream fetch plus fill logic — comfortably inside an invocation, and
+inside Cloudflare's 100 s request ceiling; twenty-eight of them in one request
+would not be. So `/diagnostics` issues one request per year at concurrency 5,
+100 ms apart — the same numbers as `REFRESH_CONCURRENCY` and
+`queued-oeclient` — and 28 years finish in about a minute with visible progress.
+The bounding *has* to happen client-side: each request is its own Worker
+invocation, and the upstream queue is scoped per fan-out, not per isolate, so
+nothing on the server can see the other 27.
+
+**The endpoint does not purge.** Each response instead names the `cacheTag` its
+file sits behind, and the client purges the tags of whatever actually *changed*
+in **one** call at the end. Two reasons, both hard limits rather than taste: the
+zone is Free, capped at 5 purge requests a minute, and purging an unchanged
+payload costs the next reader a miss for no new data — the same rule
+`refreshAll` follows.
+
+Ordering is the refresher's, for the same reasons: years, then the stats fold
+(and only if some year changed — nothing else feeds it), then the purge. The
+fold reads the years back out of R2 via `readYear`, so folding first would fold
+the generation you were about to replace; purging first would refill the cache
+from the copy you were about to overwrite.
+
+There is no `force` flag because there is nothing to force. `buildYear` always
+fetches and always writes; the refresh *schedule* only ever governs the cron,
+and this button exists precisely for when you want to override it.
+
+---
+
+## Cache management (`/diagnostics`)
+
+One table: a passcode field (`CACHE_SECRET`, kept in the tab, never stored), a
+**Flush all** button, and one row per stored file — 1999…the current year, plus
+**Stats**.
+
+| Column | |
+|---|---|
+| File | the year, or `Stats` |
+| Built | when we last fetched it from OpenElectricity |
+| Changed | when its numbers last actually moved |
+| Status | at rest `—`, `never built` or `stale`; during a flush `queued` → `fetching…`; after, **`updated`** or **`unchanged`** |
+
+Both stamps are ages — `54m ago`, `7d 4h ago`, `2y 3mon ago` — at most two
+adjacent units wide, with the exact AEST timestamp on hover. 29 rows are read by
+scanning, so a near-constant column width matters as much as precision
+(`formatCompactAgeFromAEST` in `src/shared/date-utils.ts`; `formatAgeFromAEST`
+stays for prose on `/stats`).
+
+The months and years are **counted, not divided**. `elapsedSince` proposes a
+figure from the calendar fields and corrects it with `@internationalized/date`'s
+own `add`, which already knows February is short and that leap years exist —
+"30 days is a month" would call both 1 Feb → 1 Mar and 1 Jul → 31 Jul a month,
+and exactly one of those is. The same add-and-correct is applied to days, so the
+function stays right in a zone with DST even though Brisbane has none.
+
+The Status cell is what makes the two date columns self-explanatory: most flushes
+re-fetch identical numbers, so `unchanged` — Built moved, Changed didn't — is the
+normal result, and the second column only advances when it says `updated`.
+
+**Flush** recomputes the file, rewrites it in R2, purges the edge and re-reads
+the row. Flush all does the years at concurrency 5, then the stats fold, then one
+purge — the refresher's order, for the refresher's reasons.
+
+The passcode is settled first, in a single `POST /api/admin/auth` that returns
+204 or 401 and nothing else. Without that pre-flight, a mistyped passcode spent
+29 requests discovering the same 401 twenty-nine times and painted the failure
+across every row, which reads like a broken store rather than a typo. A 401
+*during* a sweep — the secret rotated mid-run — stops it the same way a cancel
+does, since every remaining file would fail identically. Every other failure
+stays per-file: one year timing out upstream must not abandon the other 27.
+
+The table is fed by `GET /api/admin/store`, which HEADs every object and returns
+the three stamps for the whole store in ~20 ms. Unauthenticated: the same stamps
+are already public on `x-cf-built-at` and in `/api/stats`'s `sources` block, and
+gating it would leave the table blank until someone typed a passcode.
+
+### What used to be here, and why it isn't
+
+Three things, all removed together:
+
+- **The 28-year cache probe.** It downloaded ~5 MB of real payloads to read three
+  response headers, nothing was visible until you pressed it, and it warmed the
+  cache it was measuring. The store table answers the same question from HEADs.
+  What the probe uniquely told us — *did the purge land?* — survives as a single
+  verification request after each flush, reported as `Edge cleared (2004: MISS)`
+  or `Edge still serving 2004 (age 340s)`. It uses `fetch(url, { cache: 'reload' })`:
+  without it the browser answers from its own 60 s copy, the one layer no purge
+  can reach, and you learn nothing.
+- **The standalone purge button.** It implied you might want to clear the edge
+  without recomputing, which is never what you want; the reverse — new objects
+  behind stale edge copies — is a bug. Flushing now always does both. The
+  endpoint stays for curl and for the `html` escape hatch.
+- **Client tile renders.** The Shift+P overlay on `/` reads the same
+  `tileTimingRecorder`, and it is the right place for it: the records only
+  populate while you navigate the visualisation, which the diagnostics version
+  had to apologise for in its empty state.
+
+Before all of that, `GET /api/diagnostics/tiles` probed every year **twice** —
+once cache-busted at the origin, once plain at the edge — because with four
+layers no single response could tell you which one had answered.
 
 ---
 
