@@ -1403,6 +1403,16 @@ header a {
   font-weight: 400;
 }
 
+/* A signed correction between the counted gaps and the grand total. Subordinate
+   to both: it is neither a gap nor a total, and reads as working, not result. */
+.opennem-stats-adjustment {
+  display: block;
+  font-size: 13px;
+  font-weight: 400;
+  color: #6f6f6f;
+  line-height: 1.2;
+}
+
 .opennem-stats-flag {
   color: var(--opennem-primary);
   font-weight: 700;

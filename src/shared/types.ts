@@ -60,6 +60,31 @@ export interface GeneratingUnitDTO {
   first_seen?: string | null; // ISO date
   last_seen?: string | null; // ISO date
   history: UnitHistoryDTO;
+
+  // ---- Data-quality accounting -------------------------------------------
+  // The three fields below exist so /stats can state what OpenElectricity
+  // actually holds, not merely what survives our own folding. None affects the
+  // visualisation; see @/server/coal-stats-service for how each is consumed.
+
+  // Set when this unit's readings are folded into another DUID's row (see
+  // SUPERSEDED_BY in @/server/cap-fac-data-service). Such a row belongs to NO
+  // fleet view — @/shared/fleet-filter drops it — and contributes no generation,
+  // because its energy is already counted in the absorbing row. It is emitted
+  // solely so the fold can see the member's own nulls, which folding would
+  // otherwise make invisible. Its `history` is the member's RAW pattern: no
+  // retired-unit 0-fill, no pre-commission blanking, so a null here means
+  // OpenElectricity had nothing for that day.
+  foldedInto?: string | null;
+  // For a row that absorbs other DUIDs, this unit's OWN readings without them,
+  // filled by the same raw rules as a folded member's `history`. Lets the fold
+  // separate the absorbing row's own gaps from those it inherited by starting at
+  // its members' first reading. Absent on every unit that absorbs nothing.
+  selfHistory?: UnitHistoryDTO;
+  // Days where the retired-unit 0-fill wrote 0 over a day OpenElectricity
+  // explicitly returned as null — real holes this payload hides. Arises when
+  // `data_last_seen` under-reports a unit's final reading, as it does for LD03
+  // (claims 2022-04-02; the daily series runs to 2022-07-19).
+  suppressedNullDays?: number;
 }
 
 /** How precisely OpenElectricity knows a lifecycle date. */
@@ -125,6 +150,25 @@ export interface StatRow {
   year: GranularityStat;
 }
 
+/**
+ * A known divergence between the gaps we count and what OpenElectricity holds.
+ *
+ * `totalHoleUnitDays` counts only the rows we emit, so three of our own
+ * decisions hide real upstream nulls (folding members into an aggregate) or
+ * invent coverage (the retired-unit 0-fill). Each is reported here rather than
+ * silently absorbed, so /stats can foot up to the unit-level figure a reader
+ * would get by querying OpenElectricity directly.
+ *
+ * `unitDays` is signed: positive adds days we don't count, negative credits back
+ * days we count twice.
+ */
+export interface GapAdjustment {
+  key: string; // stable identifier, e.g. 'folded-members'
+  label: string; // one line, as rendered in the table
+  unitDays: number; // signed
+  note: string; // why this divergence exists
+}
+
 /** A contiguous run of missing days for a unit that was alive throughout. */
 export interface DataGap {
   duid: string;
@@ -174,8 +218,16 @@ export interface CoalGenerationStatsDTO {
   units: 'MWh';
   rows: StatRow[];
   dataQuality: {
+    // Holes in the rows we emit — the sum of `gaps` below.
     totalHoleUnitDays: number;
     gaps: DataGap[]; // every gap, sorted longest-first
+    // Signed corrections from `totalHoleUnitDays` to `totalUnitDaysAtSource`.
+    // Optional so a payload cached before they existed still type-checks; the
+    // table then shows the counted total alone.
+    adjustments?: GapAdjustment[];
+    // What a reader querying OpenElectricity per-DUID would count:
+    // totalHoleUnitDays + Σ adjustments. This is the honest headline.
+    totalUnitDaysAtSource?: number;
   };
   // Optional so a payload cached before this field existed still type-checks —
   // the stats page renders the recency line only when it is present.

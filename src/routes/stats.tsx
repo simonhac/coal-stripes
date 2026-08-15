@@ -139,6 +139,16 @@ function DataQualityPanel({ dq }: { dq: CoalGenerationStatsDTO['dataQuality'] })
   const remainderCount = gaps.length - shown.length;
   const remainderDays = dq.totalHoleUnitDays - shown.reduce((sum, g) => sum + g.days, 0);
 
+  // The counted gaps are a floor: folding members into an aggregate and
+  // 0-filling a retired unit each hide real upstream nulls. The table foots up
+  // through those corrections to the figure a reader would get by querying
+  // OpenElectricity per DUID. Absent on a payload cached before adjustments
+  // existed, in which case the total is simply what we counted.
+  const adjustments = dq.adjustments ?? [];
+  const total = dq.totalUnitDaysAtSource ?? dq.totalHoleUnitDays;
+  const signed = (n: number): string =>
+    `${n < 0 ? '−' : '+'}${Math.abs(n).toLocaleString('en-AU')}`;
+
   const listNote = !truncated
     ? `All ${gaps.length.toLocaleString('en-AU')} are shown below, longest first.`
     : showAll
@@ -152,7 +162,16 @@ function DataQualityPanel({ dq }: { dq: CoalGenerationStatsDTO['dataQuality'] })
         <p>
           {dq.totalHoleUnitDays.toLocaleString('en-AU')} unit-days across{' '}
           {gaps.length.toLocaleString('en-AU')} gaps are missing from OpenElectricity between each
-          unit&rsquo;s first and last recorded generation. Totals over affected periods are marked{' '}
+          unit&rsquo;s first and last recorded generation.{' '}
+          {adjustments.length > 0 && (
+            <>
+              Counting per unit as OpenElectricity serves them &mdash; before we fold Playford
+              B&rsquo;s metering change into one row, and before a retired unit&rsquo;s zeros cover
+              days upstream left null &mdash; the figure is{' '}
+              {total.toLocaleString('en-AU')}; the table foots up through those corrections.{' '}
+            </>
+          )}
+          Totals over affected periods are marked{' '}
           <span className="opennem-stats-flag">*</span> and shown as lower bounds. {listNote}
         </p>
       </div>
@@ -184,8 +203,14 @@ function DataQualityPanel({ dq }: { dq: CoalGenerationStatsDTO['dataQuality'] })
                 </td>
               </tr>
             ))}
+            {/*
+              The rows below are NOT totals and must not be styled as one: the
+              heavy rule belongs to the grand total alone, at the foot. Putting
+              it above the remainder is what made 3,870 read as the fleet figure
+              when it is only the days in the gaps this preview omits.
+            */}
             {truncated && !showAll && (
-              <tr className="opennem-stats-row opennem-stats-row-total">
+              <tr className="opennem-stats-row">
                 <th scope="row" className="opennem-stats-rowlabel" colSpan={3}>
                   + {remainderCount.toLocaleString('en-AU')} more gaps ·{' '}
                   <button
@@ -204,7 +229,7 @@ function DataQualityPanel({ dq }: { dq: CoalGenerationStatsDTO['dataQuality'] })
               </tr>
             )}
             {truncated && showAll && (
-              <tr className="opennem-stats-row opennem-stats-row-total">
+              <tr className="opennem-stats-row">
                 <th scope="row" className="opennem-stats-rowlabel" colSpan={4}>
                   <button
                     type="button"
@@ -216,6 +241,38 @@ function DataQualityPanel({ dq }: { dq: CoalGenerationStatsDTO['dataQuality'] })
                 </th>
               </tr>
             )}
+            {adjustments.length > 0 && (
+              <tr className="opennem-stats-row">
+                <th scope="row" className="opennem-stats-rowlabel" colSpan={3}>
+                  Gaps as counted above
+                </th>
+                <td className="opennem-stats-num">
+                  <span className="opennem-stats-value">
+                    {dq.totalHoleUnitDays.toLocaleString('en-AU')}
+                  </span>
+                </td>
+              </tr>
+            )}
+            {adjustments.map((adj) => (
+              <tr key={adj.key} className="opennem-stats-row">
+                <th scope="row" className="opennem-stats-rowlabel" colSpan={3}>
+                  <span className="opennem-stats-adjustment" title={adj.note}>
+                    {adj.label}
+                  </span>
+                </th>
+                <td className="opennem-stats-num">
+                  <span className="opennem-stats-adjustment">{signed(adj.unitDays)}</span>
+                </td>
+              </tr>
+            ))}
+            <tr className="opennem-stats-row opennem-stats-row-total">
+              <th scope="row" className="opennem-stats-rowlabel" colSpan={3}>
+                {adjustments.length > 0 ? 'Total at OpenElectricity' : 'Total'}
+              </th>
+              <td className="opennem-stats-num">
+                <span className="opennem-stats-value">{total.toLocaleString('en-AU')}</span>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
