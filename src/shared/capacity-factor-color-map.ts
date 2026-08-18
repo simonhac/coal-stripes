@@ -29,8 +29,11 @@
  * low one, and this codebase treats that distinction as load-bearing (see the
  * null-is-never-zero rule in CLAUDE.md).
  *
- * Keep `.welcome-swatch--*` in src/styles/opennem.css in step with these — that
- * legend is the only place a reader is told what the colours mean.
+ * Two things tell a reader what the colours mean. `StripesLegend` — the ramp
+ * above the stripes — derives its gradient from `getRampGradientCss()` below
+ * and its swatch from `NO_DATA_HEX`, so it cannot drift. The welcome dialog's
+ * `.welcome-swatch--*` rules in src/styles/opennem.css are hand-written CSS and
+ * must be kept in step with these by hand.
  *
  * The ramp is anchored at both ends rather than being a plain `255 × (1 −
  * cf/100)`: its lightest step stays #bfbfbf wherever the red threshold sits, so
@@ -42,9 +45,11 @@
  */
 
 /** Capacity factors below this (%) read as red — effectively offline. */
-const RED_THRESHOLD_PCT = 20;
+export const RED_THRESHOLD_PCT = 20;
 /** Grey at the ramp's lightest end (#bfbfbf), i.e. the value at the threshold. */
 const RAMP_LIGHTEST_GREY = 191;
+/** Pale blue: no reading for this day. Never a capacity factor of zero. */
+export const NO_DATA_HEX = '#e6f3ff';
 
 class CapacityFactorColorMap {
   private static instance: CapacityFactorColorMap;
@@ -98,7 +103,7 @@ class CapacityFactorColorMap {
 
   getHexColor(capacityFactor: number | null): string {
     // Pale blue for missing data
-    if (capacityFactor === null || capacityFactor === undefined) return '#e6f3ff';
+    if (capacityFactor === null || capacityFactor === undefined) return NO_DATA_HEX;
     
     // Round and clamp to valid range
     const rounded = Math.round(Math.max(0, Math.min(100, capacityFactor)));
@@ -121,4 +126,24 @@ export const capacityFactorColorMap = CapacityFactorColorMap.getInstance();
 // Export convenience function
 export function getProportionColorHex(capacityFactor: number | null): string {
   return capacityFactorColorMap.getHexColor(capacityFactor);
+}
+
+/**
+ * The same ramp as a CSS gradient, for the legend above the stripes.
+ *
+ * A hard step at the threshold — the ramp does not blend out of red — then the
+ * grey run. Two stops suffice for that run because CSS interpolates gradients
+ * in sRGB by default and `computeColor` is linear in sRGB byte value, so the
+ * browser draws the identical curve rather than an approximation of it. Do not
+ * add `in oklab` here; it would bend the ramp away from the stripes.
+ */
+export function getRampGradientCss(): string {
+  const offline = capacityFactorColorMap.getHexColor(0);
+  const lightest = capacityFactorColorMap.getHexColor(RED_THRESHOLD_PCT);
+  const darkest = capacityFactorColorMap.getHexColor(100);
+  return (
+    `linear-gradient(to right, ` +
+    `${offline} 0 ${RED_THRESHOLD_PCT}%, ` +
+    `${lightest} ${RED_THRESHOLD_PCT}%, ${darkest} 100%)`
+  );
 }

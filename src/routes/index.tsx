@@ -8,6 +8,7 @@ import { PerformanceDisplay } from '../components/PerformanceDisplay';
 import { OpenElectricityHeader } from '../components/OpenElectricityHeader';
 import { RegionSection } from '../components/RegionSection';
 import { DateRange } from '../components/DateRange';
+import { StripesLegend } from '../components/StripesLegend';
 import { useQueries, useQueryClient, type NotifyOnChangeProps } from '@tanstack/react-query';
 import { yearQueryOptions } from '@/client/year-queries';
 import { loadRosterSnapshot, saveRosterSnapshot, type RosterFacility } from '@/client/roster-snapshot';
@@ -492,9 +493,12 @@ function Home() {
           onFleetModeChange={setMode}
         />
 
-        {/* Date Range Header */}
+        {/* Legend + date range. Siblings, deliberately: the e2e suite reads
+            `.opennem-date-range`'s textContent to watch the range change, so
+            nothing else may be nested inside it. */}
         <div className="opennem-stripes-container">
           <div className="opennem-stripes-header">
+            <StripesLegend />
             <DateRange dateRange={targetDateRange} />
           </div>
         </div>

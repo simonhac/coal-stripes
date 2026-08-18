@@ -161,7 +161,7 @@ header a {
    before the gutter grew, which is why it read as a margin rather than a bug.) */
 .opennem-stripes-header {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   margin-top: 10px;
   margin-bottom: 0;
@@ -181,11 +181,112 @@ header a {
 }
 
 /* Deleted here, unreferenced by any component and off-palette to the last
-   declaration: `.opennem-stripes-title`, `.opennem-dropdown`,
-   `.opennem-partial-data-indicator`, and the `.opennem-scale-*` trio — whose
-   gradient was a five-stop green→red rainbow that no longer resembles anything
-   this app draws, let alone the design system. Retinting rules nothing renders
-   would have been the wrong kind of thorough. */
+   declaration: `.opennem-stripes-title`, `.opennem-dropdown` and
+   `.opennem-partial-data-indicator`. Alongside them went a `.opennem-scale-*`
+   trio whose gradient was a five-stop green→red rainbow resembling nothing this
+   app draws; the `.opennem-legend-*` rules below are its replacement, and the
+   difference is that this one asks `capacity-factor-color-map.ts` what the
+   colours are instead of asserting them. */
+
+/* The legend, at the left of the date row. Ported from Open Electricity's
+   stripes legend, which is a d3 axis over a 200×10 ramp — hence the 6px tick
+   rules and 10px labels, which are d3 axis defaults and not arbitrary.
+
+   No colours here beyond the two greys: the ramp and the no-data swatch are
+   painted from inline styles by `StripesLegend`, so the legend cannot come to
+   disagree with the stripes it explains. */
+.opennem-legend {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  /* One edge with the region headings and the unit labels below: both of those
+     hold their text 6px inside the container's gutter (`.opennem-region-header`
+     and `.opennem-facility-label`), and the ramp starts on the same line. */
+  padding-left: 6px;
+  font-family: var(--font-stack);
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--oe-mid-grey);
+}
+
+.opennem-legend-ramp {
+  position: relative;
+  width: 200px;
+  /* Reserve what the absolutely-positioned ticks hang below the bar — 9px of
+     rule and clearance, then one 13px label line. Without it the box ends at
+     the bar and the "no data" item, aligned to its bottom edge, floats a line
+     above the tick labels it belongs beside. */
+  padding-bottom: 22px;
+}
+
+.opennem-legend-bar {
+  height: 10px;
+}
+
+/* One tick: a 1px rule dropping 6px out of the bar — d3's `line y2="6"` — with
+   its label centred under it. */
+.opennem-legend-tick {
+  position: absolute;
+  top: 10px;
+  transform: translateX(-50%);
+  padding-top: 9px;
+  white-space: nowrap;
+}
+
+.opennem-legend-tick::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 6px;
+  background-color: var(--oe-mid-warm-grey);
+}
+
+/* The end labels are anchored to the ends of the ramp rather than centred on
+   their own tick, so the legend has a straight left edge to align on and
+   nothing hanging into the gap on the right. The rule travels with the anchor,
+   which is what puts it inside the bar at both ends. */
+.opennem-legend-tick[data-anchor='start'] {
+  transform: none;
+}
+
+.opennem-legend-tick[data-anchor='start']::before {
+  left: 0;
+}
+
+.opennem-legend-tick[data-anchor='end'] {
+  transform: translateX(-100%);
+}
+
+.opennem-legend-tick[data-anchor='end']::before {
+  left: auto;
+  right: 0;
+}
+
+/* The ramp in miniature, and built the same way round: a sample on the bar's
+   line, its label on the tick labels'. The 9px is the tick's clearance, so the
+   two columns agree top and bottom without either being measured against the
+   other. */
+.opennem-legend-nodata {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+/* As tall as the bar, and as wide as the words beneath it — the column stretch
+   does the measuring. The hairline is what keeps pale blue from dissolving into
+   the page, as in `.welcome-swatch`; `border-box` spends it on the 10px rather
+   than adding to it. */
+.opennem-legend-swatch {
+  box-sizing: border-box;
+  height: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.opennem-legend-nodata-label {
+  white-space: nowrap;
+}
 
 /* Stripes visualisation */
 .opennem-stripes-viz {
@@ -630,13 +731,31 @@ header a {
 
   .opennem-stripes-header {
     flex-direction: row;
-    justify-content: flex-end;
+    justify-content: space-between;
   }
 
   /* Show date range on mobile with smaller font */
   .opennem-date-range {
     font-size: 14px;
     line-height: 18px;
+  }
+
+  /* At 360px the date alone eats half the row, so the ramp halves and gives up
+     its busiest label. The ticks are positioned by percentage, so the three
+     that remain re-space themselves — no breakpoint in the component. */
+  .opennem-legend {
+    gap: 16px;
+    /* `.opennem-region-header` drops its indent at this width, so the edge the
+       legend aligns on moves to the container's own. */
+    padding-left: 0;
+  }
+
+  .opennem-legend-ramp {
+    width: 90px;
+  }
+
+  .opennem-legend-tick[data-value='20'] {
+    display: none;
   }
 
   .opennem-facility-label {
