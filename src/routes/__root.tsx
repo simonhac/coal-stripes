@@ -14,7 +14,25 @@ import {
   STALE_DOCUMENT_TRIPWIRE,
 } from '@/client/stale-document-tripwire';
 import { unitMetadataScript } from '@/client/unit-metadata-inline';
-import appCss from '@/styles/app.css?url';
+/**
+ * One stylesheet, one origin. app.css bundles Tailwind (themed by Open
+ * Electricity's tailwind.config.js), the three design-system faces, and our own
+ * opennem.css.
+ *
+ * A side-effect import, NOT `?url` + a hand-written `<link>` in `links` below,
+ * and the difference is load-bearing. Imported this way the sheet belongs to the
+ * route in Vite's manifest, which is what lets Start decide how to ship it —
+ * specifically, `server.build.inlineCss` in vite.config.ts puts it in the
+ * document as a `<style>` and saves a round trip. A `?url` link is opaque to
+ * that machinery: React hoists it as an ordinary stylesheet link and the option
+ * silently does nothing (measured — the link came out with React's
+ * `data-precedence` on it and no `<style>` anywhere).
+ */
+import '@/styles/app.css';
+// The two faces the page actually renders in, imported for their hashed URLs so
+// the document can preload them. See the `links` array below.
+import dmSansLatin from '@fontsource-variable/dm-sans/files/dm-sans-latin-wght-normal.woff2?url';
+import spaceGroteskLatin from '@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2?url';
 
 const TITLE = 'Coal Availability';
 const DESCRIPTION = 'Australian coal power plant capacity factor visualisation';
@@ -77,18 +95,48 @@ export const Route = createRootRoute({
     links: [
       { rel: 'icon', href: '/favicon.svg' },
 
-      // One stylesheet, one origin. app.css bundles Tailwind (themed by Open
-      // Electricity's tailwind.config.js), the three design-system faces, and
-      // our own opennem.css.
+      // The three design-system faces used to come from fonts.googleapis.com,
+      // which cost two extra handshakes on a zone whose edge is in Singapore:
+      // the Google stylesheet, then fonts.gstatic.com, whose connection could
+      // not even begin until that stylesheet parsed. Two preconnect hints and a
+      // long comment existed to soften that. Self-hosting via @fontsource
+      // deletes the problem instead — the woff2s are same-origin assets served
+      // by this Worker, fingerprinted, and cached at the same edge as everything
+      // else. (The sheet itself is imported at the top of this file; see there.)
       //
-      // The three faces used to come from fonts.googleapis.com, which cost two
-      // extra handshakes on a zone whose edge is in Singapore: the Google
-      // stylesheet, then fonts.gstatic.com, whose connection could not even
-      // begin until that stylesheet parsed. Two preconnect hints and a long
-      // comment existed to soften that. Self-hosting via @fontsource deletes the
-      // problem instead — the woff2s are same-origin assets served by this
-      // Worker, fingerprinted, and cached at the same edge as everything else.
-      { rel: 'stylesheet', href: appCss },
+      // The body face and the eyebrow/label face, started at the same moment as
+      // the stylesheet instead of after it.
+      //
+      // Self-hosting removed the two extra handshakes described above, but not
+      // the serial ordering: an @font-face `url()` cannot be discovered until
+      // the sheet that declares it has been fetched AND parsed, so the fonts
+      // were a third leg on a critical path whose every leg costs ~300 ms of
+      // Singapore round trip. Naming them here moves them onto the first leg.
+      //
+      // Only the `latin` subsets of the two variable faces, because those are
+      // the only files a reader of this page ever downloads: the latin-ext,
+      // vietnamese and DM Mono faces are all behind `unicode-range` or applied
+      // to text that renders below the fold, and preloading a font that goes
+      // unused within a few seconds is a console warning and wasted bandwidth
+      // rather than a saving.
+      //
+      // `crossOrigin: ''` (i.e. anonymous) is not optional even though these are
+      // same-origin: fonts are always fetched in CORS mode, so a preload without
+      // it is treated as a different request and the file is fetched twice.
+      {
+        rel: 'preload',
+        as: 'font',
+        type: 'font/woff2',
+        crossOrigin: '',
+        href: dmSansLatin,
+      },
+      {
+        rel: 'preload',
+        as: 'font',
+        type: 'font/woff2',
+        crossOrigin: '',
+        href: spaceGroteskLatin,
+      },
     ],
 
     scripts: [

@@ -117,9 +117,26 @@ export const DOCUMENT_TAG = 'html';
 /**
  * The SSR document's policy.
  *
- * `max-age=0`: the browser copy is the one layer no purge can reach, and the
- * document is ~3.5 KB — the same reasoning that keeps the data routes at 60 s,
- * taken to its limit.
+ * `max-age=0`: the browser copy is the one layer no purge can reach, so every
+ * visit revalidates and a fix can never be masked by a copy sitting in someone's
+ * browser. Same reasoning that keeps the data routes at 60 s, taken to its
+ * limit.
+ *
+ * This was originally justified on size as well — "the document is ~3.5 KB", so
+ * re-sending it costs nothing. That premise no longer holds and the comment
+ * should not be read as if it does. The document is now ~112 KB raw and ~16 KB
+ * over the wire: the unit metadata moved into it (@/client/unit-metadata-inline,
+ * ~2 KB compressed) and then the stylesheet did too (`server.build.inlineCss` in
+ * vite.config.ts, ~9 KB compressed). Both of those are round-trip trades that
+ * pay off on a first visit and are re-paid on every subsequent one, because this
+ * header means there is no such thing as a free repeat visit here.
+ *
+ * The policy is deliberately unchanged: purgeability is worth more than the
+ * bytes, and this app has been burned by unreachable stale documents before —
+ * see the tripwire (@/client/stale-document-tripwire) and the deploy purge
+ * (@/server/deploy-purge). But the trade is now a real one rather than a
+ * rounding error, and it is worth revisiting on its merits rather than
+ * inheriting an answer that was cheap when the document was small.
  *
  * `s-maxage=3600`: an hour rather than a day because the streamed shell embeds a
  * per-render timestamp in its `$_TSR.router` payload. Staleness *across deploys*

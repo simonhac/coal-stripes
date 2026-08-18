@@ -79,6 +79,31 @@ describe('unitMetadataScript', () => {
     );
   });
 
+  it('survives quotes and backslashes in a facility name', () => {
+    // The blob travels as JSON.parse('…'), so the payload is now inside a
+    // single-quoted JS string as well as inside JSON. An apostrophe would end
+    // that literal and a backslash would eat the character after it — neither of
+    // which the object-literal form this replaced could be hurt by, and both of
+    // which are ordinary things to find in a plant name.
+    const nasty = String.raw`O'Connor \ Back\\slash "quoted" ' end`;
+    const dto = blob({
+      unitsByDuid: {
+        ODD: {
+          network: 'nem',
+          region: 'NSW1',
+          capacity: 1,
+          facility_code: 'O',
+          facility_name: nasty,
+          fueltech: 'coal_black',
+          status: 'operating',
+        },
+      },
+    });
+
+    evaluate(dto);
+    expect(readInlineUnitMetadata(CF_DTO_VERSION)!.unitsByDuid.ODD.facility_name).toBe(nasty);
+  });
+
   it('is absent, not empty, when no document inlined one', () => {
     expect(readInlineUnitMetadata(CF_DTO_VERSION)).toBeNull();
   });

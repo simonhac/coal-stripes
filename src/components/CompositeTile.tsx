@@ -32,7 +32,12 @@ import { useFleetMode } from '@/client/fleet-mode-context';
 import { perfMonitor } from '@/shared/performance-monitor';
 import { emitTooltip, endTooltip } from '@/client/tooltip-bus';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
-import { getPointerPosition } from '@/hooks/useHoverIndicator';
+import {
+  getHoveredCanvas,
+  getPointerPosition,
+  invalidateHoverTarget,
+  registerHoverTarget,
+} from '@/hooks/useHoverIndicator';
 import { featureFlags } from '@/shared/feature-flags';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { tileMonitor } from '@/shared/tile-monitor';
@@ -75,6 +80,9 @@ const CompositeTileComponent = ({
   // Seeded from the cached roster when there is one, so a row that renders
   // before its tiles exist is already the right height. 12 is the last resort.
   const lastKnownHeightRef = useRef<number>(fallbackHeight ?? 12);
+  // The height this canvas was last painted at, so a change can invalidate the
+  // shared hover hit test. See the paint effect.
+  const lastPaintedHeightRef = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const lastRenderRef = useRef<{
     startStr: string;
@@ -92,6 +100,20 @@ const CompositeTileComponent = ({
   
   // Mouse position tracking for tooltip updates during scrolling
   
+  // Resolved once per row, not once per paint.
+  //
+  // getDateBoundaries() is not a lookup: it builds an object carrying eight
+  // closures and calls getTodayAEST(). This component used to call it three
+  // times on every repaint — in the tiles memo, in render(), and in
+  // updateTooltip — and there are ~50 of these rows repainting on every frame of
+  // a pan, so it was ~150 of those objects per frame, none of which could differ
+  // from the last.
+  //
+  // Empty deps, matching Home (routes/index.tsx) and CapFacXAxis: the boundaries
+  // only move at AEST midnight, and a page open across midnight already holds a
+  // stale set at the top level.
+  const boundaries = useMemo(() => getDateBoundaries(), []);
+
   // Use provided animated date range, or calculate from endDate
   const dateRange = useMemo(() => {
     return animatedDateRange || {
@@ -161,7 +183,6 @@ const CompositeTileComponent = ({
     // render(). Only the latest data year carries a real frontier — a year-end
     // collection gap in an older year is an interior gap (data resumes next
     // year), not the end of the chart, so it stays blue.
-    const boundaries = getDateBoundaries();
     const frontierDateFor = (year: number, data: typeof leftData): CalendarDate | null => {
       if (!data || year !== boundaries.latestDataYear) return null;
       const idx = data.regionLastDataDayIndex.get(regionCode) ?? -1;
@@ -188,7 +209,7 @@ const CompositeTileComponent = ({
       leftBounds: boundsFor(leftData),
       rightBounds: boundsFor(rightData),
     };
-  }, [facilityCode, regionCode, startYear, endYear, leftValid, rightValid, rightNeeded, leftData, leftIsError, rightData, rightIsError]);
+  }, [boundaries, facilityCode, regionCode, startYear, endYear, leftValid, rightValid, rightNeeded, leftData, leftIsError, rightData, rightIsError]);
 
   // The row's height, resolved during RENDER rather than in the paint effect
   // below — this is load-bearing for CLS, not tidiness.
@@ -305,7 +326,6 @@ const CompositeTileComponent = ({
       
       if (tooltipDate) {
         // Calculate day offset from earliestDataEndDay (offset 0 = first valid end date)
-        const boundaries = getDateBoundaries();
         const dayOffset = getDaysBetween(boundaries.earliestDataEndDay, tooltipDate);
         
         tileMonitor.updateMousePosition(
@@ -337,7 +357,7 @@ const CompositeTileComponent = ({
     } catch (error) {
       console.error(`Error in CompositeTile updateTooltip for ${facilityCode}:`, error);
     }
-  }, [dateRange, tiles, facilityName, facilityCode]);
+  }, [boundaries, dateRange, tiles, facilityName, facilityCode]);
 
   useEffect(() => {
     const startStr = dateRange.start.toString();
@@ -380,18 +400,19 @@ const CompositeTileComponent = ({
       right: tiles.right,
     };
     
-    const perfName = 'CompositeTile.render';
-    perfMonitor.start(perfName);
-    
+    // Null when the monitor is disarmed (the default), which makes every end()
+    // below a single comparison. See @/shared/performance-monitor.
+    const perfMark = perfMonitor.start('CompositeTile.render');
+
     const canvas = canvasRef.current;
     if (!canvas) {
-      perfMonitor.end(perfName);
+      perfMonitor.end(perfMark);
       return;
     }
 
     const ctx = canvas.getContext('2d');
     if (!ctx) {
-      perfMonitor.end(perfName);
+      perfMonitor.end(perfMark);
       return;
     }
 
@@ -419,6 +440,16 @@ const CompositeTileComponent = ({
       lastKnownHeightRef.current = canvasHeight;
     }
 
+    // A row that has just changed height has moved every row below it, so
+    // whatever is under a stationary pointer is no longer what it was. This is
+    // the one such event useHoverIndicator cannot see for itself — it happens
+    // without a mousemove, a scroll or a resize, on the frame a year's data
+    // lands and the placeholder heights become real ones.
+    if (lastPaintedHeightRef.current !== canvasHeight) {
+      lastPaintedHeightRef.current = canvasHeight;
+      invalidateHoverTarget();
+    }
+
     // Clear before repainting. React has already set width/height to the same
     // values, but drawImage does not clear, and re-assigning width does — which
     // is exactly what a repaint needs. Internal resolution stays at one pixel
@@ -430,16 +461,19 @@ const CompositeTileComponent = ({
     const startYear = dateRange.start.year;
     const endYear = dateRange.end.year;
     
-    // Update tooltip if mouse is hovering during date range changes
+    // Update tooltip if mouse is hovering during date range changes.
+    //
+    // getHoveredCanvas() rather than our own document.elementFromPoint: the hit
+    // test is a forced layout flush, only one canvas on the page can win it, and
+    // this effect runs in ~50 rows on every frame of a pan. useHoverIndicator
+    // resolves it once for everyone — see the note there for why caching it is
+    // sound for canvases and not for the month axis.
     const mousePos = getPointerPosition();
-    if (mousePos && canvasRef.current) {
-      const elementAtMouse = document.elementFromPoint(mousePos.x, mousePos.y);
-      if (elementAtMouse === canvasRef.current) {
-        const { canvasX, canvasY } = clientToCanvasCoordinates(mousePos.x, mousePos.y);
-        updateTooltip(canvasX, canvasY);
-      }
+    if (mousePos && getHoveredCanvas() === canvasRef.current) {
+      const { canvasX, canvasY } = clientToCanvasCoordinates(mousePos.x, mousePos.y);
+      updateTooltip(canvasX, canvasY);
     }
-    
+
     
     // Calculate dimensions (in source pixels - always 365 total)
     const leftStartDay = getDayIndex(dateRange.start);
@@ -498,7 +532,6 @@ const CompositeTileComponent = ({
     
     const render = () => {
       // Log and report tile state (offset from earliestDataEndDay, 0 = first valid end date)
-      const boundaries = getDateBoundaries();
       const offset = getDaysBetween(boundaries.earliestDataEndDay, dateRange.end);
       const overstep = boundaries.calculateOverstep(offset);
       
@@ -661,8 +694,8 @@ const CompositeTileComponent = ({
     };
     
     render();
-    perfMonitor.end(perfName);
-    
+    perfMonitor.end(perfMark);
+
     // Cleanup
     return () => {
       if (animationFrameRef.current) {
@@ -670,7 +703,7 @@ const CompositeTileComponent = ({
         animationFrameRef.current = null;
       }
     };
-  }, [dateRange, tiles, facilityCode, regionCode, updateTooltip, canvasHeight, clientToCanvasCoordinates]);
+  }, [boundaries, dateRange, tiles, facilityCode, regionCode, updateTooltip, canvasHeight, clientToCanvasCoordinates]);
   
   // Mouse handlers for hover only
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -681,30 +714,29 @@ const CompositeTileComponent = ({
   // Pointer tracking and the --hover-x indicator are hoisted into a single
   // app-level useHoverIndicator() — see that hook for why.
 
-  // Handle window scroll to update tooltip
+  // Scrolling brings a different row under a stationary pointer, so whichever
+  // row that turns out to be re-resolves its tooltip.
+  //
+  // Registered with useHoverIndicator rather than listening for `scroll` here:
+  // every row installing its own listener meant one scroll event ran ~50
+  // handlers and ~50 elementFromPoint hit tests, to find the one row that had to
+  // do anything. The shared listener does the hit test once and calls back only
+  // that row. (The rows that are NOT hovered still do nothing — same as before,
+  // and for the same reason: tooltip state is owned page-wide, so a tile has no
+  // way to know whether the visible tooltip is its own.)
+  const onHoveredRef = useRef<() => void>(() => {});
+  onHoveredRef.current = () => {
+    const mousePos = getPointerPosition();
+    if (!mousePos) return;
+    const { canvasX, canvasY } = clientToCanvasCoordinates(mousePos.x, mousePos.y);
+    updateTooltip(canvasX, canvasY);
+  };
+
   useEffect(() => {
-    const handleScroll = () => {
-      const mousePos = getPointerPosition();
-      if (!canvasRef.current || !mousePos) return;
-
-      // Get element at current mouse position
-      const elementAtMouse = document.elementFromPoint(mousePos.x, mousePos.y);
-
-      // Check if it's our canvas
-      if (elementAtMouse === canvasRef.current) {
-        const { canvasX, canvasY } = clientToCanvasCoordinates(mousePos.x, mousePos.y);
-        updateTooltip(canvasX, canvasY);
-      } else {
-        // Mouse not over our canvas - check if we need to call onHoverEnd
-        // We can check if the tooltip is currently showing for this tile
-        // Note: We don't have a way to know if tooltip was showing for this specific tile
-        // The parent component manages tooltip state across all tiles
-      }
-    };
-    
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [updateTooltip, facilityCode, clientToCanvasCoordinates]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    return registerHoverTarget(canvas, () => onHoveredRef.current());
+  }, []);
 
   // Shared by mouse-leave and touch-end: drop the hover indicator, tell the
   // perf overlay, and arm the dedupe so the next entry always broadcasts.

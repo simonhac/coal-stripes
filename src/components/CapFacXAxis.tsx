@@ -212,6 +212,12 @@ function CapFacXAxisComponent({
   // than a rect scan, because it also proves the cell is the topmost thing
   // there (not behind the sticky header or a dialog).
   //
+  // And directly, not via useHoverIndicator's cached hit test, which the stripe
+  // canvases share. That cache is only valid for elements a pan does not move,
+  // which is true of the canvases (their pixels change, their boxes don't) and
+  // precisely false of these month cells — re-laid-out every frame is the whole
+  // reason this effect exists. There are six of these, not fifty.
+  //
   // monthBars is deliberately behind a ref and out of the deps: emitMonthTooltip
   // dispatches 'month-hover', which this component listens for and turns into a
   // re-render, and a fresh monthBars array every render would make that a loop.

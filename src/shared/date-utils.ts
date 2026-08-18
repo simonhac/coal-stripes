@@ -179,12 +179,39 @@ export function getAESTDateTimeString(date: Date = new Date()): string {
 }
 
 /**
+ * How long a resolved "today" is reused before being recomputed. See below.
+ */
+const TODAY_CACHE_MS = 1000;
+
+let cachedToday: CalendarDate | null = null;
+let cachedTodayAt = 0;
+
+/**
  * Get today's date in AEST (Brisbane time)
+ *
+ * Cached for a second, because this is on the per-frame path and is not cheap:
+ * `today()` resolves a named timezone through Intl on every call. yearQueryOptions
+ * asks for the current year to compute a staleTime, and it is evaluated once per
+ * query per render — with ~50 facility rows subscribing to two years each, that
+ * is ~100 timezone resolutions per frame of a pan.
+ *
+ * A one-second window cannot make the answer wrong in any way the callers were
+ * not already exposed to: the only moment it differs is the second either side
+ * of Brisbane midnight, where two calls in the same tick could already disagree.
+ * Callers that must not straddle midnight resolve their boundaries once and hold
+ * them (see getDateBoundaries' use sites), which is the real protection.
  *
  * @returns CalendarDate object representing today in Australian Eastern Standard Time
  */
 export function getTodayAEST(): CalendarDate {
-  return today('Australia/Brisbane');
+  const now = Date.now();
+  if (cachedToday !== null && now - cachedTodayAt < TODAY_CACHE_MS) {
+    return cachedToday;
+  }
+
+  cachedToday = today('Australia/Brisbane');
+  cachedTodayAt = now;
+  return cachedToday;
 }
 
 /**
