@@ -897,12 +897,18 @@ default, which is what the un-hashed files want anyway.
 
 Two more round trips came out of the critical path in the same pass:
 
-- **DM Sans is linked from the document head** (`src/routes/__root.tsx`), not
-  `@import`-ed from `opennem.css`. An `@import` is discovered only after the
-  importing sheet has downloaded *and* parsed, so the font CSS sat behind
-  `opennem.css` in a serial chain — ~340 ms of dead time. `preconnect` to
-  `fonts.gstatic.com` covers the second hop, which is otherwise not discovered
-  until the font CSS parses.
+- **The fonts came out of the critical path twice.** First DM Sans was linked
+  from the document head rather than `@import`-ed from `opennem.css`, because an
+  `@import` is discovered only after the importing sheet has downloaded *and*
+  parsed, so the font CSS sat behind `opennem.css` in a serial chain — ~340 ms
+  of dead time; a `preconnect` to `fonts.gstatic.com` covered the second hop.
+
+  Superseded. Since the design-system port (`49ed5ea`) all three faces — DM Sans,
+  Space Grotesk and DM Mono — are **self-hosted via `@fontsource`** and bundled
+  by Vite, so they are same-origin assets on the hashed, immutable `/assets/*`
+  path above. There is no `fonts.googleapis.com` request and no `preconnect`:
+  the two cross-origin handshakes are gone rather than merely reordered, which
+  matters more than usual on a zone whose edge is in Singapore.
 - **Facility canvases carry their height as a JSX attribute**, resolved during
   render rather than in the paint effect (`src/components/CompositeTile.tsx`).
   A `<canvas>` with no `width`/`height` attributes is intrinsically 300×150, and

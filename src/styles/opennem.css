@@ -88,15 +88,22 @@
   box-sizing: border-box;
 }
 
-body {
-  font-family: var(--font-stack);
-  font-size: var(--body-size);
-  line-height: 1.5;
-  margin: 0;
-  padding: 0;
-  background-color: var(--oe-light-warm-grey);
-  color: var(--primary);
-}
+/* There is deliberately no `body` rule here any more.
+ *
+ * There was one, and every declaration in it duplicated app.css's — except
+ * `line-height: 1.5`. Because this file is imported into Tailwind's
+ * `components` layer while app.css's `body` sits in `base`, that one line won,
+ * and it quietly cost the design system its central typographic rule: "line
+ * heights pair 1:1 with each size token and always add 4px … always write
+ * text-X leading-X together". A ratio inherits AS a ratio, re-computing against
+ * every descendant's own font-size, so a 12px label got 18px where the scale
+ * says 16px — and every rule below that set a size without a line-height was
+ * silently off.
+ *
+ * app.css's `body` now reaches the page: `leading-base`, i.e. 20px. Which means
+ * THE RULE FOR THIS FILE IS: if you set `font-size`, set `line-height` in the
+ * same block. Nothing inherits a usable ratio any more, and a size left
+ * unpaired will take a flat 20px meant for 16px text. */
 
 /* Header styling - OpenElectricity exact match */
 header {
@@ -204,8 +211,8 @@ header a {
      and `.opennem-facility-label`), and the ramp starts on the same line. */
   padding-left: 6px;
   font-family: var(--font-stack);
-  font-size: 10px;
-  line-height: 13px;
+  font-size: 10px;   /* `xxs` */
+  line-height: 14px; /* its pair — was 13px, which was d3's default, not ours */
   color: var(--oe-mid-grey);
 }
 
@@ -213,10 +220,10 @@ header a {
   position: relative;
   width: 200px;
   /* Reserve what the absolutely-positioned ticks hang below the bar — 9px of
-     rule and clearance, then one 13px label line. Without it the box ends at
-     the bar and the "no data" item, aligned to its bottom edge, floats a line
-     above the tick labels it belongs beside. */
-  padding-bottom: 22px;
+     rule and clearance, then one label line. Without it the box ends at the bar
+     and the "no data" item, aligned to its bottom edge, floats a line above the
+     tick labels it belongs beside. Tracks the line-height above: 9 + 14. */
+  padding-bottom: 23px;
 }
 
 .opennem-legend-bar {
@@ -224,13 +231,29 @@ header a {
 }
 
 /* One tick: a 1px rule dropping 6px out of the bar — d3's `line y2="6"` — with
-   its label centred under it. */
+   its label centred under it.
+ *
+ * The label is a percentage, so it is a *value*, and the design system's rule
+ * for values is DM Mono with tabular figures. This row and the month row at the
+ * foot of the stripes are the two axes on the page and they have to read as one
+ * system; `.opennem-month-label` already carries the design system's axis-tick
+ * style, so this one follows it.
+ *
+ * Two departures from that style, both deliberate. Weight stays 400 because
+ * DM Mono ships 400 and 500 only — there is no 300 to ask for, and asking would
+ * get a synthesised one. Colour stays `mid-grey` rather than the axis token
+ * `mid-warm-grey`: #C6C6C6 on the #FAF9F6 page is about 1.6:1, and unlike the
+ * month labels — which sit on their own coloured chips — these are read against
+ * the page itself. */
 .opennem-legend-tick {
   position: absolute;
   top: 10px;
   transform: translateX(-50%);
   padding-top: 9px;
   white-space: nowrap;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 .opennem-legend-tick::before {
@@ -358,7 +381,8 @@ header a {
   align-items: center;
   height: 19px;
   font-family: var(--font-stack);
-  font-size: 14px;
+  font-size: 14px;   /* `sm` */
+  line-height: 18px;
   font-weight: 300;
   color: var(--oe-mid-grey);
   white-space: nowrap;
@@ -408,6 +432,9 @@ header a {
   /* The design system's chart axis-tick style, exactly: 10px, weight 300,
      mid-warm-grey. (Was 9px/400 — off the scale in both.) */
   font-size: 10px;
+  line-height: 14px; /* `xxs` pairing. The 16px height and the flex centring
+                        above are what actually place the glyphs; this is here
+                        so the block obeys the pair-every-size rule. */
   font-weight: 300;
   color: var(--oe-mid-warm-grey);
   border-right: none;
@@ -470,7 +497,10 @@ header a {
 .opennem-facility-label {
   background: var(--oe-light-warm-grey);
   padding: 2px 6px;
+  /* `xs` — and the design system pairs `xs` with 16px, not the 18px this
+     inherited from the body's 1.5 ratio (see the note on `body` above). */
   font-size: 12px;
+  line-height: 16px;
   color: var(--dark-grey);
   font-weight: 400;
   min-width: 140px;
@@ -497,12 +527,16 @@ header a {
   border: 1px solid var(--border-colour);
   border-radius: 6px;    /* `rounded-lg` — the design system's radius for panels and tooltips */
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  /* `xs`, paired. Was a 1.4 ratio, which every child then re-computed against
+     its own size — the reason this card carried three sizes (13/11/11) that
+     are on no scale at all. They are now 14 / 12 / 10, which is the scale. */
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 16px;
 }
 
 .facility-hovercard-name {
-  font-size: 13px;
+  font-size: 14px;   /* `sm` — was 13px, between two steps */
+  line-height: 18px;
   font-weight: 500;
   color: var(--dark-grey);
   white-space: nowrap;
@@ -512,7 +546,8 @@ header a {
 
 .facility-hovercard-total {
   margin-left: 6px;
-  font-size: 11px;
+  font-size: 10px;   /* `xxs` — was 11px; subordinate to the name beside it */
+  line-height: 14px;
   font-weight: 400;
   color: var(--oe-mid-grey);
 }
@@ -527,7 +562,9 @@ header a {
      the viewport the card is positioned against. */
   max-height: 200px;
   overflow-y: auto;
-  font-size: 11px;
+  font-size: 12px;   /* `xs` — was 11px. This grid is the card's body, so it
+                        takes the card's own step rather than a size below it. */
+  line-height: 16px;
   color: var(--oe-mid-grey);
 }
 
@@ -632,6 +669,7 @@ header a {
   height: 19px;
   font-family: var(--font-stack);
   font-size: 10px; /* `xxs` — was 9.9px, which was on no scale at all */
+  line-height: 14px; /* its pair; the 19px height above is what sets the chip */
   white-space: nowrap;
   flex-wrap: nowrap;
   margin-left: auto; /* Push to the right */
@@ -761,7 +799,10 @@ header a {
   .opennem-facility-label {
     min-width: 45px;
     max-width: 45px;
-    font-size: 9px;
+    font-size: 10px;   /* `xxs` — was 9px, on no scale. (Both this size and the
+                          width are overridden by the overlay rule further down
+                          this same media query; kept in step regardless.) */
+    line-height: 14px;
     padding: 1px 2px;
   }
   
@@ -801,7 +842,8 @@ header a {
     max-width: calc(100% - 8px);
     background: none;
     color: var(--oe-dark-grey);
-    font-size: 10px;
+    font-size: 10px;   /* `xxs` */
+    line-height: 14px;
     font-weight: 500;
     /* Tappable so tap-to-pin and long-press-for-the-hovercard work on mobile
        too; the touch still reaches the pan gesture underneath, and
@@ -842,7 +884,9 @@ header a {
   }
 
   .opennem-region-date-range {
-    font-size: 11px;
+    font-size: 10px;   /* `xxs` — was 11px, between steps. Down rather than up:
+                          this shares a phone header row with the region name. */
+    line-height: 14px;
   }
   
   /* Hide the black square (tooltip icon) on mobile */
@@ -919,7 +963,13 @@ header a {
   display: inline-flex;
   align-items: baseline;
   gap: 0.139em;
-  font-size: 24px;
+  font-size: 24px;   /* `xl` */
+  /* `leading-none`, not the `xl` pairing: this is a lockup measured off the
+     glyphs, and `.opennem-wordmark` below already sets 1. Stating it here keeps
+     the strut from adding height the mark never asked for — and it is what the
+     two clamp()ed sizes in the phone block inherit, which is why neither of
+     those needs a pairing of its own. */
+  line-height: 1;
   text-decoration: none;
 }
 
@@ -1103,7 +1153,8 @@ header a {
 
 .modal-title {
   margin: 0;
-  font-size: 20px;
+  font-size: 20px;   /* `lg` */
+  line-height: 24px;
   font-weight: 600;
   color: var(--dark-grey);
 }
@@ -1169,7 +1220,8 @@ header a {
 }
 
 .key-combo { display: inline-flex; align-items: center; gap: 4px; }
-.key-combo-plus { color: var(--oe-mid-grey); font-size: 11px; }
+/* `xxs`, was 11px — subordinate to the 12px keycaps it joins. */
+.key-combo-plus { color: var(--oe-mid-grey); font-size: 10px; line-height: 14px; }
 
 /* ============================================================
    Welcome dialog
@@ -1198,15 +1250,11 @@ header a {
   margin: 0 2px;
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
-/* These are DATA colours, not UI ones: each must be the exact value
-   capacity-factor-color-map.ts paints, or the legend lies about the chart. Change
-   one there and change it here. Two are literals rather than palette tokens
-   because the ramp is not made of palette colours — see the header comment on
-   that file for why "no data" in particular sits off the design system. */
-.welcome-swatch--out    { background: var(--oe-red); }  /* out of service */
-.welcome-swatch--light  { background: #bfbfbf; }        /* lightly loaded (ramp's lightest step) */
-.welcome-swatch--full   { background: var(--oe-black); }/* fully loaded */
-.welcome-swatch--nodata { background: #e6f3ff; }        /* no data */
+/* No `--out`/`--light`/`--full`/`--nodata` modifiers here any more. These are
+   DATA colours, not UI ones, so each has to be the exact value
+   capacity-factor-color-map.ts paints — and a hand-kept copy of that is a copy
+   that goes stale. WelcomeDialog.tsx now asks the map itself and sets each
+   swatch's `background` inline, the way `StripesLegend` does. */
 
 /* Inline keycap that also opens the shortcuts dialog */
 .welcome-kbd-button {
@@ -1228,7 +1276,8 @@ header a {
   margin: 18px 0 0;
   padding-top: 14px;
   border-top: 1px solid var(--divider-colour);
-  font-size: 12px;
+  font-size: 12px;   /* `xs` */
+  line-height: 16px;
   color: var(--oe-mid-grey);
 }
 /* Quiet links, following Open Electricity's own `.portable-override a` — inline
@@ -1253,7 +1302,8 @@ header a {
 .shortcuts-group-title {
   margin: 0 0 8px;
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 12px;   /* `xs` */
+  line-height: 16px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.63px;
@@ -1277,7 +1327,7 @@ header a {
   margin: 0;
   flex-shrink: 0;
 }
-.shortcut-sep { color: var(--oe-mid-grey); font-size: 12px; }
+.shortcut-sep { color: var(--oe-mid-grey); font-size: 12px; line-height: 16px; }
 /* `sm` (14/18), not the 16px body step: this is a dense two-column reference
    table, and at prose size the longest description wraps against a keycap
    column that can't shrink. */
@@ -1327,7 +1377,8 @@ header a {
 /* Data-recency disclosure: quieter than the intro copy, but always present so
    the age of the underlying cached data is never something you have to guess. */
 .opennem-stats-intro p.opennem-stats-recency {
-  font-size: 12px;
+  font-size: 12px;   /* `xs` */
+  line-height: 16px;
   color: var(--oe-mid-grey);
   margin-top: 10px;
   padding-left: 10px;
@@ -1363,13 +1414,15 @@ header a {
 .opennem-stats-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 14px;   /* `sm` */
+  line-height: 18px;
 }
 /* Column headings are eyebrows: uppercase Space Grotesk, `wider` tracking,
    mid-grey — `.subhead-secondary`, one size down for a table. */
 .opennem-stats-table thead th {
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 12px;   /* `xs` */
+  line-height: 16px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.63px;
@@ -1412,17 +1465,18 @@ header a {
 
 .opennem-stats-value {
   display: block;
-  font-size: 16px;
+  font-size: 16px;   /* `base` */
   font-weight: 500;
   color: var(--dark-grey);
-  line-height: 1.25;
+  line-height: 20px;
 }
 /* The qualifier under a value ("12 Jan 2025 · 512 GWh/day") — a caption, so it
    goes back to the body face. */
 .opennem-stats-sub {
   display: block;
   font-family: var(--font-stack);
-  font-size: 12px;
+  font-size: 12px;   /* `xs` */
+  line-height: 16px;
   color: var(--oe-mid-grey);
   margin-top: 2px;
 }
@@ -1452,10 +1506,10 @@ header a {
    to both: it is neither a gap nor a total, and reads as working, not result. */
 .opennem-stats-adjustment {
   display: block;
-  font-size: 14px;
+  font-size: 14px;   /* `sm` — the 1.25 ratio here landed on 17.5px */
   font-weight: 400;
   color: var(--oe-mid-grey);
-  line-height: 1.25;
+  line-height: 18px;
 }
 
 .opennem-stats-flag {
@@ -1525,9 +1579,9 @@ header a {
 }
 
 .opennem-stats-note {
-  font-size: 12px;
+  font-size: 12px;   /* `xs`, paired — was a 1.6 ratio */
   color: var(--oe-mid-grey);
-  line-height: 1.6;
+  line-height: 16px;
   margin-top: 24px;
   border-top: 1px dotted var(--oe-mid-warm-grey);
   padding-top: 14px;

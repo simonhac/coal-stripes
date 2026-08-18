@@ -63,6 +63,29 @@ test.describe('the stripes legend', () => {
     await expect(page.locator('.opennem-legend-nodata')).toHaveText(/no data/);
   });
 
+  /* The design system's rule for numbers, which this row broke for a while: a
+     percentage is a value, and values are DM Mono with tabular figures. The
+     month row at the foot of the stripes is the other axis on the page and
+     already obeys it, so what is really being guarded is that the two go on
+     agreeing. The "no data" caption beside them is prose, not a value, and
+     stays in DM Sans — asserted here so a future sweep does not "fix" it. */
+  test('sets its values in the mono face, and its caption in the body one', async ({ page }) => {
+    await loadApp(page);
+
+    const styleOf = (sel: string) =>
+      page.locator(sel).first().evaluate(el => {
+        const c = getComputedStyle(el);
+        return { family: c.fontFamily, numeric: c.fontVariantNumeric };
+      });
+
+    const tick = await styleOf('.opennem-legend-tick');
+    expect(tick.family).toContain('DM Mono');
+    expect(tick.numeric).toContain('tabular-nums');
+
+    const caption = await styleOf('.opennem-legend-nodata-label');
+    expect(caption.family).toContain('DM Sans');
+  });
+
   test('starts on the same edge as the labels below it', async ({ page }) => {
     await loadApp(page);
 

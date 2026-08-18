@@ -1,39 +1,56 @@
+<!--
+  The stripes in miniature. Every colour here is a sample of the real ramp in
+  src/shared/capacity-factor-color-map.ts, so the icon cannot come to disagree
+  with the thing it stands for:
+
+    #C74523  the brand red — a unit below the 20% threshold. (Was #ef4444,
+             Tailwind's stock red-500, which is not an Open Electricity colour
+             and was the only off-palette value the app shipped.)
+    #999999  capacity factor 36%   ) exact ramp values: round(191 × (100 − cf) / 80).
+    #676767  capacity factor 57%   ) They are within a unit of the #999/#666/#333
+    #323232  capacity factor 79%   ) they replace, so the icon looks unchanged.
+    #faf9f6  light-warm-grey — the page behind the stripes.
+
+  Kept as literals rather than generated: a favicon is fetched before any of our
+  JavaScript runs, so it cannot import the map. The four capacity factors above
+  are the check.
+-->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <rect width="32" height="32" fill="#faf9f6"/>
-  
+
   <!-- First stripe row -->
-  <rect x="0" y="5" width="3" height="8" fill="#666"/>
-  <rect x="3" y="5" width="3" height="8" fill="#999"/>
-  <rect x="6" y="5" width="3" height="8" fill="#ef4444"/>
-  <rect x="9" y="5" width="3" height="8" fill="#ef4444"/>
-  <rect x="12" y="5" width="3" height="8" fill="#333"/>
-  <rect x="15" y="5" width="3" height="8" fill="#666"/>
-  <rect x="18" y="5" width="3" height="8" fill="#999"/>
-  <rect x="21" y="5" width="3" height="8" fill="#333"/>
-  <rect x="24" y="5" width="3" height="8" fill="#ef4444"/>
-  <rect x="27" y="5" width="5" height="8" fill="#666"/>
-  
+  <rect x="0" y="5" width="3" height="8" fill="#676767"/>
+  <rect x="3" y="5" width="3" height="8" fill="#999999"/>
+  <rect x="6" y="5" width="3" height="8" fill="#C74523"/>
+  <rect x="9" y="5" width="3" height="8" fill="#C74523"/>
+  <rect x="12" y="5" width="3" height="8" fill="#323232"/>
+  <rect x="15" y="5" width="3" height="8" fill="#676767"/>
+  <rect x="18" y="5" width="3" height="8" fill="#999999"/>
+  <rect x="21" y="5" width="3" height="8" fill="#323232"/>
+  <rect x="24" y="5" width="3" height="8" fill="#C74523"/>
+  <rect x="27" y="5" width="5" height="8" fill="#676767"/>
+
   <!-- Second stripe row -->
-  <rect x="0" y="13" width="3" height="8" fill="#333"/>
-  <rect x="3" y="13" width="3" height="8" fill="#666"/>
-  <rect x="6" y="13" width="3" height="8" fill="#999"/>
-  <rect x="9" y="13" width="3" height="8" fill="#333"/>
-  <rect x="12" y="13" width="3" height="8" fill="#ef4444"/>
-  <rect x="15" y="13" width="3" height="8" fill="#ef4444"/>
-  <rect x="18" y="13" width="3" height="8" fill="#ef4444"/>
-  <rect x="21" y="13" width="3" height="8" fill="#666"/>
-  <rect x="24" y="13" width="3" height="8" fill="#333"/>
-  <rect x="27" y="13" width="5" height="8" fill="#999"/>
-  
+  <rect x="0" y="13" width="3" height="8" fill="#323232"/>
+  <rect x="3" y="13" width="3" height="8" fill="#676767"/>
+  <rect x="6" y="13" width="3" height="8" fill="#999999"/>
+  <rect x="9" y="13" width="3" height="8" fill="#323232"/>
+  <rect x="12" y="13" width="3" height="8" fill="#C74523"/>
+  <rect x="15" y="13" width="3" height="8" fill="#C74523"/>
+  <rect x="18" y="13" width="3" height="8" fill="#C74523"/>
+  <rect x="21" y="13" width="3" height="8" fill="#676767"/>
+  <rect x="24" y="13" width="3" height="8" fill="#323232"/>
+  <rect x="27" y="13" width="5" height="8" fill="#999999"/>
+
   <!-- Third stripe row -->
-  <rect x="0" y="21" width="3" height="8" fill="#999"/>
-  <rect x="3" y="21" width="3" height="8" fill="#333"/>
-  <rect x="6" y="21" width="3" height="8" fill="#666"/>
-  <rect x="9" y="21" width="3" height="8" fill="#333"/>
-  <rect x="12" y="21" width="3" height="8" fill="#999"/>
-  <rect x="15" y="21" width="3" height="8" fill="#333"/>
-  <rect x="18" y="21" width="3" height="8" fill="#ef4444"/>
-  <rect x="21" y="21" width="3" height="8" fill="#ef4444"/>
-  <rect x="24" y="21" width="3" height="8" fill="#666"/>
-  <rect x="27" y="21" width="5" height="8" fill="#333"/>
+  <rect x="0" y="21" width="3" height="8" fill="#999999"/>
+  <rect x="3" y="21" width="3" height="8" fill="#323232"/>
+  <rect x="6" y="21" width="3" height="8" fill="#676767"/>
+  <rect x="9" y="21" width="3" height="8" fill="#323232"/>
+  <rect x="12" y="21" width="3" height="8" fill="#999999"/>
+  <rect x="15" y="21" width="3" height="8" fill="#323232"/>
+  <rect x="18" y="21" width="3" height="8" fill="#C74523"/>
+  <rect x="21" y="21" width="3" height="8" fill="#C74523"/>
+  <rect x="24" y="21" width="3" height="8" fill="#676767"/>
+  <rect x="27" y="21" width="5" height="8" fill="#323232"/>
 </svg>

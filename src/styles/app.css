@@ -49,6 +49,13 @@
    * It is also why opennem.css may not contain a bare `rem`: anything left in
    * rem silently shrank by 37.5% the moment this line landed. Use px there.
    */
+  /* One inversion, on purpose. The design system calls `white` the "page
+     background" and `light-warm-grey` the "off-white surface"; here
+     `light-warm-grey` IS the page. This is a single full-bleed chart rather
+     than cards on a page, so there is no surface to distinguish from a
+     background — and the warm off-white is what keeps the stripes' greyscale
+     ramp from reading as a hole punched in the sheet. Open Electricity's own
+     hero bands do the same thing. */
   html {
     @apply bg-light-warm-grey;
     box-sizing: border-box;
@@ -151,6 +158,14 @@
    * `src/lib/components/form-elements/Button.svelte`: black fill, white text,
    * Space Grotesk. (The design-system *page* implies primary buttons are brick
    * red. The component says otherwise, and the component ships.)
+   *
+   * Note it is upstream's *deprecated* layer: the design system marks the house
+   * buttons "kept for compatibility with existing screens" and directs new work
+   * at its shadcn-svelte `ui/button`. That layer is not ported here — it carries
+   * its own cool-neutral oklch variable scale that the brand palette does not
+   * flow into, which the design system itself flags as a seam. This app renders
+   * exactly one button ("Try again", routes/index.tsx), so importing a second
+   * colour system to style it would cost more fidelity than it buys.
    */
   .oe-button {
     @apply font-space text-sm font-medium rounded-md border-[0.1rem] border-solid border-black
