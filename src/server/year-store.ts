@@ -26,10 +26,16 @@ import {
   yearIsDueAt,
 } from '@/server/refresh-schedule';
 import { CF_DTO_VERSION } from '@/shared/config';
-import { parseAESTDateTime } from '@/shared/date-utils';
+import { getAESTDateTimeString, parseAESTDateTime } from '@/shared/date-utils';
 import { mapPool } from '@/shared/map-pool';
-import type { CoalGenerationStatsDTO, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
-import { now, type ZonedDateTime } from '@internationalized/date';
+import { regionKey } from '@/shared/unit-metadata';
+import type {
+  CoalGenerationStatsDTO,
+  UnitMetadata,
+  UnitMetadataDTO,
+  YearCapFacHistoryDTO,
+} from '@/shared/types';
+import { now, parseDate, type ZonedDateTime } from '@internationalized/date';
 
 /**
  * Keys are namespaced by DTO version, so bumping CF_DTO_VERSION gives the new
@@ -47,6 +53,16 @@ export function yearKey(year: number): string {
 
 export function statsKey(): string {
   return `${CF_DTO_VERSION}/stats.json`;
+}
+
+/**
+ * The one metadata blob every year joins against — see @/shared/unit-metadata.
+ *
+ * A single object rather than one per year precisely because its contents do not
+ * vary by year; that is the property the whole split rests on.
+ */
+export function metadataKey(): string {
+  return `${CF_DTO_VERSION}/unit-metadata.json`;
 }
 
 /**
@@ -141,7 +157,7 @@ export async function getStats(): Promise<R2ObjectBody | null> {
 
 export async function putYear(
   year: number,
-  dto: GeneratingUnitCapFacHistoryDTO,
+  dto: YearCapFacHistoryDTO,
 ): Promise<StoreWrite> {
   const b = await bucket();
   // Nowhere to store it, so nothing changed for anyone downstream.
@@ -157,7 +173,7 @@ export async function putStats(dto: CoalGenerationStatsDTO): Promise<StoreWrite>
 
 /** A freshly built year, and what storing it did. */
 export interface YearBuild extends StoreWrite {
-  dto: GeneratingUnitCapFacHistoryDTO;
+  dto: YearCapFacHistoryDTO;
 }
 
 /**
@@ -179,15 +195,204 @@ export async function buildYear(year: number): Promise<YearBuild> {
  * on distinguishing "this year failed" from "this year is empty", and callers
  * must not read a null as a zero.
  */
-export async function readYear(year: number): Promise<GeneratingUnitCapFacHistoryDTO | null> {
+export async function readYear(year: number): Promise<YearCapFacHistoryDTO | null> {
   try {
     const stored = await getYear(year);
-    if (stored) return (await stored.json()) as GeneratingUnitCapFacHistoryDTO;
+    if (stored) return (await stored.json()) as YearCapFacHistoryDTO;
     return (await buildYear(year)).dto;
   } catch (error) {
     console.error(JSON.stringify({
       log: 'year-store:read-failed',
       year,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    return null;
+  }
+}
+
+// ============================================================================
+// The unit metadata blob
+// ============================================================================
+
+/** The stored blob, body unread, for the route that streams it. */
+export async function getUnitMetadataObject(): Promise<R2ObjectBody | null> {
+  const b = await bucket();
+  if (!b) return null;
+  return b.get(metadataKey());
+}
+
+export async function putUnitMetadata(dto: UnitMetadataDTO): Promise<StoreWrite> {
+  const b = await bucket();
+  if (!b) return { changed: false, dataChangedAt: dto.created_at };
+  return putPayload(b, metadataKey(), dto);
+}
+
+/**
+ * Where each region's record begins, derived from the stored years.
+ *
+ * This is the fact that makes the leading edge of the chart a fact rather than
+ * an inference: `leadingBackgroundDays` used to guess it from whichever one or
+ * two years happened to be loaded, which cannot tell "the record starts here"
+ * from "this region has a year-long collection gap here".
+ *
+ * It is derived from the actual daily values, never from `data_first_seen` —
+ * that field reports the start of a unit's later contiguous run, so MM4 claims
+ * 2000-02-28 when data exists from 1999-01-06, and a region minimum built from
+ * it would be quietly late. See the note on EARLIEST_START_DATE in
+ * @/shared/config.
+ *
+ * Cheap despite scanning whole years, because it walks them oldest-first and
+ * stops the moment every region has an answer: the NEM regions all resolve on
+ * the first year and WEM on 2006, so it is ~9 R2 reads. A region that never
+ * reports is left OUT rather than given a guessed date — an absent key makes
+ * the client fall back to the global boundary, which is the honest answer.
+ */
+async function regionFirstDataDays(
+  unitsByDuid: Record<string, UnitMetadata>,
+): Promise<Record<string, { firstDataDay: string }>> {
+  const wanted = new Set(
+    Object.values(unitsByDuid).map((u) => regionKey(u.network, u.region)),
+  );
+  const found: Record<string, { firstDataDay: string }> = {};
+  const scanned: number[] = [];
+
+  for (const year of allDataYears()) {
+    if (wanted.size === 0) break;
+    scanned.push(year);
+
+    const dto = await readYear(year);
+    if (!dto) continue;
+
+    // Day index → date within this year, resolved from the payload's own window
+    // rather than assumed to be 1 January: a year's `history.start` is the
+    // contract, and reading it costs nothing.
+    for (const unit of dto.data) {
+      const meta = unitsByDuid[unit.duid];
+      if (!meta) continue;
+      const region = regionKey(meta.network, meta.region);
+      if (!wanted.has(region)) continue;
+
+      const values = unit.history.data;
+      for (let i = 0; i < values.length; i++) {
+        if (values[i] === null) continue;
+        const day = parseDate(unit.history.start).add({ days: i }).toString();
+        const best = found[region];
+        if (!best || day < best.firstDataDay) found[region] = { firstDataDay: day };
+        break;
+      }
+    }
+
+    for (const region of [...wanted]) {
+      if (found[region]) wanted.delete(region);
+    }
+  }
+
+  console.log(JSON.stringify({
+    log: 'unit-metadata:region-scan',
+    scanned,
+    found: Object.fromEntries(
+      Object.entries(found).map(([r, v]) => [r, v.firstDataDay]),
+    ),
+    unresolved: [...wanted],
+  }));
+
+  return found;
+}
+
+/** A freshly built metadata blob, and what storing it did. */
+export interface UnitMetadataBuild extends StoreWrite {
+  dto: UnitMetadataDTO;
+}
+
+/**
+ * The roster half of the blob, with no region scan and nothing written.
+ *
+ * Everything needed to *render* a unit — capacity, facility, region, lifecycle
+ * dates — from one memoised facilities call and no year reads at all. What it
+ * lacks is `regions`, which costs the ascending scan above.
+ *
+ * That split exists so a cold store still serves a working page. The alternative
+ * on a miss is no metadata, and no metadata means no rows: not a degraded chart,
+ * an empty one. Missing region days are a far smaller thing — the leading edge
+ * of a region that has not started yet falls back to the global record boundary,
+ * so WEM shows pale blue rather than page background for a few years until the
+ * next full build. Wrong in a corner, against wrong everywhere.
+ *
+ * Deliberately NOT stored: a partial blob in R2 would keep being served in
+ * preference to a full one, and its hash would flip-flop against the full
+ * build's, purging every SSR document on alternate ticks.
+ */
+export async function rosterOnlyUnitMetadata(): Promise<UnitMetadataDTO> {
+  return {
+    type: 'unit_metadata',
+    version: CF_DTO_VERSION,
+    created_at: getAESTDateTimeString(),
+    data_type: 'energy',
+    units: 'MW',
+    regions: {},
+    unitsByDuid: await getCapFacDataService().getUnitMetadata(),
+  };
+}
+
+/**
+ * Build the metadata blob and store it.
+ *
+ * Unlike `buildYear` this costs no energy query — just the memoised facilities
+ * roster, plus the bounded region scan above. Run it AFTER the years in a sweep:
+ * the region scan reads them back, so doing it first would date the answer by a
+ * tick.
+ */
+export async function buildUnitMetadata(): Promise<UnitMetadataBuild> {
+  const roster = await rosterOnlyUnitMetadata();
+  const dto: UnitMetadataDTO = {
+    ...roster,
+    regions: await regionFirstDataDays(roster.unitsByDuid),
+  };
+  const write = await putUnitMetadata(dto);
+  return { dto, ...write };
+}
+
+/**
+ * The stored blob, parsed. Never builds — a miss is simply null.
+ *
+ * This is the variant the SSR document uses, and the distinction is the whole
+ * reason there are two. Building the blob means scanning years, and on a cold
+ * bucket those years are not there either, so a self-healing read from a
+ * document render would sit on ~9 OpenElectricity fetches and blow the request
+ * ceiling — on every document, until one of them finished. Returning null
+ * instead renders a chart with no rows, which is honest, cheap, and fixed by the
+ * next cron tick.
+ */
+export async function readStoredUnitMetadata(): Promise<UnitMetadataDTO | null> {
+  try {
+    const stored = await getUnitMetadataObject();
+    return stored ? ((await stored.json()) as UnitMetadataDTO) : null;
+  } catch (error) {
+    console.error(JSON.stringify({
+      log: 'unit-metadata:read-failed',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    return null;
+  }
+}
+
+/**
+ * The metadata blob, parsed, self-healing: R2 first, build on a miss.
+ *
+ * For the paths that can afford to pay — the stats fold, which is already a
+ * ~40 s job on a cold bucket, and the cron. NOT for the document; see above.
+ *
+ * Returns null only when it cannot be produced at all. Callers must NOT read
+ * that as "no units": the fold throws on it rather than publishing zeros.
+ */
+export async function readUnitMetadata(): Promise<UnitMetadataDTO | null> {
+  try {
+    const stored = await readStoredUnitMetadata();
+    if (stored) return stored;
+    return (await buildUnitMetadata()).dto;
+  } catch (error) {
+    console.error(JSON.stringify({
+      log: 'unit-metadata:build-failed',
       error: error instanceof Error ? error.message : String(error),
     }));
     return null;
@@ -283,8 +488,8 @@ export async function yearIsDue(
 
 /** One stored file, as reported to the cache-management page. */
 export interface StoreEntry {
-  /** `year` rows carry a year; the single `stats` row does not. */
-  kind: 'year' | 'stats';
+  /** `year` rows carry a year; the single `stats` and `metadata` rows do not. */
+  kind: 'year' | 'stats' | 'metadata';
   year?: number;
   /** When we last fetched this from OpenElectricity. Null = never built. */
   builtAt: string | null;
@@ -293,7 +498,8 @@ export interface StoreEntry {
   sizeBytes: number | null;
   /**
    * Past twice its freshness window, so earlier cron ticks must have been
-   * failing. Always false for the stats row, which has no per-year tier.
+   * failing. Always false for the stats and metadata rows, which have no
+   * per-year tier.
    */
   stale: boolean;
 }
@@ -320,6 +526,7 @@ export async function storeStatus(
   const years = allDataYears();
   if (!b) {
     return [
+      { kind: 'metadata', builtAt: null, dataChangedAt: null, sizeBytes: null, stale: false },
       ...years.map((year): StoreEntry => ({
         kind: 'year',
         year,
@@ -357,8 +564,18 @@ export async function storeStatus(
     };
   });
 
+  // Metadata first: every year joins against it, so it is what a reader of the
+  // table should check when the whole store looks wrong.
+  const metadataHead = await b.head(metadataKey());
   const statsHead = await b.head(statsKey());
   return [
+    {
+      kind: 'metadata',
+      builtAt: metadataHead?.customMetadata?.builtAt ?? null,
+      dataChangedAt: metadataHead?.customMetadata?.dataChangedAt ?? null,
+      sizeBytes: metadataHead?.size ?? null,
+      stale: false,
+    },
     ...yearEntries,
     {
       kind: 'stats',

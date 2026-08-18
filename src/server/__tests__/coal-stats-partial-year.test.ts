@@ -13,7 +13,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { computeCoalStats, type YearReader } from '@/server/coal-stats-service';
-import type { GeneratingUnitCapFacHistoryDTO, GeneratingUnitDTO } from '@/shared/types';
+import type { YearCapFacHistoryDTO, YearUnitDTO } from '@/shared/types';
+import { makeUnitMetadata } from './helpers/metadata';
 
 const DAYS_1998 = 365;
 const DAYS_1999 = 365;
@@ -24,22 +25,9 @@ const DEC_24 = 357;
 /** 0-based day-of-year of 19 January. */
 const JAN_19 = 18;
 
-function unit(year: number, data: (number | null)[]): GeneratingUnitDTO {
+function unit(year: number, data: (number | null)[]): YearUnitDTO {
   return {
-    network: 'nem',
-    region: 'NSW1',
-    data_type: 'capacity_factor',
-    units: '%',
-    capacity: 660,
     duid: 'BW01',
-    facility_code: 'BAYSW',
-    facility_name: 'Bayswater',
-    fueltech: 'coal_black',
-    status: 'operating',
-    // Commissioned long before the record starts — this is what makes
-    // lifecycleBounds clamp to index 0 on the client, and what makes every
-    // pre-record null on the server a candidate for an interior gap.
-    commenced: '1985-01-01',
     history: {
       start: `${year}-01-01`,
       last: `${year}-12-31`,
@@ -49,7 +37,7 @@ function unit(year: number, data: (number | null)[]): GeneratingUnitDTO {
   };
 }
 
-function payload(year: number, data: (number | null)[]): GeneratingUnitCapFacHistoryDTO {
+function payload(year: number, data: (number | null)[]): YearCapFacHistoryDTO {
   return {
     type: 'capacity_factors',
     version: '1.0',
@@ -57,6 +45,15 @@ function payload(year: number, data: (number | null)[]): GeneratingUnitCapFacHis
     data: [unit(year, data)],
   };
 }
+
+// Commissioned long before the record starts — this is what makes
+// lifecycleBounds clamp to index 0 on the client, and what makes every
+// pre-record null on the server a candidate for an interior gap.
+const METADATA = makeUnitMetadata({
+  BW01: { facility_code: 'BAYSW', facility_name: 'Bayswater', commenced: '1985-01-01' },
+});
+
+const readMetadata = async () => METADATA;
 
 /** Reads the two years under test; every other year is empty. */
 function reader(d1998: (number | null)[], d1999: (number | null)[]): YearReader {
@@ -80,7 +77,7 @@ describe('computeCoalStats across the partial 1998 year', () => {
     const d1998 = withRun(DAYS_1998, DEC_7, DAYS_1998 - DEC_7);
     const d1999 = withRun(DAYS_1999, 0, DAYS_1999);
 
-    const stats = await computeCoalStats(reader(d1998, d1999));
+    const stats = await computeCoalStats(reader(d1998, d1999), readMetadata);
 
     // Jan–Nov 1998 are null in the payload but sit at negative global indices,
     // so they are neither gaps nor generation.
@@ -93,7 +90,7 @@ describe('computeCoalStats across the partial 1998 year', () => {
     const d1998 = withRun(DAYS_1998, DEC_7, DEC_24 - DEC_7);
     const d1999 = withRun(DAYS_1999, JAN_19 + 1, DAYS_1999 - JAN_19 - 1);
 
-    const stats = await computeCoalStats(reader(d1998, d1999));
+    const stats = await computeCoalStats(reader(d1998, d1999), readMetadata);
     const gaps = stats.dataQuality.gaps.filter((g) => g.duid === 'BW01');
 
     expect(gaps).toHaveLength(1);
@@ -110,7 +107,7 @@ describe('computeCoalStats across the partial 1998 year', () => {
     const d1998 = withRun(DAYS_1998, DEC_7 + 14, DAYS_1998 - DEC_7 - 14);
     const d1999 = withRun(DAYS_1999, 0, DAYS_1999);
 
-    const stats = await computeCoalStats(reader(d1998, d1999));
+    const stats = await computeCoalStats(reader(d1998, d1999), readMetadata);
 
     expect(stats.dataQuality.gaps).toEqual([]);
     for (const gap of stats.dataQuality.gaps) {
@@ -120,7 +117,10 @@ describe('computeCoalStats across the partial 1998 year', () => {
 
   it('counts 1998 as a source year', async () => {
     const d = withRun(DAYS_1998, DEC_7, DAYS_1998 - DEC_7);
-    const stats = await computeCoalStats(reader(d, withRun(DAYS_1999, 0, DAYS_1999)));
+    const stats = await computeCoalStats(
+      reader(d, withRun(DAYS_1999, 0, DAYS_1999)),
+      readMetadata,
+    );
 
     expect(stats.sources!.years[0].year).toBe(1998);
   });

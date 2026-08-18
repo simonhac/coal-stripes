@@ -1,6 +1,7 @@
 import { CapFacDataService } from '@/server/cap-fac-data-service';
 import { setupTestLogger } from '../test-helpers';
 import { cleanupRequestLogger } from '@/server/request-logger';
+import { hydrateYear } from '@/shared/unit-metadata';
 
 describe('Unit Sorting Integration Test', () => {
   let coalDataService: CapFacDataService;
@@ -28,7 +29,10 @@ describe('Unit Sorting Integration Test', () => {
     console.log('\n🔄 Testing unit sorting with REAL API...');
     
     // Fetch a full year to get all units
-    const result = await coalDataService.getCapacityFactors(2023);
+    const result = hydrateYear(
+      await coalDataService.getCapacityFactors(2023),
+      await coalDataService.getUnitMetadata(),
+    );
     
     expect(result.data).toBeDefined();
     expect(result.data.length).toBeGreaterThan(40); // Should have many coal units

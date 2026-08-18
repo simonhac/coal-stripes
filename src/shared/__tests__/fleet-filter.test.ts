@@ -12,8 +12,6 @@ function unit(over: Partial<GeneratingUnitDTO> = {}): GeneratingUnitDTO {
   return {
     network: 'nem',
     region: 'NSW1',
-    data_type: 'energy',
-    units: 'MW',
     capacity: 700,
     duid: 'U1',
     facility_code: 'FAC',

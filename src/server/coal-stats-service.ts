@@ -28,12 +28,13 @@ import type {
   CoalGenerationStatsDTO,
   DataGap,
   GapAdjustment,
-  GeneratingUnitCapFacHistoryDTO,
   GranularityStat,
   PeriodCoverage,
   StatRow,
   StatsSources,
   StatValue,
+  UnitMetadataDTO,
+  YearCapFacHistoryDTO,
 } from '@/shared/types';
 import { DATE_BOUNDARIES } from '@/shared/config';
 import { getDateBoundaries } from '@/shared/date-boundaries';
@@ -41,7 +42,8 @@ import { getAESTDateTimeString, getDaysBetween, getQuarter } from '@/shared/date
 import { formatPeriodLabel, type Granularity } from '@/shared/energy-format';
 import { currentDataYear, earliestDataYear, yearRange } from '@/server/data-years';
 import { mapPool } from '@/shared/map-pool';
-import { readYear } from '@/server/year-store';
+import { hydrateYear, regionKey } from '@/shared/unit-metadata';
+import { readUnitMetadata, readYear } from '@/server/year-store';
 
 const STATS_VERSION = '1.0';
 
@@ -94,7 +96,19 @@ interface RowAccum {
  *
  * Injectable so tests can drive the fold without a bucket or a network.
  */
-export type YearReader = (year: number) => Promise<GeneratingUnitCapFacHistoryDTO | null>;
+export type YearReader = (year: number) => Promise<YearCapFacHistoryDTO | null>;
+
+/**
+ * How the unit metadata is obtained — the other half of every year payload.
+ *
+ * The fold reads `capacity`, `region`, `network` and `foldedInto`, none of which
+ * are in a year file any more, so this is not optional garnish: without it there
+ * is nothing to fold. Hence computeCoalStats THROWS on a null rather than
+ * carrying on, because carrying on would mean reporting zero generation for a
+ * fleet that generated plenty — precisely the null-read-as-zero mistake the rest
+ * of this file exists to avoid.
+ */
+export type UnitMetadataReader = () => Promise<UnitMetadataDTO | null>;
 
 /**
  * Null days strictly between a series' first and last reading — the same
@@ -195,6 +209,7 @@ function buildAdjustments(
 
 export async function computeCoalStats(
   read: YearReader = readYear,
+  readMetadata: UnitMetadataReader = readUnitMetadata,
 ): Promise<CoalGenerationStatsDTO> {
   const bounds = getDateBoundaries();
   const latestDataDay = bounds.latestDataDay;
@@ -214,7 +229,19 @@ export async function computeCoalStats(
 
   // 1. Fetch every year (bounded concurrency; cached upstream) and assemble each
   //    unit's whole-of-history daily series.
-  const dtos = await mapPool(years, 5, read);
+  //
+  //    The metadata is fetched FIRST and its absence is fatal: a year file
+  //    carries only DUIDs and values now, so without the join there is no
+  //    capacity to multiply by and no region to attribute to. Folding on
+  //    regardless would publish zeros for a fleet that generated plenty.
+  const metadata = await readMetadata();
+  if (!metadata) {
+    throw new Error('coal-stats: unit metadata unavailable; refusing to fold');
+  }
+
+  const dtos = (await mapPool(years, 5, read)).map((dto) =>
+    dto ? hydrateYear(dto, metadata.unitsByDuid) : null,
+  );
 
   // Record where the data came from. Each year's payload carries its own
   // `created_at` — when it was last built from OpenElectricity — which survives
@@ -274,7 +301,7 @@ export async function computeCoalStats(
         suppressedDuids.add(u.duid);
       }
 
-      const region = u.network === 'wem' ? 'WEM' : (u.region ?? 'UNKNOWN');
+      const region = regionKey(u.network, u.region);
       let series = units.get(u.duid);
       if (!series) {
         series = {
@@ -413,7 +440,7 @@ export async function computeCoalStats(
  */
 function summariseSources(
   years: number[],
-  dtos: (GeneratingUnitCapFacHistoryDTO | null)[],
+  dtos: ({ created_at: string } | null)[],
 ): StatsSources {
   const sourceYears = years.map((year, i) => ({
     year,

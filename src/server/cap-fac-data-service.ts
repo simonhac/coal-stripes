@@ -1,8 +1,9 @@
 import { OEClientQueued } from './queued-oeclient';
 import {
-  GeneratingUnitCapFacHistoryDTO,
-  GeneratingUnitDTO,
-  UnitDateSpecificity
+  UnitDateSpecificity,
+  UnitMetadata,
+  YearCapFacHistoryDTO,
+  YearUnitDTO
 } from '@/shared/types';
 import { CalendarDate, parseDate } from '@internationalized/date';
 import { getAESTDateTimeString, networkDayFromInterval, getTodayAEST } from '@/shared/date-utils';
@@ -170,6 +171,124 @@ interface Facility {
   units: UnitRecord[];
 }
 
+/**
+ * One row of the roster, and the DUIDs whose readings make it up.
+ *
+ * `sources` is the unit itself plus any it supersedes; they are disjoint in
+ * time, so summing them reconstructs one continuous station series across a
+ * metering change. `foldedInto` is set only on the absorbed members, which are
+ * emitted as rows of their own purely so /stats can see their nulls.
+ */
+interface RosterRow {
+  facility: Facility;
+  unit: UnitRecord;
+  sources: UnitRecord[];
+  foldedInto: string | null;
+}
+
+/**
+ * Every row the roster emits, in display order.
+ *
+ * The single definition of *which* rows exist and what each is made of. Both
+ * halves of the payload are built from it — the per-year series here, and the
+ * year-independent metadata in `unitMetadataFor` — because the aggregate /
+ * absorbed-member branch is exactly the place the two would drift apart if they
+ * each walked the facilities themselves.
+ *
+ * Order is load-bearing: facilities by network (NEM before WEM), then region,
+ * then name; within a facility, the real rows by DUID and then that facility's
+ * absorbed members last, so a member never displaces a real row. The client's
+ * buildFacilitiesByRegion reads the roster in this order.
+ */
+function rosterRows(facilities: Facility[]): RosterRow[] {
+  const sortedFacilities = [...facilities].sort((a, b) => {
+    const networkCompare = a.facility_network.localeCompare(b.facility_network);
+    if (networkCompare !== 0) return networkCompare;
+    const regionCompare = (a.facility_region || '').localeCompare(b.facility_region || '');
+    if (regionCompare !== 0) return regionCompare;
+    return a.facility_name.localeCompare(b.facility_name);
+  });
+
+  const rows: RosterRow[] = [];
+
+  for (const facility of sortedFacilities) {
+    const sortedUnits = [...facility.units].sort((a, b) =>
+      a.unit_code.localeCompare(b.unit_code)
+    );
+
+    // Units absorbed into an aggregate DUID (see SUPERSEDED_BY) never get a row
+    // of their own; their readings are folded into the aggregate's.
+    const absorbedBy = new Map<string, UnitRecord[]>();
+    for (const unit of sortedUnits) {
+      const aggregate = SUPERSEDED_BY[unit.unit_code];
+      if (!aggregate) continue;
+      const siblings = absorbedBy.get(aggregate) ?? [];
+      siblings.push(unit);
+      absorbedBy.set(aggregate, siblings);
+    }
+
+    // A row for every roster unit, even one with no data in a given year
+    // (retired units, or years before commissioning) — the fill loop yields an
+    // all-null history that renders as the "no data" pale blue. The `current`
+    // view drops those rows client-side, and that it can recognise them by
+    // their all-null history is exactly why they are emitted unconditionally.
+    // See @/shared/fleet-filter.
+    for (const unit of sortedUnits) {
+      if (SUPERSEDED_BY[unit.unit_code]) continue;
+      rows.push({
+        facility,
+        unit,
+        sources: [unit, ...(absorbedBy.get(unit.unit_code) ?? [])],
+        foldedInto: null,
+      });
+    }
+
+    for (const [aggregate, members] of absorbedBy) {
+      for (const member of members) {
+        rows.push({ facility, unit: member, sources: [member], foldedInto: aggregate });
+      }
+    }
+  }
+
+  return rows;
+}
+
+/**
+ * The year-independent half of a row: everything that does not depend on which
+ * calendar year you asked for.
+ *
+ * All of it comes from the facilities roster rather than from any year's energy
+ * rows, which is what lets one copy stand in for the 29 that used to ride in the
+ * year files. Lifecycle dates span every DUID behind the row: a merged station
+ * has existed since its oldest member was commissioned, not since the aggregate
+ * identifier was registered.
+ */
+function unitMetadataFor(row: RosterRow): UnitMetadata {
+  const { facility, unit, sources, foldedInto } = row;
+  const commissioned = earliestBy(sources, (u) => u.commencement_date);
+
+  return {
+    network: facility.facility_network.toLowerCase(),
+    region: facility.facility_region || undefined,
+    // Registered capacity in MW; can be null (rare for coal). Emitted finite so
+    // the client's row-height maths stay finite. An aggregate is already
+    // registered at the whole station's capacity, so its members add nothing.
+    capacity: unit.unit_capacity ?? 0,
+    facility_code: facility.facility_code,
+    facility_name: facility.facility_name,
+    fueltech: unit.unit_fueltech === 'coal_brown' ? 'coal_brown' : 'coal_black',
+    // The facilities query asks for 'operating' and 'retired' only, so anything
+    // not explicitly retired is operating (the metadata leaves unit_status null
+    // for some units).
+    status: unit.unit_status === 'retired' ? 'retired' : 'operating',
+    commenced: asDate(commissioned?.commencement_date),
+    commenced_specificity: commissioned?.commencement_date_specificity ?? null,
+    first_seen: asDate(earliestBy(sources, (u) => u.unit_first_seen)?.unit_first_seen),
+    last_seen: asDate(latestBy(sources, (u) => u.unit_last_seen)?.unit_last_seen),
+    ...(foldedInto ? { foldedInto } : {}),
+  };
+}
+
 // One daily energy reading for a unit. `energy` is null when there is no data
 // for that day (distinct from 0, which means the unit generated nothing).
 interface EnergyRow {
@@ -271,11 +390,33 @@ export class CapFacDataService {
    * queue created inside the current request. A queue that outlives its request
    * stops ticking on workerd and deadlocks the next one; see queued-oeclient.
    */
-  getCapacityFactors(year: number): Promise<GeneratingUnitCapFacHistoryDTO> {
+  getCapacityFactors(year: number): Promise<YearCapFacHistoryDTO> {
     return withRequestQueue(() => this.buildCapacityFactors(year));
   }
 
-  private async buildCapacityFactors(year: number): Promise<GeneratingUnitCapFacHistoryDTO> {
+  /**
+   * Every unit's year-independent facts, keyed by DUID.
+   *
+   * The other half of what `getCapacityFactors` used to return in each of its 29
+   * payloads. It needs no energy query at all — just the facilities roster,
+   * which is memoised — so it is sub-second where a year is 3-9 s.
+   *
+   * Still wrapped in withRequestQueue for the same reason getCapacityFactors is:
+   * a queue that outlives its request stops ticking on workerd and deadlocks the
+   * next one. See queued-oeclient.
+   */
+  getUnitMetadata(): Promise<Record<string, UnitMetadata>> {
+    return withRequestQueue(async () =>
+      Object.fromEntries(
+        rosterRows(await this.getAllCoalFacilities()).map((row) => [
+          row.unit.unit_code,
+          unitMetadataFor(row),
+        ]),
+      ),
+    );
+  }
+
+  private async buildCapacityFactors(year: number): Promise<YearCapFacHistoryDTO> {
     const startTime = performance.now();
 
     // Always work with full years - no partial years allowed.
@@ -479,249 +620,181 @@ export class CapFacDataService {
   }
 
   /**
-   * Process raw energy data into GeneratingUnitCapFacHistoryDTO format
+   * Process raw energy data into a year payload.
+   *
+   * Only the per-year half — a DUID and its values. Everything year-independent
+   * comes out of `unitMetadataFor` instead and is served once; see
+   * @/shared/unit-metadata for why the payload is split this way and how the two
+   * halves are joined.
    */
   private processGeneratingUnitCapFacHistoryDTO(
     data: EnergyRow[],
     facilities: Facility[],
     requestedStartDate: CalendarDate,
     requestedEndDate: CalendarDate
-  ): GeneratingUnitCapFacHistoryDTO {
+  ): YearCapFacHistoryDTO {
     const startTime = performance.now();
-
-    // Sort facilities by network (NEM before WEM), then region, then name.
-    const sortedFacilities = [...facilities].sort((a, b) => {
-      const networkCompare = a.facility_network.localeCompare(b.facility_network);
-      if (networkCompare !== 0) return networkCompare;
-      const regionCompare = (a.facility_region || '').localeCompare(b.facility_region || '');
-      if (regionCompare !== 0) return regionCompare;
-      return a.facility_name.localeCompare(b.facility_name);
-    });
 
     // "Today" in NEM time — today and future days are always null (unknown).
     const todayBrisbane = getTodayAEST();
-    const coalUnits: GeneratingUnitDTO[] = [];
+    const coalUnits: YearUnitDTO[] = [];
 
-    for (const facility of sortedFacilities) {
-      const sortedUnits = [...facility.units].sort((a, b) =>
-        a.unit_code.localeCompare(b.unit_code)
-      );
+    for (const row of rosterRows(facilities)) {
+      const { facility, unit, sources, foldedInto } = row;
 
-      // Units absorbed into an aggregate DUID (see SUPERSEDED_BY) never get a
-      // row of their own; their readings are folded into the aggregate's.
-      const absorbedBy = new Map<string, UnitRecord[]>();
-      for (const unit of sortedUnits) {
-        const aggregate = SUPERSEDED_BY[unit.unit_code];
-        if (!aggregate) continue;
-        const siblings = absorbedBy.get(aggregate) ?? [];
-        siblings.push(unit);
-        absorbedBy.set(aggregate, siblings);
-      }
-
-      for (const unit of sortedUnits) {
-        if (SUPERSEDED_BY[unit.unit_code]) continue;
-
-        // The DUIDs whose readings make up this row: the unit itself, plus any
-        // it supersedes. They are disjoint in time, so summing them reconstructs
-        // one continuous station series across the metering change.
-        const absorbed = absorbedBy.get(unit.unit_code) ?? [];
-        const sources = [unit, ...absorbed];
-        const sourceCodes = new Set(sources.map((u) => u.unit_code));
-        const unitData = data.filter((row) => sourceCodes.has(row.unit_code));
-        // We emit a row for every roster unit even when it has no data this
-        // year (retired units, or years before it was commissioned) — the fill
-        // loop below yields an all-null history that renders as the "no data"
-        // pale blue. The `current` view drops those rows client-side; that it
-        // can recognise them by their all-null history is exactly why this
-        // emits them unconditionally. See @/shared/fleet-filter.
-
-        // Registered capacity in MW; can be null (rare for coal). Guard the
-        // capacity-factor division so it can't produce Infinity/NaN, and emit a
-        // finite `capacity` so the client's row-height maths stay finite. An
-        // aggregate is already registered at the whole station's capacity, so
-        // the absorbed members add nothing here.
-        const capacity = unit.unit_capacity;
-
-        // Total energy per network-local calendar day across the row's DUIDs —
-        // see energyByDay for the partial-metering rule this applies.
-        const dataByDay = energyByDay(unitData, facility.facility_network);
-
-        // The last day this row has a real reading, used below to tell a hole
-        // the retired-unit fill papers over from the genuine post-shutdown days
-        // after it. Only meaningful within the requested range, which is all the
-        // fill loop can speak to anyway.
-        const lastReading = lastReadingDay(dataByDay);
-
-        // A retired unit is switched off after its last day of data: emit 0
-        // (generated nothing) there rather than null, so the client can tell a
-        // decommissioned unit (red 0%) apart from one with no data yet or a
-        // collection gap (null). `decommissionedAfter` is its last day of data.
-        const decommissionedAfter =
-          unit.unit_status === 'retired' && unit.unit_last_seen
-            ? parseDate(unit.unit_last_seen.slice(0, 10))
-            : null;
-
-        // The market registers a DUID before the machine can generate and
-        // reports a real 0 for every day in between — 178 days for Millmerran 1,
-        // 503 for Millmerran 2. Those zeros say "registered", not "ran and
-        // generated nothing", so they are emitted as null and read as
-        // pre-commission. Only honoured when OpenElectricity knows the date to
-        // the day: a 'year' or 'month' specificity would blank real generation
-        // at the edges. See the exactly-zero guard in the fill loop — a non-zero
-        // reading is never discarded, however early it looks.
-        const commissionedOn =
-          unit.commencement_date_specificity === 'day' && unit.commencement_date
-            ? parseDate(unit.commencement_date.slice(0, 10))
-            : null;
-
-        // Fill the full requested range. Branch precedence matters:
-        //   1. today/future           → null   (unknown; even a long-retired unit
-        //                                        must NOT paint red into the future —
-        //                                        the frontier overlay fades this to
-        //                                        the page background)
-        //   2. a zero before commissioning
-        //                             → null   (the DUID existed, the unit did not)
-        //   3. a real reading         → CF     (a genuine reading always wins, so
-        //                                        generation is never masked by a
-        //                                        synthetic 0 if unit_last_seen lags)
-        //   4. retired & past its end → 0      (decommissioned: red from last
-        //                                        generation up to today)
-        //   5. otherwise              → null   (collection gap / not yet commissioned)
-        // Days branch 4 writes 0 over a day OpenElectricity explicitly returned
-        // as null, BEFORE this row's last real reading — i.e. holes this payload
-        // hides. Days after the last reading are genuinely post-shutdown and are
-        // not counted; nor are days upstream omitted entirely, which carry no
-        // claim either way. Surfaced so /stats can add them back rather than
-        // present the fill as coverage. See GeneratingUnitDTO.suppressedNullDays.
-        let suppressedNullDays = 0;
-
-        const capacityFactors: (number | null)[] = [];
-        let currentDate = requestedStartDate;
-        while (currentDate.compare(requestedEndDate) <= 0) {
-          const key = currentDate.toString();
-          const energy = dataByDay.get(key);
-          const preCommissioningZero =
-            energy === 0 && commissionedOn !== null && currentDate.compare(commissionedOn) < 0;
-          if (currentDate.compare(todayBrisbane) >= 0) {
-            capacityFactors.push(null);
-          } else if (preCommissioningZero) {
-            capacityFactors.push(null);
-          } else if (energy !== undefined && energy !== null && capacity && capacity > 0) {
-            // capacity factor = (energy_MWh / 24h) / registered_capacity * 100.
-            // Kept to 3 decimal places: the stripes only need ~integer precision,
-            // but downstream consumers reconstruct absolute generation as
-            // CF/100 × capacity × 24 (see coal-stats-service), so extra precision
-            // here keeps that reconstruction essentially exact.
-            const capacityFactor = (energy / 24) / capacity * 100;
-            capacityFactors.push(Math.round(capacityFactor * 1000) / 1000);
-          } else if (decommissionedAfter && currentDate.compare(decommissionedAfter) > 0) {
-            if (energy === null && lastReading && currentDate.compare(lastReading) < 0) {
-              suppressedNullDays++;
-            }
-            capacityFactors.push(0);
-          } else {
-            capacityFactors.push(null);
-          }
-          currentDate = currentDate.add({ days: 1 });
-        }
-
-        // Lifecycle dates span every DUID behind the row: a merged station has
-        // existed since its oldest member was commissioned, not since the
-        // aggregate identifier was registered.
-        const commissioned = earliestBy(sources, (u) => u.commencement_date);
-
-        // A row that absorbs members starts at the EARLIEST member's first
-        // reading, so its holes include ones that belong to the members rather
-        // than to it. Carry its own unabsorbed series so the fold can tell the
-        // two apart instead of attributing everything to the aggregate.
-        const selfHistory =
-          absorbed.length > 0
-            ? {
-                start: requestedStartDate.toString(),
-                last: requestedEndDate.toString(),
-                interval: '1d',
-                data: rawCapacityFactors(
-                  energyByDay(
-                    data.filter((row) => row.unit_code === unit.unit_code),
-                    facility.facility_network
-                  ),
-                  capacity,
-                  requestedStartDate,
-                  requestedEndDate,
-                  todayBrisbane
-                )
-              }
-            : undefined;
-
+      // An absorbed member carries a RAW series and nothing else: no
+      // retired-unit 0-fill, no pre-commission blanking, so a null in it means
+      // OpenElectricity had nothing for that day. It exists only so the stats
+      // fold can see the nulls that folding would otherwise hide.
+      if (foldedInto) {
         coalUnits.push({
-          network: facility.facility_network.toLowerCase(),
-          region: facility.facility_region || undefined,
-          data_type: 'energy',
-          units: 'MW',
-          capacity: capacity ?? 0,
           duid: unit.unit_code,
-          facility_code: facility.facility_code,
-          facility_name: facility.facility_name,
-          fueltech: unit.unit_fueltech === 'coal_brown' ? 'coal_brown' : 'coal_black',
-          // The facilities query asks for 'operating' and 'retired' only, so
-          // anything not explicitly retired is operating (the metadata leaves
-          // unit_status null for some units).
-          status: unit.unit_status === 'retired' ? 'retired' : 'operating',
-          commenced: asDate(commissioned?.commencement_date),
-          commenced_specificity: commissioned?.commencement_date_specificity ?? null,
-          first_seen: asDate(earliestBy(sources, (u) => u.unit_first_seen)?.unit_first_seen),
-          last_seen: asDate(latestBy(sources, (u) => u.unit_last_seen)?.unit_last_seen),
           history: {
             start: requestedStartDate.toString(),
             last: requestedEndDate.toString(),
             interval: '1d',
-            data: capacityFactors
-          },
-          ...(selfHistory ? { selfHistory } : {}),
-          ...(suppressedNullDays > 0 ? { suppressedNullDays } : {})
+            data: rawCapacityFactors(
+              energyByDay(
+                data.filter((r) => r.unit_code === unit.unit_code),
+                facility.facility_network
+              ),
+              unit.unit_capacity,
+              requestedStartDate,
+              requestedEndDate,
+              todayBrisbane
+            )
+          }
         });
+        continue;
       }
 
-      // Finally the absorbed members themselves — no row in any fleet view, no
-      // generation (already counted in the absorbing row), and a RAW series so
-      // the fold can see the nulls that folding would otherwise hide. Emitted
-      // last so they never displace a real row in the roster's display order.
-      for (const [aggregate, members] of absorbedBy) {
-        for (const member of members) {
-          coalUnits.push({
-            network: facility.facility_network.toLowerCase(),
-            region: facility.facility_region || undefined,
-            data_type: 'energy',
-            units: 'MW',
-            capacity: member.unit_capacity ?? 0,
-            duid: member.unit_code,
-            facility_code: facility.facility_code,
-            facility_name: facility.facility_name,
-            fueltech: member.unit_fueltech === 'coal_brown' ? 'coal_brown' : 'coal_black',
-            status: member.unit_status === 'retired' ? 'retired' : 'operating',
-            commenced: asDate(member.commencement_date),
-            commenced_specificity: member.commencement_date_specificity ?? null,
-            first_seen: asDate(member.unit_first_seen),
-            last_seen: asDate(member.unit_last_seen),
-            foldedInto: aggregate,
-            history: {
+      const sourceCodes = new Set(sources.map((u) => u.unit_code));
+      const unitData = data.filter((r) => sourceCodes.has(r.unit_code));
+      const absorbed = sources.slice(1);
+
+      // Registered capacity in MW; can be null (rare for coal). Guard the
+      // capacity-factor division so it can't produce Infinity/NaN. An
+      // aggregate is already registered at the whole station's capacity, so
+      // the absorbed members add nothing here.
+      const capacity = unit.unit_capacity;
+
+      // Total energy per network-local calendar day across the row's DUIDs —
+      // see energyByDay for the partial-metering rule this applies.
+      const dataByDay = energyByDay(unitData, facility.facility_network);
+
+      // The last day this row has a real reading, used below to tell a hole
+      // the retired-unit fill papers over from the genuine post-shutdown days
+      // after it. Only meaningful within the requested range, which is all the
+      // fill loop can speak to anyway.
+      const lastReading = lastReadingDay(dataByDay);
+
+      // A retired unit is switched off after its last day of data: emit 0
+      // (generated nothing) there rather than null, so the client can tell a
+      // decommissioned unit (red 0%) apart from one with no data yet or a
+      // collection gap (null). `decommissionedAfter` is its last day of data.
+      const decommissionedAfter =
+        unit.unit_status === 'retired' && unit.unit_last_seen
+          ? parseDate(unit.unit_last_seen.slice(0, 10))
+          : null;
+
+      // The market registers a DUID before the machine can generate and
+      // reports a real 0 for every day in between — 178 days for Millmerran 1,
+      // 503 for Millmerran 2. Those zeros say "registered", not "ran and
+      // generated nothing", so they are emitted as null and read as
+      // pre-commission. Only honoured when OpenElectricity knows the date to
+      // the day: a 'year' or 'month' specificity would blank real generation
+      // at the edges. See the exactly-zero guard in the fill loop — a non-zero
+      // reading is never discarded, however early it looks.
+      const commissionedOn =
+        unit.commencement_date_specificity === 'day' && unit.commencement_date
+          ? parseDate(unit.commencement_date.slice(0, 10))
+          : null;
+
+      // Fill the full requested range. Branch precedence matters:
+      //   1. today/future           → null   (unknown; even a long-retired unit
+      //                                        must NOT paint red into the future —
+      //                                        the frontier overlay fades this to
+      //                                        the page background)
+      //   2. a zero before commissioning
+      //                             → null   (the DUID existed, the unit did not)
+      //   3. a real reading         → CF     (a genuine reading always wins, so
+      //                                        generation is never masked by a
+      //                                        synthetic 0 if unit_last_seen lags)
+      //   4. retired & past its end → 0      (decommissioned: red from last
+      //                                        generation up to today)
+      //   5. otherwise              → null   (collection gap / not yet commissioned)
+      // Days branch 4 writes 0 over a day OpenElectricity explicitly returned
+      // as null, BEFORE this row's last real reading — i.e. holes this payload
+      // hides. Days after the last reading are genuinely post-shutdown and are
+      // not counted; nor are days upstream omitted entirely, which carry no
+      // claim either way. Surfaced so /stats can add them back rather than
+      // present the fill as coverage. See YearUnitDTO.suppressedNullDays.
+      let suppressedNullDays = 0;
+
+      const capacityFactors: (number | null)[] = [];
+      let currentDate = requestedStartDate;
+      while (currentDate.compare(requestedEndDate) <= 0) {
+        const key = currentDate.toString();
+        const energy = dataByDay.get(key);
+        const preCommissioningZero =
+          energy === 0 && commissionedOn !== null && currentDate.compare(commissionedOn) < 0;
+        if (currentDate.compare(todayBrisbane) >= 0) {
+          capacityFactors.push(null);
+        } else if (preCommissioningZero) {
+          capacityFactors.push(null);
+        } else if (energy !== undefined && energy !== null && capacity && capacity > 0) {
+          // capacity factor = (energy_MWh / 24h) / registered_capacity * 100.
+          // Kept to 3 decimal places: the stripes only need ~integer precision,
+          // but downstream consumers reconstruct absolute generation as
+          // CF/100 × capacity × 24 (see coal-stats-service), so extra precision
+          // here keeps that reconstruction essentially exact.
+          const capacityFactor = (energy / 24) / capacity * 100;
+          capacityFactors.push(Math.round(capacityFactor * 1000) / 1000);
+        } else if (decommissionedAfter && currentDate.compare(decommissionedAfter) > 0) {
+          if (energy === null && lastReading && currentDate.compare(lastReading) < 0) {
+            suppressedNullDays++;
+          }
+          capacityFactors.push(0);
+        } else {
+          capacityFactors.push(null);
+        }
+        currentDate = currentDate.add({ days: 1 });
+      }
+
+      // A row that absorbs members starts at the EARLIEST member's first
+      // reading, so its holes include ones that belong to the members rather
+      // than to it. Carry its own unabsorbed series so the fold can tell the
+      // two apart instead of attributing everything to the aggregate.
+      const selfHistory =
+        absorbed.length > 0
+          ? {
               start: requestedStartDate.toString(),
               last: requestedEndDate.toString(),
               interval: '1d',
               data: rawCapacityFactors(
                 energyByDay(
-                  data.filter((row) => row.unit_code === member.unit_code),
+                  data.filter((row) => row.unit_code === unit.unit_code),
                   facility.facility_network
                 ),
-                member.unit_capacity,
+                capacity,
                 requestedStartDate,
                 requestedEndDate,
                 todayBrisbane
               )
             }
-          });
-        }
-      }
+          : undefined;
+
+      coalUnits.push({
+        duid: unit.unit_code,
+        history: {
+          start: requestedStartDate.toString(),
+          last: requestedEndDate.toString(),
+          interval: '1d',
+          data: capacityFactors
+        },
+        ...(selfHistory ? { selfHistory } : {}),
+        ...(suppressedNullDays > 0 ? { suppressedNullDays } : {})
+      });
     }
 
     debug(`   Processing completed in ${Math.round(performance.now() - startTime)}ms`);

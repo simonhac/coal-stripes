@@ -29,8 +29,6 @@ export function makeDTO(units: UnitSpec[], year = 2023): GeneratingUnitCapFacHis
     data: units.map(unit => ({
       network: unit.network ?? 'NEM',
       region: unit.region,
-      data_type: 'capacity_factor',
-      units: 'MW',
       capacity: unit.capacity,
       duid: unit.duid,
       facility_code: unit.facilityCode,

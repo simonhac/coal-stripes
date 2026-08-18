@@ -2,6 +2,7 @@ import { CapFacDataService } from '@/server/cap-fac-data-service';
 import { isLeapYear, getDayIndex, getTodayAEST } from '@/shared/date-utils';
 import { setupTestLogger } from '../test-helpers';
 import { cleanupRequestLogger } from '@/server/request-logger';
+import { hydrateYear } from '@/shared/unit-metadata';
 
 describe('Real API Year-based Tests', () => {
   let coalDataService: CapFacDataService;
@@ -31,7 +32,10 @@ describe('Real API Year-based Tests', () => {
   test('should fetch full year 2023 from real API', async () => {
     console.log('\n🌐 Testing full year 2023 with REAL API...');
     
-    const result = await coalDataService.getCapacityFactors(2023);
+    const result = hydrateYear(
+      await coalDataService.getCapacityFactors(2023),
+      await coalDataService.getUnitMetadata(),
+    );
     
     console.log(`📊 Result: ${result.data.length} units with ${result.data[0]?.history.data.length} days each`);
     console.log(`📊 Date range: ${result.data[0]?.history.start} → ${result.data[0]?.history.last}`);
@@ -54,7 +58,10 @@ describe('Real API Year-based Tests', () => {
   test('should fetch leap year 2024 in a single request from real API', async () => {
     console.log('\n🌐 Testing leap year 2024 with REAL API...');
     
-    const result = await coalDataService.getCapacityFactors(2024);
+    const result = hydrateYear(
+      await coalDataService.getCapacityFactors(2024),
+      await coalDataService.getUnitMetadata(),
+    );
     
     console.log(`📊 Result: ${result.data.length} units with ${result.data[0]?.history.data.length} days each`);
     console.log(`📊 Date range: ${result.data[0]?.history.start} → ${result.data[0]?.history.last}`);
@@ -75,7 +82,10 @@ describe('Real API Year-based Tests', () => {
     const currentYear = getTodayAEST().year;
     console.log(`\n🌐 Testing current year ${currentYear} with REAL API...`);
     
-    const result = await coalDataService.getCapacityFactors(currentYear);
+    const result = hydrateYear(
+      await coalDataService.getCapacityFactors(currentYear),
+      await coalDataService.getUnitMetadata(),
+    );
     
     console.log(`📊 Result: ${result.data.length} units with ${result.data[0]?.history.data.length} days each`);
     console.log(`📊 Date range: ${result.data[0]?.history.start} → ${result.data[0]?.history.last}`);
@@ -141,7 +151,10 @@ describe('Real API Year-based Tests', () => {
     console.log('\n🌐 Validating data structure with REAL API...');
     
     // Fetch a full year to get all the units
-    const result = await coalDataService.getCapacityFactors(2023);
+    const result = hydrateYear(
+      await coalDataService.getCapacityFactors(2023),
+      await coalDataService.getUnitMetadata(),
+    );
     
     // Check unit structure
     expect(result.data).toBeDefined();
@@ -197,13 +210,19 @@ describe('Real API Year-based Tests', () => {
     try {
       // First request - will fetch facilities from API
       const start1 = Date.now();
-      const result1 = await freshService.getCapacityFactors(2022);
+      const result1 = hydrateYear(
+      await freshService.getCapacityFactors(2022),
+      await freshService.getUnitMetadata(),
+    );
       const time1 = Date.now() - start1;
       console.log(`⏱️  First request took ${time1}ms (includes facilities API call)`);
       
       // Second request for different year - should use cached facilities
       const start2 = Date.now();
-      const result2 = await freshService.getCapacityFactors(2023);
+      const result2 = hydrateYear(
+      await freshService.getCapacityFactors(2023),
+      await freshService.getUnitMetadata(),
+    );
       const time2 = Date.now() - start2;
       console.log(`⏱️  Second request took ${time2}ms (uses cached facilities)`);
       

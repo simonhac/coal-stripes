@@ -2,7 +2,8 @@ import { GeneratingUnitCapFacHistoryDTO, GeneratingUnitDTO } from '@/shared/type
 import { FacilityYearTile } from './facility-year-tile';
 import { createFacilitiesFromUnits } from './facility-factory';
 import { CalendarDate, startOfMonth, endOfMonth } from '@internationalized/date';
-import { getDayIndex, getDaysBetween } from '@/shared/date-utils';
+import { getDateFromIndex, getDayIndex, getDaysBetween } from '@/shared/date-utils';
+import { regionKey } from '@/shared/unit-metadata';
 import { tileTimingRecorder } from './tile-timing-recorder';
 
 export interface CapFacYear {
@@ -18,11 +19,16 @@ export interface CapFacYear {
   daysInYear: number;
   // Per-region 0-based day-of-year of the FIRST and LAST day any unit in that
   // region has actual (non-null) data; -1 if the region has no data that year.
-  // Trailing days after `last` are that region's "no data" frontier; the pair
-  // also lets us tell whether a region has any data within a visible window (see
-  // regionHasDataInWindow). Keyed the same as regionCapacityFactors (WEM units →
-  // 'WEM', else unit.region). Per-region, not global, because WEM and the NEM
-  // regions are separate data feeds with different reporting spans.
+  // Keyed the same as regionCapacityFactors. Per-region, not global, because WEM
+  // and the NEM regions are separate data feeds with different reporting spans.
+  //
+  // These answer "is there data in the visible window?" (regionHasDataInWindow)
+  // and nothing else. They must NOT be used to decide where a region's record
+  // BEGINS — that is a whole-of-history fact carried in the metadata blob
+  // (regionFirstDataDay in @/client/unit-metadata-inline), because a loaded
+  // year's first data day cannot tell the start of the record from a year-long
+  // hole in the middle of one. Two different questions; see the note on
+  // regionHasDataInWindow.
   regionFirstDataDayIndex: Map<string, number>;
   regionLastDataDayIndex: Map<string, number>;
   // Facility codes in each region, in the order they appear in the payload.
@@ -33,11 +39,14 @@ export interface CapFacYear {
 }
 
 /**
- * The region a unit belongs to, as every map in this file keys it: WEM units are
- * their own region, since WEM and the NEM regions are separate data feeds.
+ * The region a unit belongs to, as every map in this file keys it.
+ *
+ * Delegates to the shared definition so the client, the server-side stats fold
+ * and the metadata blob's `regions` map cannot key the same unit differently —
+ * which matters now that `regionFirstDataDay` looks a region up by this key.
  */
 export function regionKeyOf(unit: GeneratingUnitDTO): string {
-  return unit.network === 'WEM' ? 'WEM' : (unit.region || 'UNKNOWN');
+  return regionKey(unit.network, unit.region);
 }
 
 /** Facility codes per region, deduped, in payload order. */
@@ -80,27 +89,52 @@ function buildRegionDataDayBounds(units: GeneratingUnitDTO[]): {
       }
     }
     if (unitFirst >= 0) {
-      const pf = first.get(region);
-      if (pf === undefined || pf < 0 || unitFirst < pf) first.set(region, unitFirst);
+      const previousFirst = first.get(region);
+      if (previousFirst === undefined || previousFirst < 0 || unitFirst < previousFirst) {
+        first.set(region, unitFirst);
+      }
     } else if (!first.has(region)) {
       first.set(region, -1);
     }
-    const pl = last.get(region);
-    if (pl === undefined || unitLast > pl) last.set(region, unitLast);
+    const previousLast = last.get(region);
+    if (previousLast === undefined || unitLast > previousLast) last.set(region, unitLast);
   }
   return { first, last };
 }
 
+/** Just the per-year bounds regionHasDataInWindow reads, so it needs no tiles. */
+export interface RegionDataDayBounds {
+  regionFirstDataDayIndex: Map<string, number>;
+  regionLastDataDayIndex: Map<string, number>;
+}
+
 /**
- * Whether a region has any actual data within the visible day window. The
- * window spans [startDayIdx, end-of-startYear] in the start year and
+ * Whether a region has any actual data within the visible day window.
+ *
+ * The window spans [startDayIdx, end-of-startYear] in the start year and
  * [0, endDayIdx] in the end year (a single year when they coincide). Used to
- * fade a region that has no data at all across the view to the page background,
+ * fade a region with no data at all across the view to the page background,
  * rather than the pale-blue "no data" colour reserved for interior gaps.
+ *
+ * BOTH halves are positional, and that is the whole content of this function.
+ * Data lands in the visible TAIL of the start year only if that year's last data
+ * day reaches it, and in the visible HEAD of the end year only if that year's
+ * first data day falls inside it. Dropping either bound to a mere "does this
+ * year have data anywhere" turns a region that has not started yet into a solid
+ * year of pale blue the instant the window touches the year it begins in:
+ * stepping from a window ending 31 Dec 2005 to one ending 1 Jan 2006 did exactly
+ * that to WEM, whose coal record starts on 20 September 2006.
+ *
+ * Note what this is NOT. It answers "is there data in this window", never "where
+ * does the record begin" — those look similar and are not, because a first data
+ * day inside one loaded year cannot tell a commissioning from a year-long
+ * collection gap. The record's start is a fact from the metadata blob, and
+ * `leadingBackgroundDays` is what consumes it. Keeping the two apart is what
+ * makes a genuine hole stay blue while an unstarted record fades out.
  */
 export function regionHasDataInWindow(
-  startData: CapFacYear | undefined,
-  endData: CapFacYear | undefined,
+  startData: RegionDataDayBounds | undefined,
+  endData: RegionDataDayBounds | undefined,
   regionCode: string,
   startDayIdx: number,
   endDayIdx: number,
@@ -108,14 +142,13 @@ export function regionHasDataInWindow(
 ): boolean {
   if (sameYear) {
     if (!startData) return false;
-    const first = startData.regionFirstDataDayIndex.get(regionCode) ?? -1;
     const last = startData.regionLastDataDayIndex.get(regionCode) ?? -1;
-    return last >= 0 && last >= startDayIdx && first <= endDayIdx;
+    return last >= startDayIdx;
   }
   // Start year: data lands in the visible tail if its last data day reaches it.
   if (startData) {
     const last = startData.regionLastDataDayIndex.get(regionCode) ?? -1;
-    if (last >= 0 && last >= startDayIdx) return true;
+    if (last >= startDayIdx) return true;
   }
   // End year: data lands in the visible head if its first data day is within it.
   if (endData) {
@@ -126,6 +159,32 @@ export function regionHasDataInWindow(
 }
 
 /**
+ * Where a region's record appears to begin, judged from one loaded year alone.
+ *
+ * The stand-in for the metadata blob's `regions` entry, used ONLY when the blob
+ * has no answer — a cold store, or the window after a deploy before the cron has
+ * scanned. It is what this boundary was before the fact existed, and it is
+ * correct for the case that matters (WEM: every year before 2006 is wholly
+ * empty). What it cannot do is tell a commissioning from a year-long collection
+ * gap, which is why the fact supersedes it whenever there is one.
+ *
+ * Deliberately NOT the minimum of the units' `first_seen` from the blob, which
+ * is available for free and gives the right answer today. That field reports the
+ * start of a unit's later contiguous run, so it can only ever be too LATE — and
+ * too late here means painting page background over real generation, i.e.
+ * hiding data. An inference drawn from actual values cannot do that: it lands on
+ * a day that genuinely has data, so nothing before it is being concealed.
+ */
+export function inferredRegionStart(
+  year: number,
+  data: RegionDataDayBounds | undefined,
+  regionCode: string,
+): CalendarDate | null {
+  const index = data?.regionFirstDataDayIndex.get(regionCode) ?? -1;
+  return index < 0 ? null : getDateFromIndex(year, index);
+}
+
+/**
  * How many leading days of a tile lie before the record begins, and so should be
  * painted the page background rather than left as the pale blue "no data".
  *
@@ -133,20 +192,27 @@ export function regionHasDataInWindow(
  *
  *   • `globalEarliest` — the first day of the whole record (1998-12-07).
  *   • `regionStart` — the first day THIS region has data, which for WEM is
- *     2006-09-20, seven years later. Null when neither loaded year has any data
- *     for the region, in which case the caller's `regionHasDataInWindow` check
- *     is what blanks the row.
+ *     2006-09-20, seven years later. Null when the metadata blob has no answer
+ *     for the region, in which case only the global boundary applies.
  *
  * The region bound is the one that was missing, and its absence was visible: a
- * window reaching back into 2005 showed WEM as page background only while
- * `regionHasDataInWindow` was false. The moment ONE day of WEM data touched the
- * right-hand edge that flag flipped, the whole-row fill stopped, and ~a year of
- * days became pale blue — a hole in the record where there was simply no record
- * yet. Measured on 2005-10-07 → 2006-10-06: 348 of 365 days flipped.
+ * window reaching back into 2005 showed WEM as page background only while a
+ * whole-row "this region is empty" check held. The moment ONE day of WEM data
+ * touched the right-hand edge that check flipped, the fill stopped, and ~a year
+ * of days became pale blue — a hole in the record where there was simply no
+ * record yet. Measured on 2005-10-07 → 2006-10-06: 348 of 365 days flipped.
  *
- * Kept here beside `regionHasDataInWindow` because they answer the two halves of
- * one question, and CapFacXAxis derives its month-strip fade the same way — the
- * axis and the stripes above it have to agree on where a region's record starts.
+ * `regionStart` is now a FACT rather than an inference. It used to be read off
+ * whichever one or two year payloads happened to be loaded, which is correct for
+ * WEM (every year before 2006 is wholly empty) but cannot in general tell "the
+ * record starts here" from "this region has a year-long collection gap here" —
+ * the same limitation `frontierDateFor` in CompositeTile guards against on the
+ * trailing edge by refusing to trust any year but `latestDataYear`. It is
+ * derived server-side by scanning the stored years and shipped in the metadata
+ * blob; see regionFirstDataDays in @/server/year-store.
+ *
+ * CapFacXAxis derives its month-strip fade from the same number — the axis and
+ * the stripes above it have to agree on where a region's record starts.
  */
 export function leadingBackgroundDays(
   windowStart: CalendarDate,

@@ -11,8 +11,6 @@ describe('FacilityYearTile', () => {
   const mockUnit = (duid: string, capacity: number, data: (number | null)[]): GeneratingUnitDTO => ({
     network: 'NEM',
     region: 'NSW1',
-    data_type: 'capacity_factor',
-    units: 'MW',
     capacity,
     duid,
     facility_code: 'TESTFAC',

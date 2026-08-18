@@ -1,7 +1,9 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query';
-import { FleetMode, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
+import { FleetMode, GeneratingUnitCapFacHistoryDTO, YearCapFacHistoryDTO } from '@/shared/types';
 import { CapFacYear, createCapFacYear } from './cap-fac-year';
 import { filterFleet } from '@/shared/fleet-filter';
+import { hydrateYear } from '@/shared/unit-metadata';
+import { readInlineUnitMetadata } from './unit-metadata-inline';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getTodayAEST } from '@/shared/date-utils';
 import { yearCachePolicy } from '@/shared/config';
@@ -33,6 +35,7 @@ export function isValidYear(year: number): boolean {
 
 /** A year's payload, with its size measured once rather than on every read. */
 export interface YearPayload {
+  /** Joined against the inlined unit metadata — see @/shared/unit-metadata. */
   data: GeneratingUnitCapFacHistoryDTO;
   /**
    * Approximate bytes of `data`, for the performance overlay. Taken here
@@ -40,6 +43,10 @@ export interface YearPayload {
    * polls on a timer and must not re-stringify ~29 years a tick. It is a proxy:
    * JSON.stringify().length counts UTF-16 code units, not bytes, and ignores
    * in-memory object overhead.
+   *
+   * Measured on the WIRE text, before the join: it answers "what did this cost
+   * to download?", and the metadata was not downloaded here — it arrived in the
+   * document.
    */
   sizeBytes: number;
 }
@@ -68,7 +75,16 @@ export function yearDataQueryOptions(year: number) {
       }
 
       const text = await response.text();
-      return { data: JSON.parse(text), sizeBytes: text.length };
+      // Joined here, at the one seam where a payload is known to be new, so
+      // everything downstream — filterFleet, createCapFacYear, the facility
+      // factory, the tiles, cap-fac-stats — keeps seeing a complete unit and
+      // needs no changes at all.
+      const stored = JSON.parse(text) as YearCapFacHistoryDTO;
+      const metadata = readInlineUnitMetadata(CF_DTO_VERSION);
+      return {
+        data: hydrateYear(stored, metadata?.unitsByDuid),
+        sizeBytes: text.length,
+      };
     },
     // NEM data is subject to revision (January can revise the December just
     // past), so even past years go stale — on the same tiers the server

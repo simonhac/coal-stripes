@@ -33,11 +33,14 @@ import { isAuthorisedPurgeRequest } from '@/server/auth';
 import { COAL_STATS_TAG, NO_STORE, yearTag } from '@/server/cache-headers';
 import { computeCoalStats } from '@/server/coal-stats-service';
 import { currentDataYear, earliestDataYear } from '@/server/data-years';
-import { buildYear, putStats } from '@/server/year-store';
+import { buildUnitMetadata, buildYear, putStats } from '@/server/year-store';
+import { clearDocumentUnitMetadataMemo } from '@/server/document-unit-metadata';
+import { DOCUMENT_TAG } from '@/server/cache-headers';
 
 interface RebuildBody {
   year?: unknown;
   stats?: unknown;
+  metadata?: unknown;
 }
 
 function bad(error: string): Response {
@@ -59,18 +62,49 @@ export const Route = createFileRoute('/api/admin/rebuild')({
         try {
           body = ((await request.json()) ?? {}) as RebuildBody;
         } catch {
-          return bad('Body must be JSON: {"year":2004} or {"stats":true}');
+          return bad(
+            'Body must be JSON: {"year":2004}, {"stats":true} or {"metadata":true}',
+          );
         }
 
         const wantsStats = body.stats === true;
+        const wantsMetadata = body.metadata === true;
         const wantsYear = body.year !== undefined;
-        if (wantsStats === wantsYear) {
-          return bad('Specify exactly one of "year" or "stats".');
+        if ([wantsStats, wantsMetadata, wantsYear].filter(Boolean).length !== 1) {
+          return bad('Specify exactly one of "year", "stats" or "metadata".');
         }
 
         const started = performance.now();
 
         try {
+          if (wantsMetadata) {
+            // Cheap next to a year — one memoised facilities call plus a short
+            // ascending scan of the stored years for each region's first data
+            // day — but it must be rebuilt FIRST on a cold bucket: the stats
+            // fold joins against it, and a year rebuilt without it is fine while
+            // a fold without it throws.
+            //
+            // This is the one target that purges as it rebuilds. The blob is
+            // inlined into every SSR document, so an edge copy of a document is
+            // an edge copy of the metadata; there is no separate cache tag that
+            // could reach it later.
+            const { dto, changed, dataChangedAt } = await buildUnitMetadata();
+            clearDocumentUnitMetadataMemo();
+            return Response.json(
+              {
+                target: 'metadata',
+                changed,
+                units: Object.keys(dto.unitsByDuid).length,
+                regions: dto.regions,
+                cacheTag: DOCUMENT_TAG,
+                builtAt: dto.created_at,
+                dataChangedAt,
+                ms: Math.round(performance.now() - started),
+              },
+              { headers: NO_STORE },
+            );
+          }
+
           if (wantsStats) {
             // Folds the *stored* years, not upstream: computeCoalStats reads
             // through `readYear`, which hits R2 first and only falls through to
@@ -126,7 +160,7 @@ export const Route = createFileRoute('/api/admin/rebuild')({
         } catch (error) {
           console.error(JSON.stringify({
             log: 'rebuild:failed',
-            target: wantsStats ? 'stats' : String(body.year),
+            target: wantsStats ? 'stats' : wantsMetadata ? 'metadata' : String(body.year),
             error: error instanceof Error ? error.message : String(error),
           }));
           return Response.json(

@@ -27,6 +27,7 @@ import { capacityFactorsPath } from '@/shared/capacity-factors-url';
 import { formatCompactAgeFromAEST } from '@/shared/date-utils';
 import { mapPool } from '@/shared/map-pool';
 import type { StoreEntry } from '@/server/year-store';
+import { DOCUMENT_TAG } from '@/server/cache-headers';
 
 /**
  * How many files to flush at once, and how far apart to start them.
@@ -51,7 +52,7 @@ type RowStatus =
   | { state: 'failed'; error: string };
 
 interface FlushResult {
-  target: 'year' | 'stats';
+  target: 'year' | 'stats' | 'metadata';
   year?: number;
   changed: boolean;
   cacheTag: string;
@@ -88,10 +89,10 @@ function describeFetchError(e: unknown): string {
 }
 
 const rowKey = (entry: StoreEntry): string =>
-  entry.kind === 'stats' ? 'stats' : String(entry.year);
+  entry.kind === 'year' ? String(entry.year) : entry.kind;
 
 const rowLabel = (entry: StoreEntry): string =>
-  entry.kind === 'stats' ? 'Stats' : String(entry.year);
+  entry.kind === 'stats' ? 'Stats' : entry.kind === 'metadata' ? 'Units' : String(entry.year);
 
 export const Route = createFileRoute('/diagnostics')({ component: CacheManagement });
 
@@ -178,6 +179,7 @@ function CacheManagement() {
 
       const years = targets.filter((t) => t.kind === 'year');
       const wantsStats = targets.some((t) => t.kind === 'stats');
+      const wantsMetadata = targets.some((t) => t.kind === 'metadata');
 
       // One start per FLUSH_STAGGER_MS across the whole pool, so five requests
       // don't leave the browser in the same millisecond.
@@ -267,6 +269,22 @@ function CacheManagement() {
 
       let statsFolded = false;
       try {
+        // Metadata BEFORE stats and after the years, which is the refresher's
+        // order and for its reasons: its per-region first-data days are scanned
+        // out of the stored years, and the fold then joins every year against
+        // it. Unconditional, unlike the fold — it is one memoised facilities
+        // call plus a handful of R2 reads, and it is what the whole store hangs
+        // off, so "rebuild it whenever asked" is the useful behaviour.
+        if (wantsMetadata && !cancelled.current) {
+          setStatus('metadata', { state: 'running' });
+          const metadata = await flushOne({ metadata: true });
+          if (metadata.changed) changed += 1;
+          patchRow('metadata', metadata);
+          setStatus('metadata', { state: 'done', changed: metadata.changed });
+        } else if (wantsMetadata) {
+          drop('metadata');
+        }
+
         // Refold when a year moved, or when the stats row was flushed on its
         // own. Nothing but the years feeds the fold, so an unchanged set folds
         // to an identical answer.
@@ -287,10 +305,17 @@ function CacheManagement() {
         // pressed, where the question is "is the edge clean now?" and the answer
         // has to be yes. Costs the same either way: one batched call, and the
         // Free plan caps purge *requests* per minute, not tags.
-        const tags =
-          years.length > 1
+        // `html` rides along whenever the metadata was rebuilt: the blob is
+        // inlined into every SSR document, so the documents ARE the cache entry
+        // that would otherwise keep serving the old copy for an hour.
+        const tags = [
+          ...(years.length > 1
             ? ['capacity-factors', 'coal-stats']
-            : targets.map((t) => (t.kind === 'stats' ? 'coal-stats' : `cf-year-${t.year}`));
+            : targets
+                .filter((t) => t.kind !== 'metadata')
+                .map((t) => (t.kind === 'stats' ? 'coal-stats' : `cf-year-${t.year}`))),
+          ...(wantsMetadata ? [DOCUMENT_TAG] : []),
+        ];
 
         const purged = await fetch('/api/admin/purge', {
           method: 'POST',
@@ -480,7 +505,11 @@ function statusText(entry: StoreEntry, status: RowStatus | undefined): string {
       case 'queued':
         return 'queued';
       case 'running':
-        return entry.kind === 'stats' ? 'folding…' : 'fetching…';
+        return entry.kind === 'stats'
+          ? 'folding…'
+          : entry.kind === 'metadata'
+            ? 'scanning…'
+            : 'fetching…';
       case 'done':
         return status.changed ? 'updated' : 'unchanged';
       case 'failed':

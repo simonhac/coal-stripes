@@ -18,11 +18,11 @@ import { getStats, getYear, putStats, putYear, statsIsDue, statsKey, storeStatus
 import { allDataYears, currentDataYear } from '@/server/data-years';
 import { CF_DTO_VERSION, YEAR_CACHE_TIERS } from '@/shared/config';
 import { getAESTDateTimeString } from '@/shared/date-utils';
-import type { CoalGenerationStatsDTO, GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
+import type { CoalGenerationStatsDTO, YearCapFacHistoryDTO } from '@/shared/types';
 
 const bucket = (env as unknown as { DATA: R2Bucket }).DATA;
 
-function payload(createdAt: string): GeneratingUnitCapFacHistoryDTO {
+function payload(createdAt: string): YearCapFacHistoryDTO {
   return { type: 'capacity_factors', version: '1.0', created_at: createdAt, data: [] };
 }
 
@@ -178,38 +178,34 @@ describe('year-store', () => {
   // re-fetched identical numbers must not look like a revision, or the current
   // year's hourly rewrite refolds the stats 24 times a day for nothing.
   describe('change detection', () => {
-    const withData = (createdAt: string, capacity: number): GeneratingUnitCapFacHistoryDTO => ({
+    // Only a VALUE can move a year's hash now. Every field that used to change
+    // without the numbers changing — `last_seen` above all, which advanced daily
+    // for every operating unit and so rewrote the year 2000 every night — has
+    // left the year payload for the metadata blob. See @/shared/unit-metadata.
+    const withData = (createdAt: string, secondDay: number): YearCapFacHistoryDTO => ({
       type: 'capacity_factors',
       version: '1.0',
       created_at: createdAt,
       data: [{
-        network: 'nem',
-        region: 'NSW1',
-        data_type: 'energy',
-        units: 'MW',
-        capacity,
         duid: 'BW01',
-        facility_code: 'BAYSW',
-        facility_name: 'Bayswater',
-        fueltech: 'coal_black',
-        status: 'operating',
-        commenced: null,
-        commenced_specificity: null,
-        first_seen: null,
-        last_seen: null,
-        history: { start: '2024-01-01', last: '2024-01-02', interval: '1d', data: [50, 60] },
+        history: {
+          start: '2024-01-01',
+          last: '2024-01-02',
+          interval: '1d',
+          data: [50, secondDay],
+        },
       }],
-    } as GeneratingUnitCapFacHistoryDTO);
+    });
 
     it('reports the first write as a change', async () => {
-      const write = await putYear(2024, withData('2026-08-08T01:00:00+10:00', 660));
+      const write = await putYear(2024, withData('2026-08-08T01:00:00+10:00', 60));
       expect(write.changed).toBe(true);
       expect(write.dataChangedAt).toBe('2026-08-08T01:00:00+10:00');
     });
 
     it('does not count a rebuild with identical numbers as a change', async () => {
-      await putYear(2024, withData('2026-08-08T01:00:00+10:00', 660));
-      const second = await putYear(2024, withData('2026-08-08T02:00:00+10:00', 660));
+      await putYear(2024, withData('2026-08-08T01:00:00+10:00', 60));
+      const second = await putYear(2024, withData('2026-08-08T02:00:00+10:00', 60));
 
       expect(second.changed).toBe(false);
       // builtAt still advances — otherwise the year stays due and is re-fetched
@@ -221,8 +217,8 @@ describe('year-store', () => {
     });
 
     it('reports a change when a single number moves', async () => {
-      await putYear(2024, withData('2026-08-08T01:00:00+10:00', 660));
-      const second = await putYear(2024, withData('2026-08-08T02:00:00+10:00', 700));
+      await putYear(2024, withData('2026-08-08T01:00:00+10:00', 60));
+      const second = await putYear(2024, withData('2026-08-08T02:00:00+10:00', 70));
 
       expect(second.changed).toBe(true);
       expect(second.dataChangedAt).toBe('2026-08-08T02:00:00+10:00');
@@ -249,12 +245,15 @@ describe('year-store', () => {
   // costs HEADs rather than 5 MB of payloads, so the assertions worth making are
   // about completeness and about the metadata surviving without a body read.
   describe('storeStatus', () => {
-    it('reports every year plus the stats file, oldest year first', async () => {
+    it('reports the metadata, every year oldest-first, then the stats file', async () => {
       const entries = await storeStatus();
       const years = allDataYears();
 
-      expect(entries).toHaveLength(years.length + 1);
-      expect(entries.slice(0, years.length).map((e) => e.year)).toEqual(years);
+      // Metadata leads: every year joins against it, so it is the first thing to
+      // check when the whole store looks wrong.
+      expect(entries).toHaveLength(years.length + 2);
+      expect(entries[0]).toMatchObject({ kind: 'metadata' });
+      expect(entries.slice(1, years.length + 1).map((e) => e.year)).toEqual(years);
       expect(entries[entries.length - 1]).toMatchObject({ kind: 'stats' });
     });
 

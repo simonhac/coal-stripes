@@ -18,7 +18,13 @@ import React, { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { FacilityYearTile } from '@/client/facility-year-tile';
-import { leadingBackgroundDays } from '@/client/cap-fac-year';
+import {
+  inferredRegionStart,
+  leadingBackgroundDays,
+  regionHasDataInWindow,
+  type RegionDataDayBounds,
+} from '@/client/cap-fac-year';
+import { regionFirstDataDay } from '@/client/unit-metadata-inline';
 import { getDayIndex, isLeapYear, getDaysBetween, getDateFromIndex } from '@/shared/date-utils';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { formatUnitName } from '@/client/unit-names';
@@ -162,26 +168,13 @@ const CompositeTileComponent = ({
       return getDateFromIndex(year, idx);
     };
 
-    // The mirror of the frontier: the first day this region has data, before
-    // which the row is not "missing" but "not yet begun", and so fades to the
-    // page background rather than reading as a hole in the record.
-    //
-    // The start year wins when it has any data, exactly as CapFacXAxis does for
-    // the month strip — the two overlays have to agree on where a region's
-    // record starts, or the axis fades while the stripes above it stay blue.
-    const regionStartFor = (year: number, data: typeof leftData): CalendarDate | null => {
-      if (!data) return null;
-      const idx = data.regionFirstDataDayIndex.get(regionCode) ?? -1;
-      if (idx < 0) return null;
-      return getDateFromIndex(year, idx);
-    };
-
     // This region's first/last data day per year, so render() can tell whether
     // the region has any data at all in the visible window (→ fade the whole row
-    // to the page background) vs an interior gap (→ pale blue).
-    const boundsFor = (data: typeof leftData) => ({
-      first: data?.regionFirstDataDayIndex.get(regionCode) ?? -1,
-      last: data?.regionLastDataDayIndex.get(regionCode) ?? -1,
+    // to the page background) vs an interior gap (→ pale blue). Passed straight
+    // to regionHasDataInWindow, which is why the shape matches its parameter.
+    const boundsFor = (data: typeof leftData): RegionDataDayBounds => ({
+      regionFirstDataDayIndex: data?.regionFirstDataDayIndex ?? new Map(),
+      regionLastDataDayIndex: data?.regionLastDataDayIndex ?? new Map(),
     });
 
     return {
@@ -191,8 +184,6 @@ const CompositeTileComponent = ({
       rightState: right.state,
       leftFrontierDate: frontierDateFor(startYear, leftData),
       rightFrontierDate: rightNeeded ? frontierDateFor(endYear, rightData) : null,
-      leftRegionStart: regionStartFor(startYear, leftData),
-      rightRegionStart: rightNeeded ? regionStartFor(endYear, rightData) : null,
       leftBounds: boundsFor(leftData),
       rightBounds: boundsFor(rightData),
     };
@@ -596,28 +587,32 @@ const CompositeTileComponent = ({
       // days are left as their baked-in pale blue "no data" colour.
       ctx.fillStyle = PAGE_BACKGROUND_HEX;
 
-      // A region with no data anywhere in the visible window (e.g. WEM before its
-      // coal data begins) fades entirely to the page background — like the
+      // A region with no data anywhere in the visible window (e.g. WEM before
+      // its coal record begins) fades entirely to the page background — like the
       // chart's empty ends — rather than a solid block of pale blue.
+      //
+      // Deferred to regionHasDataInWindow rather than reimplemented here: this
+      // used to be an inlined copy, and when the copy was simplified and the
+      // original was not, the two stopped agreeing. Read the note there for why
+      // both bounds have to be positional.
+      //
+      // Only conclude "empty" once every spanned year has loaded; while one is
+      // still pending, leave the shimmer/normal render in place.
       const startDayIdx = getDayIndex(dateRange.start);
       const endDayIdx = getDayIndex(dateRange.end);
-      let regionEmpty = false;
-      if (startYear === endYear) {
-        if (tiles.leftState === 'hasData') {
-          const { first, last } = tiles.leftBounds;
-          regionEmpty = !(last >= 0 && last >= startDayIdx && first <= endDayIdx);
-        }
-      } else {
-        const startHas = tiles.leftState === 'hasData' &&
-          tiles.leftBounds.last >= 0 && tiles.leftBounds.last >= startDayIdx;
-        const endHas = tiles.rightState === 'hasData' &&
-          tiles.rightBounds.first >= 0 && tiles.rightBounds.first <= endDayIdx;
-        // Only conclude "empty" once both spanned years have loaded; while one is
-        // still pending, leave the shimmer/normal render in place.
-        if (!startHas && !endHas && tiles.leftState === 'hasData' && tiles.rightState === 'hasData') {
-          regionEmpty = true;
-        }
-      }
+      const sameYear = startYear === endYear;
+      const loaded =
+        tiles.leftState === 'hasData' && (sameYear || tiles.rightState === 'hasData');
+      const regionEmpty =
+        loaded &&
+        !regionHasDataInWindow(
+          tiles.leftBounds,
+          sameYear ? undefined : tiles.rightBounds,
+          regionCode,
+          startDayIdx,
+          endDayIdx,
+          sameYear,
+        );
 
       if (regionEmpty) {
         ctx.fillRect(0, 0, DATE_BOUNDARIES.TILE_WIDTH, canvas.height);
@@ -634,12 +629,21 @@ const CompositeTileComponent = ({
           }
         }
         // …and the leading region, before the record begins — the global
-        // earliest day OR this region's first data day, whichever is later. See
-        // leadingBackgroundDays for why the region bound is load-bearing.
+        // earliest day OR this region's first data day, whichever is later.
+        //
+        // The region day is a fact from the metadata blob. It falls back to the
+        // loaded years only when the blob has no answer (a cold store, or the
+        // minutes after a deploy before the cron has scanned), which is the
+        // pre-existing inference and no worse than it ever was. See
+        // leadingBackgroundDays and inferredRegionStart.
+        const regionStart =
+          regionFirstDataDay(regionCode) ??
+          inferredRegionStart(startYear, tiles.leftBounds, regionCode) ??
+          inferredRegionStart(endYear, tiles.rightBounds, regionCode);
         const preDataEndIdx = leadingBackgroundDays(
           dateRange.start,
           boundaries.earliestDataDay,
-          tiles.leftRegionStart ?? tiles.rightRegionStart,
+          regionStart,
           DATE_BOUNDARIES.TILE_WIDTH,
         );
         if (preDataEndIdx > 0) {
@@ -663,7 +667,7 @@ const CompositeTileComponent = ({
         animationFrameRef.current = null;
       }
     };
-  }, [dateRange, tiles, facilityCode, updateTooltip, canvasHeight, clientToCanvasCoordinates]);
+  }, [dateRange, tiles, facilityCode, regionCode, updateTooltip, canvasHeight, clientToCanvasCoordinates]);
   
   // Mouse handlers for hover only
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {

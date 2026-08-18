@@ -217,7 +217,7 @@ describe('GET /api/admin/store', () => {
     expect((await get()).status).toBe(200);
   });
 
-  it('lists every year plus the stats file, and never caches', async () => {
+  it('lists the metadata, every year and the stats file, and never caches', async () => {
     const res = await get();
     expect(res.headers.get('Cache-Control')).toBe('no-store');
 
@@ -225,7 +225,8 @@ describe('GET /api/admin/store', () => {
       entries: { kind: string; year?: number; builtAt: string | null }[];
     };
     const years = allDataYears();
-    expect(entries).toHaveLength(years.length + 1);
+    expect(entries).toHaveLength(years.length + 2);
+    expect(entries[0]?.kind).toBe('metadata');
     expect(entries.filter((e) => e.kind === 'year').map((e) => e.year)).toEqual(years);
     expect(entries.at(-1)?.kind).toBe('stats');
   });
