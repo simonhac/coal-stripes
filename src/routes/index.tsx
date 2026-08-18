@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo, startTransition } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, startTransition, lazy, Suspense } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { CalendarDate } from '@internationalized/date';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { getDaysBetween } from '@/shared/date-utils';
 import { DATE_BOUNDARIES } from '@/shared/config';
-import { PerformanceDisplay } from '../components/PerformanceDisplay';
 import { OpenElectricityHeader } from '../components/OpenElectricityHeader';
 import { RegionSection } from '../components/RegionSection';
 import { DateRange } from '../components/DateRange';
@@ -27,9 +26,22 @@ import { isFailedYearQuery } from '@/client/failed-year-recovery';
 import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities';
 import { useHoverIndicator } from '@/hooks/useHoverIndicator';
 import { useHeaderDateRangeTracker } from '@/hooks/useHeaderDateRange';
+import { usePerfPanel } from '@/hooks/usePerfPanel';
 import { hasSeenWelcome, markWelcomeSeen } from '@/shared/welcome-state';
 import { WelcomeDialog } from '../components/WelcomeDialog';
 import { ShortcutsDialog } from '../components/ShortcutsDialog';
+
+/**
+ * The Shift+P developer overlay, fetched only when someone asks for it.
+ *
+ * ~600 lines plus the query-cache and tile-timing readers it pulls in, all of
+ * which used to sit in the eagerly-preloaded route chunk that every visitor
+ * downloads and parses on first paint — to render nothing, since the panel is
+ * hidden by default. usePerfPanel decides without it.
+ */
+const PerformanceDisplay = lazy(() =>
+  import('../components/PerformanceDisplay').then(m => ({ default: m.PerformanceDisplay }))
+);
 
 // Region display order is fixed; a region only appears if it has facilities.
 const ALL_REGION_CODES = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1', 'WEM'];
@@ -329,6 +341,10 @@ function Home() {
   // One pointer-tracking listener for the whole page, driving --hover-x.
   useHoverIndicator();
 
+  // Shift+P developer overlay. The listener lives here, not in the overlay, so
+  // the overlay itself can be code-split — see the lazy() above.
+  const perfPanelOpen = usePerfPanel();
+
   // Hand the date range readout to the pinned region header once the page-head
   // copy has scrolled behind the top bar. Publishes to a store rather than
   // state, so a region boundary doesn't re-render the whole page.
@@ -474,9 +490,15 @@ function Home() {
 
   return (
     <FleetModeProvider value={mode}>
-      {/* Performance Monitor. Client-only: it seeds its state from
-          localStorage, which the server can't see. */}
-      {hydrated && <PerformanceDisplay />}
+      {/* Performance Monitor. Client-only, and lazily fetched: usePerfPanel
+          starts closed on both the server and the first client render, so the
+          chunk is requested only once Shift+P (or a stored preference) says
+          otherwise. */}
+      {perfPanelOpen && (
+        <Suspense fallback={null}>
+          <PerformanceDisplay />
+        </Suspense>
+      )}
 
       {/* Header + date range. Grouped so the sticky header's scope ends exactly
           at the top of the viz below — that's what makes the first region header

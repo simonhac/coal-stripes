@@ -8,16 +8,7 @@ import { tileMonitor } from '@/shared/tile-monitor';
 import type { TileState } from '@/shared/tile-monitor';
 import { tileTimingRecorder } from '@/client/tile-timing-recorder';
 import type { TileTimingRecord } from '@/client/tile-timing-recorder';
-
-type DisplayMode = 'performance' | 'caches' | 'features' | 'tile';
-type DisclosureState = 'collapsed' | 'detailed';
-
-interface PerformanceMonitorState {
-  visible: boolean;
-  position: { x: number; y: number };
-  disclosureState: DisclosureState;
-  displayMode: DisplayMode;
-}
+import { loadPerfPanelState, savePerfPanelState } from '@/client/perf-panel-state';
 
 const greenButtonStyle = {
   background: '#333',
@@ -39,44 +30,13 @@ const redButtonStyle = {
   fontSize: '10px'
 };
 
-const loadPerformanceMonitorState = (): PerformanceMonitorState => {
-  const defaultState: PerformanceMonitorState = {
-    visible: false,
-    position: { x: typeof window !== 'undefined' ? window.innerWidth / 2 - 50 : 100, y: 10 },
-    disclosureState: 'collapsed',
-    displayMode: 'caches'
-  };
-
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return defaultState;
-  }
-
-  try {
-    const saved = localStorage.getItem('performance-monitor-state');
-    if (saved) {
-      const state = JSON.parse(saved) as Partial<PerformanceMonitorState>;
-      
-      // Validate and merge with defaults
-      return {
-        visible: state.visible === true,
-        position: state.position && 
-          state.position.x >= 0 && 
-          state.position.x <= window.innerWidth - 100 &&
-          state.position.y >= 0 && 
-          state.position.y <= window.innerHeight - 100 
-          ? state.position 
-          : defaultState.position,
-        disclosureState: state.disclosureState || defaultState.disclosureState,
-        displayMode: state.displayMode || defaultState.displayMode
-      };
-    }
-  } catch (e) {
-    console.error('Failed to parse saved performance monitor state:', e);
-  }
-
-  return defaultState;
-};
-
+/**
+ * The Shift+P developer overlay.
+ *
+ * Mounted only when it is meant to be on screen — the page owns that decision
+ * (usePerfPanel) so this module can be code-split away from the first load. It
+ * therefore has no `visible` state of its own and never returns null.
+ */
 export const PerformanceDisplay: React.FC = () => {
   const queryClient = useQueryClient();
   const [fps, setFps] = useState(0);
@@ -86,12 +46,12 @@ export const PerformanceDisplay: React.FC = () => {
   const [tileState, setTileState] = useState<TileState>(tileMonitor.getState());
   const [tileRenders, setTileRenders] = useState<readonly TileTimingRecord[]>([]);
   
-  // Load all persisted state at once
-  const initialState = loadPerformanceMonitorState();
-  const [isVisible, setIsVisible] = useState(initialState.visible);
-  const [position, setPosition] = useState(initialState.position);
-  const [disclosureState, setDisclosureState] = useState(initialState.disclosureState);
-  const [displayMode, setDisplayMode] = useState(initialState.displayMode);
+  // Load all persisted state at once, in the initialisers — this used to be a
+  // bare call in the render body, so it re-read and re-parsed localStorage on
+  // every one of the twice-a-second polling renders below.
+  const [position, setPosition] = useState(() => loadPerfPanelState().position);
+  const [disclosureState, setDisclosureState] = useState(() => loadPerfPanelState().disclosureState);
+  const [displayMode, setDisplayMode] = useState(() => loadPerfPanelState().displayMode);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [hasDragged, setHasDragged] = useState(false);
@@ -180,35 +140,17 @@ export const PerformanceDisplay: React.FC = () => {
     };
   }, [isDragging, dragStart]);
 
-  // Save all state to localStorage
+  // Save the window state. A patch, not a whole-object write: `visible` belongs
+  // to the page now (see @/client/perf-panel-state), and overwriting it from
+  // here would close the panel in storage while it is open on screen.
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      // Debounce to avoid saving during drag
-      const timeoutId = setTimeout(() => {
-        const state: PerformanceMonitorState = {
-          visible: isVisible,
-          position,
-          disclosureState,
-          displayMode
-        };
-        localStorage.setItem('performance-monitor-state', JSON.stringify(state));
-      }, 100);
-      
-      return () => clearTimeout(timeoutId);
-    }
-  }, [position, isVisible, disclosureState, displayMode, isDragging]);
+    // Debounce to avoid saving during drag
+    const timeoutId = setTimeout(() => {
+      savePerfPanelState({ position, disclosureState, displayMode });
+    }, 100);
 
-  // Handle keyboard shortcut (Shift+P)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.shiftKey && e.key === 'P') {
-        setIsVisible(prev => !prev);
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    return () => clearTimeout(timeoutId);
+  }, [position, disclosureState, displayMode, isDragging]);
 
   // Handle staged expansion/collapse animation
   useEffect(() => {
@@ -234,11 +176,6 @@ export const PerformanceDisplay: React.FC = () => {
       }, 200); // 200ms vertical collapse
     }
   }, [disclosureState, expandStage, isAnimating]);
-
-  // Don't render if not visible
-  if (!isVisible) {
-    return null;
-  }
 
   return (
     <div 

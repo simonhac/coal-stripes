@@ -6,11 +6,16 @@
  * here, as an inline script in the head. See @/shared/unit-metadata for the join
  * and for why the payload is split this way at all.
  *
- * Inlined rather than fetched from an `/api/metadata` route, deliberately. The
- * blob is ~2.0 KB gzipped against a document of ~3.5 KB, so it roughly doubles
- * the document — against saving a whole round trip on a zone whose edge is in
- * Singapore (see docs/caching-and-diagnostics.md). At this size a second request
- * cannot win.
+ * Inlined rather than fetched from an `/api/metadata` route, deliberately. It
+ * costs ~26 KB of document, which compresses to ~2 KB — against saving a whole
+ * round trip on a zone whose edge is in Singapore (see
+ * docs/caching-and-diagnostics.md). At this size a second request cannot win.
+ *
+ * That ~2 KB used to be most of the document and is now about an eighth of it:
+ * the stylesheet moved inline too (`server.build.inlineCss` in vite.config.ts,
+ * for the same round-trip reason), which took the document to ~112 KB raw and
+ * ~16 KB over the wire. The argument is unchanged and the blob is no longer the
+ * expensive half of it.
  *
  * Two things make that safe rather than merely cheap. The document is served
  * `max-age=0, s-maxage=3600`, so an inlined copy is at worst an hour stale — fine
@@ -36,15 +41,38 @@ export const UNIT_METADATA_GLOBAL = '__coalUnitMetadata';
 /**
  * The blob as source to inline.
  *
- * `<` is escaped because the payload carries facility names straight from
- * OpenElectricity: without it a name containing `</script>` would close the
- * element, and the rest of the blob would be parsed as markup. The JSON unicode
- * escape denotes the very same character, so nothing downstream can tell the
- * difference — only the HTML parser can.
+ * `JSON.parse` of a string literal, not a bare object literal, and the
+ * difference is measurable rather than stylistic: this is ~45 KB of the
+ * document, it sits in the head, and it is parsed before anything below it runs.
+ * A JS object literal has to go through the full JavaScript grammar — every
+ * brace could be a block, every key could be a computed property — while a
+ * string literal is scanned trivially and handed to a parser that only has to
+ * recognise JSON. Engines are roughly twice as fast on the second shape at this
+ * size.
+ *
+ * Two escapes, for two different readers:
+ *
+ * `<` is escaped for the HTML parser, because the payload carries facility names
+ * straight from OpenElectricity: without it a name containing `</script>` would
+ * close the element and the rest of the blob would be parsed as markup. The JSON
+ * unicode escape denotes the very same character, so nothing downstream can tell
+ * the difference — only the HTML parser can.
+ *
+ * `\` and `'` are escaped for the JavaScript parser, and are new with the string
+ * form: what JSON.stringify emits is valid JSON, but it is being embedded inside
+ * a single-quoted JS string, where its own backslashes and any apostrophe in a
+ * facility name would terminate or corrupt the literal. Backslash first —
+ * escaping it after the quotes would double the backslashes they just gained.
+ *
+ * U+2028/U+2029 need no handling: they are line terminators in JS *source* but
+ * are legal inside a string literal since ES2019, and this is a string literal.
  */
 export function unitMetadataScript(dto: UnitMetadataDTO): string {
-  const json = JSON.stringify(dto).replace(/</g, '\\u003c');
-  return `window.${UNIT_METADATA_GLOBAL}=${json};`;
+  const json = JSON.stringify(dto)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/</g, '\\u003c');
+  return `window.${UNIT_METADATA_GLOBAL}=JSON.parse('${json}');`;
 }
 
 /**
