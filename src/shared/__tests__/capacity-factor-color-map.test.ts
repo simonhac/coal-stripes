@@ -1,4 +1,10 @@
-import { capacityFactorColorMap, getProportionColorHex } from '../capacity-factor-color-map';
+import {
+  capacityFactorColorMap,
+  getProportionColorHex,
+  getRampGradientCss,
+  NO_DATA_HEX,
+  RED_THRESHOLD_PCT,
+} from '../capacity-factor-color-map';
 
 /**
  * #rrggbb -> the ABGR uint32 the canvas renderer expects (alpha 255).
@@ -95,6 +101,34 @@ describe('capacityFactorColorMap', () => {
       expect(getProportionColorHex(19)).toBe(OFFLINE_RED);
       expect(getProportionColorHex(20)).toBe('#bfbfbf');
       expect(getProportionColorHex(null)).toBe(NO_DATA);
+    });
+  });
+
+  /* The legend draws itself from these, so a palette change reaches the key at
+     the same moment it reaches the stripes. These tests exist to keep that
+     true. */
+  describe('exports the legend draws from', () => {
+    it('names the same pale blue getHexColor returns for null', () => {
+      expect(NO_DATA_HEX).toBe(NO_DATA);
+      expect(capacityFactorColorMap.getHexColor(null)).toBe(NO_DATA_HEX);
+    });
+
+    it('names the threshold where the ramp leaves red', () => {
+      expect(capacityFactorColorMap.getHexColor(RED_THRESHOLD_PCT - 1)).toBe(OFFLINE_RED);
+      expect(capacityFactorColorMap.getHexColor(RED_THRESHOLD_PCT)).not.toBe(OFFLINE_RED);
+    });
+
+    it('steps hard out of red at the threshold, then runs grey to black', () => {
+      expect(getRampGradientCss()).toBe(
+        'linear-gradient(to right, #c74523 0 20%, #bfbfbf 20%, #000000 100%)'
+      );
+    });
+
+    it('quotes the map rather than restating it', () => {
+      const gradient = getRampGradientCss();
+      for (const cf of [0, RED_THRESHOLD_PCT, 100]) {
+        expect(gradient).toContain(capacityFactorColorMap.getHexColor(cf));
+      }
     });
   });
 });
