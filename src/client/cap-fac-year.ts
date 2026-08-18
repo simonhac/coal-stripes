@@ -2,7 +2,7 @@ import { GeneratingUnitCapFacHistoryDTO, GeneratingUnitDTO } from '@/shared/type
 import { FacilityYearTile } from './facility-year-tile';
 import { createFacilitiesFromUnits } from './facility-factory';
 import { CalendarDate, startOfMonth, endOfMonth } from '@internationalized/date';
-import { getDayIndex } from '@/shared/date-utils';
+import { getDayIndex, getDaysBetween } from '@/shared/date-utils';
 import { tileTimingRecorder } from './tile-timing-recorder';
 
 export interface CapFacYear {
@@ -123,6 +123,42 @@ export function regionHasDataInWindow(
     if (first >= 0 && first <= endDayIdx) return true;
   }
   return false;
+}
+
+/**
+ * How many leading days of a tile lie before the record begins, and so should be
+ * painted the page background rather than left as the pale blue "no data".
+ *
+ * TWO boundaries, whichever is later:
+ *
+ *   • `globalEarliest` — the first day of the whole record (1998-12-07).
+ *   • `regionStart` — the first day THIS region has data, which for WEM is
+ *     2006-09-20, seven years later. Null when neither loaded year has any data
+ *     for the region, in which case the caller's `regionHasDataInWindow` check
+ *     is what blanks the row.
+ *
+ * The region bound is the one that was missing, and its absence was visible: a
+ * window reaching back into 2005 showed WEM as page background only while
+ * `regionHasDataInWindow` was false. The moment ONE day of WEM data touched the
+ * right-hand edge that flag flipped, the whole-row fill stopped, and ~a year of
+ * days became pale blue — a hole in the record where there was simply no record
+ * yet. Measured on 2005-10-07 → 2006-10-06: 348 of 365 days flipped.
+ *
+ * Kept here beside `regionHasDataInWindow` because they answer the two halves of
+ * one question, and CapFacXAxis derives its month-strip fade the same way — the
+ * axis and the stripes above it have to agree on where a region's record starts.
+ */
+export function leadingBackgroundDays(
+  windowStart: CalendarDate,
+  globalEarliest: CalendarDate,
+  regionStart: CalendarDate | null,
+  tileWidth: number,
+): number {
+  const days = Math.max(
+    getDaysBetween(windowStart, globalEarliest),
+    regionStart ? getDaysBetween(windowStart, regionStart) : 0,
+  );
+  return Math.max(0, Math.min(days, tileWidth));
 }
 
 /**

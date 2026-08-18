@@ -8,6 +8,30 @@
  * appears as solid dark stripes and partial output as lighter shading. Null
  * (unknown) days are pale blue, deliberately distinct from both.
  *
+ * Two of the three anchors are Open Electricity design-system colours; the third
+ * deliberately is not.
+ *
+ *   offline  `red` #C74523     — the brand accent, which the design system also
+ *                                uses for its error and alert states.
+ *   full     `black` #000000    — the design system also has a `coal_black`
+ *                                (#121212) for coal *series*, but that is a
+ *                                categorical colour for telling fuels apart in a
+ *                                stacked chart, and this ramp has one fuel in it.
+ *   no data  #e6f3ff, pale blue — OFF-PALETTE, ON PURPOSE.
+ *
+ * The exception is worth stating plainly, because "make it a design-system
+ * colour" is the obvious change and it is the wrong one. The ramp occupies the
+ * entire greyscale axis from #bfbfbf to black, so any grey light enough to sit
+ * clear of it — `warm-grey` #F1F0ED is the nearest candidate — is within nine
+ * units per channel of the page itself (#FAF9F6). That was tried: gaps went from
+ * unmistakable to nearly invisible. Leaving the greyscale axis altogether is
+ * what makes "we have no reading for this day" impossible to mistake for a very
+ * low one, and this codebase treats that distinction as load-bearing (see the
+ * null-is-never-zero rule in CLAUDE.md).
+ *
+ * Keep `.welcome-swatch--*` in src/styles/opennem.css in step with these — that
+ * legend is the only place a reader is told what the colours mean.
+ *
  * The ramp is anchored at both ends rather than being a plain `255 × (1 −
  * cf/100)`: its lightest step stays #bfbfbf wherever the red threshold sits, so
  * lowering the threshold widens the ramp instead of washing out its low end.
@@ -47,10 +71,10 @@ class CapacityFactorColorMap {
     let r: number, g: number, b: number;
     
     if (capacityFactor < RED_THRESHOLD_PCT) {
-      // Medium red for anything under the threshold
-      r = 210;
-      g = 70;
-      b = 70;
+      // Open Electricity's brand red, #C74523, for anything under the threshold
+      r = 199;
+      g = 69;
+      b = 35;
     } else {
       // Map capacity factor onto the grey ramp
       // 20% -> #bfbfbf (light), 100% -> #000000 (black)
@@ -73,7 +97,7 @@ class CapacityFactorColorMap {
   }
 
   getHexColor(capacityFactor: number | null): string {
-    // Light blue for missing data
+    // Pale blue for missing data
     if (capacityFactor === null || capacityFactor === undefined) return '#e6f3ff';
     
     // Round and clamp to valid range
@@ -82,7 +106,7 @@ class CapacityFactorColorMap {
   }
 
   getIntColor(capacityFactor: number | null): number {
-    // Light blue for missing data — #e6f3ff (as in getHexColor) in ABGR form
+    // Pale blue for missing data — #e6f3ff (as in getHexColor) in ABGR form
     if (capacityFactor === null || capacityFactor === undefined) return 0xFFFFF3E6;
     
     // Round and clamp to valid range

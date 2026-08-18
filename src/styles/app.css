@@ -1,0 +1,181 @@
+/**
+ * The single stylesheet this app links.
+ *
+ * Ported from Open Electricity's `src/app.css`
+ * (github.com/opennem/openelectricity), minus the parts that describe machinery
+ * we don't have: the shadcn-svelte variable block, the `.bg-<fuel_tech>` classes
+ * (Tailwind generates those from the colours in tailwind.config.js anyway), the
+ * grain overlay, the portable-text overrides and the MapLibre chrome.
+ *
+ * Layering matters here. Tailwind v4 declares `@layer theme, base, components,
+ * utilities`, and opennem.css is imported INTO `components` rather than left
+ * unlayered — unlayered CSS outranks every layer, which would have quietly made
+ * our component sheet beat the utility classes that are supposed to override it.
+ * In `components` the cascade runs the way you'd expect: preflight and the base
+ * rules below lose to opennem.css, and a Tailwind utility in the markup wins.
+ */
+@import 'tailwindcss';
+@import '@fontsource-variable/dm-sans';
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource/dm-mono/400.css';
+@import '@fontsource/dm-mono/500.css';
+@import './opennem.css' layer(components);
+
+@config '../../tailwind.config.js';
+
+/**
+ * Radii. The design system's 2 / 4 / 6 / 10px steps come from upstream's shadcn
+ * `--radius: 0.625rem` and the `calc(--radius ± Npx)` ladder built on it; the
+ * JS config carries no `borderRadius`, so without this we'd silently inherit
+ * Tailwind's own scale, whose `rounded-xl` lands at 7.5px instead of 10px.
+ *
+ * `--spacing` is deliberately left alone: Tailwind's default 0.25rem is 2.5px at
+ * this root size, which is exactly the design system's step.
+ */
+@theme {
+  --radius-sm: 0.225rem; /* 2.25px — checkboxes, legend swatches */
+  --radius-md: 0.425rem; /* 4.25px — buttons, menu items */
+  --radius-lg: 0.625rem; /* 6.25px — cards, tooltips, panels */
+  --radius-xl: 1.025rem; /* 10.25px — big cards, map controls */
+}
+
+@layer base {
+  /**
+   * 1rem = 10px, exactly as upstream. This is what makes the type, spacing and
+   * letter-spacing scales in tailwind.config.js land on their design sizes —
+   * `text-base` is 1.6rem because 1.6rem is 16px here, and every Tailwind
+   * spacing step is 2.5px rather than 4px.
+   *
+   * It is also why opennem.css may not contain a bare `rem`: anything left in
+   * rem silently shrank by 37.5% the moment this line landed. Use px there.
+   */
+  html {
+    @apply bg-light-warm-grey;
+    box-sizing: border-box;
+    font-size: 62.5%;
+    /**
+     * Stop the browser reading a horizontal pan of the timeline as a swipe-back.
+     *
+     * This has to be on the ROOT element. The viewport's overscroll behaviour is
+     * taken from `html` and is NOT propagated up from `<body>` — unlike
+     * `overflow`, which is, and which is why the pairing looks
+     * interchangeable and isn't. Declared on `body` alone the rule parses,
+     * computes, inspects fine in devtools, and does nothing at all.
+     */
+    overscroll-behavior-x: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: inherit;
+  }
+
+  /* `@apply`, not `var(--color-…)`: a theme supplied through `@config` is
+     resolved at build time and is NOT re-exported as CSS custom properties the
+     way a CSS-native `@theme` block is, so `var(--text-base)` here would resolve
+     to nothing. (Upstream's own app.css writes it that way; it works there only
+     because their values happen to match what they'd fall back to.) */
+  body {
+    @apply font-sans text-base leading-base text-dark-grey bg-light-warm-grey;
+    margin: 0;
+    padding: 0;
+    /* Belt and braces alongside the root declaration above, which is the one
+       that actually reaches the viewport. Both, because that is what the
+       `html, body` rule in the old globals.css did. */
+    overscroll-behavior-x: none;
+  }
+
+  b {
+    font-weight: 600;
+  }
+
+  /* Upstream also sets `html { touch-action: pan-x pan-y }` under 768px as a
+     mobile zoom lock. Deliberately not ported: this app's whole interaction is a
+     horizontal drag on `.opennem-stripes-viz`, which sets its own
+     `touch-action: pan-y`, and a competing declaration on the root is exactly
+     the kind of thing that makes a gesture feel broken on one device only. */
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-semibold mb-[0.5em];
+  }
+  h1 {
+    @apply text-4xl leading-4xl md:text-9xl md:leading-9xl;
+  }
+  h2 {
+    @apply text-2xl leading-2xl md:text-3xl md:leading-3xl;
+  }
+  h3 {
+    @apply text-xl leading-xl;
+  }
+  h4 {
+    @apply text-base leading-base md:text-lg md:leading-lg;
+  }
+  h5 {
+    @apply text-base leading-base;
+  }
+  h6 {
+    @apply text-sm leading-sm font-medium;
+  }
+
+  p {
+    @apply mb-[1em];
+  }
+
+  a {
+    @apply text-red hover:underline;
+  }
+
+  /* The three named text styles, verbatim from upstream. `.subhead-secondary`
+     is the one that does the work here: it is the uppercase Space Grotesk
+     "eyebrow" the design system puts above tables and controls. */
+  .subhead-primary {
+    @apply font-space tracking-widest text-base leading-base font-bold;
+  }
+  .subhead-secondary {
+    @apply font-space font-medium tracking-wider text-sm leading-sm text-mid-grey uppercase;
+  }
+  .text-link-large {
+    @apply font-space tracking-wider text-base leading-base text-dark-grey font-bold underline;
+  }
+}
+
+@layer components {
+  /**
+   * The house button, from upstream's
+   * `src/lib/components/form-elements/Button.svelte`: black fill, white text,
+   * Space Grotesk. (The design-system *page* implies primary buttons are brick
+   * red. The component says otherwise, and the component ships.)
+   */
+  .oe-button {
+    @apply font-space text-sm font-medium rounded-md border-[0.1rem] border-solid border-black
+           bg-black text-white p-4 appearance-none cursor-pointer;
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease;
+  }
+  .oe-button:hover,
+  .oe-button.active {
+    @apply bg-dark-grey text-white no-underline;
+  }
+  .oe-button:disabled {
+    @apply bg-light-warm-grey;
+  }
+  .oe-button:focus-visible {
+    @apply outline-2 outline-offset-2 outline-red;
+  }
+
+  .oe-button-secondary {
+    @apply bg-white border-dark-grey text-black;
+  }
+  .oe-button-secondary:hover,
+  .oe-button-secondary.active {
+    @apply bg-light-warm-grey text-black;
+  }
+}

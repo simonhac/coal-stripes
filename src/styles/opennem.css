@@ -1,35 +1,86 @@
-/* OpenNEM Design System CSS - Extracted from opennem-fe */
-
-/* DM Sans is linked from the document head, not @import-ed here — see the
-   `links` array in src/routes/__root.tsx for why. */
+/* Coal Stripes component styles, on Open Electricity's design system.
+ *
+ * Imported into Tailwind's `components` layer by src/styles/app.css, which is
+ * also where the tokens below come from — this file no longer invents any.
+ *
+ * TWO RULES FOR EDITING THIS FILE
+ *
+ *   1. No bare `rem`. The root is 62.5% (1rem = 10px) so the Tailwind scales
+ *      land on their design sizes; a `rem` written here by muscle memory renders
+ *      at 62.5% of what you meant. Use px.
+ *   2. No new colour literals. Everything is one of the seven neutrals, the two
+ *      reds, or the semantic trio, aliased below. If a shade you want isn't
+ *      here, the design system's answer is that you want one that is.
+ */
 
 :root {
-  /* Colors */
-  --opennem-primary: #e34a33;
-  --opennem-primary-rgb: rgb(199, 69, 35);
-  --primary: black;
-  --link: black;
-  --beige-light: #d0d1cd;
-  --beige-lighter: rgb(250, 249, 246);
-  --dark-grey: #353535;
-  --border-colour: #e5e5e5;
-  --buttons-background: #f5f5f5;
-  
-  /* Typography */
-  --font-stack: 'DM Sans', sans-serif;
-  --body-size: 14px;
-  
-  /* Spacing */
-  --app-padding: 1rem;
+  /* --- Design-system palette (github.com/opennem/openelectricity) --------- */
+  /* The brand accent. NOT #e34a33 — that is the NEM *regional* colour, which
+     this file used as the accent for years. */
+  --oe-red: #C74523;
+  --oe-dark-red: #963F29;
+  --oe-black: #000000;
+  --oe-dark-grey: #353535;   /* body text, dark surfaces */
+  --oe-mid-grey: #6A6A6A;    /* muted text, labels */
+  --oe-mid-warm-grey: #C6C6C6; /* borders, axis text */
+  --oe-warm-grey: #F1F0ED;   /* subtle fills, dividers */
+  --oe-light-warm-grey: #FAF9F6; /* the page */
+  --oe-white: #FFFFFF;
+  --oe-success-green: #70D26E;
+  --oe-error-red: #FA6060;
+  --oe-alert-yellow: #EB1F70;  /* upstream's name; upstream's magenta */
+  /* The design system's chart focus line: `red` at 60%. The only colour here
+     with an alpha channel, because it is drawn over the data rather than
+     beside it. */
+  --oe-focus-line: #C7452399;
+
+  /* --- Semantic aliases, kept so existing rules read as intent ------------ */
+  --opennem-primary: var(--oe-red);
+  --primary: var(--oe-dark-grey);
+  --dark-grey: var(--oe-dark-grey);
+  --border-colour: var(--oe-mid-warm-grey);
+  --divider-colour: var(--oe-warm-grey);
+  --buttons-background: var(--oe-warm-grey);
+
+  /* --- Typography -------------------------------------------------------- */
+  --font-stack: 'DM Sans Variable', 'DM Sans', sans-serif;
+  --font-ui: 'Space Grotesk Variable', 'Space Grotesk', sans-serif;
+  --font-data: 'DM Mono', monospace;
+  --body-size: 16px;
+
+  /* --- Spacing ----------------------------------------------------------- */
+  /* The page gutter. `.opennem-header-inner` and `.opennem-stripes-container`
+     both read it and nothing else sets a horizontal page padding, because those
+     two left edges have to line up and the only way to guarantee that is for
+     there to be one number.
+
+     25px and 40px are the design system's container padding at its default and
+     `md` steps. The 16px below 640px is ours: the header row carries a wordmark,
+     a two-option toggle and a button, and at 320px a 25px gutter costs 18px that
+     row does not have — it puts the ⓘ inside the page padding. The design system
+     has no phone-width container step to conform to here; its smallest is 640. */
+  --app-padding: 16px;
   --toolbar-padding: 24px;
-  
-  /* Other */
+
+  /* --- Other ------------------------------------------------------------- */
   --header-hover-radius: 4px;
-  --border-style: 1px dotted #cdcdcd;
+  --border-style: 1px dotted var(--oe-mid-warm-grey);
 
   /* Layering — above the fixed header (z-50) and the perf panel (10000) */
   --z-hovercard: 10500;
   --z-modal: 11000;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --app-padding: 25px;
+  }
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --app-padding: 40px;
+  }
 }
 
 /* Base styles */
@@ -43,179 +94,36 @@ body {
   line-height: 1.5;
   margin: 0;
   padding: 0;
-  background-color: #faf9f6;
+  background-color: var(--oe-light-warm-grey);
   color: var(--primary);
 }
 
 /* Header styling - OpenElectricity exact match */
 header {
-  background: #faf9f6;
+  background: var(--oe-light-warm-grey);
 }
 
+/* The design system makes every `a` brick red. The header's wordmark and nav
+   are not links-in-prose, they are chrome, so they opt back out. */
 header a {
   text-decoration: none;
-  color: black;
+  color: var(--oe-dark-grey);
 }
 
 
-/* Base utility classes for header */
-.bg-white {
-  background-color: white;
-}
+/* The block that used to sit here defined .flex, .px-4, .z-50 and about thirty
+   more hand-written look-alikes of Tailwind classes, because the header's
+   markup was written against Tailwind that had been installed but never wired
+   up. Tailwind is wired up now (src/styles/app.css), so they are real — and at
+   design-system scale, which the hand-written ones were not. */
 
-.border-b {
-  border-bottom: 1px solid #e5e5e5;
-}
-
-.mx-auto {
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.px-4 {
-  padding-left: 1rem;
-  padding-right: 1rem;
-}
-
-.py-2 {
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
-}
-
-.py-6 {
-  padding-top: 1.5rem;
-  padding-bottom: 1.5rem;
-}
-
-.flex {
-  display: flex;
-}
-
-.items-center {
-  align-items: center;
-}
-
-.justify-between {
-  justify-content: space-between;
-}
-
-.text-black {
-  color: black;
-}
-
-.no-underline {
-  text-decoration: none;
-}
-
-/* Additional utility classes for header */
-.fixed {
-  position: fixed;
-}
-
-.sticky {
-  position: -webkit-sticky; /* For Safari */
-  position: sticky;
-}
-
-.top-0 {
-  top: 0;
-}
-
-.left-0 {
-  left: 0;
-}
-
-.right-0 {
-  right: 0;
-}
-
-.inset-0 {
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-}
-
-.z-40 {
-  z-index: 40;
-}
-
-.z-50 {
-  z-index: 50;
-}
-
-.py-3 {
-  padding-top: 0.75rem;
-  padding-bottom: 0.75rem;
-}
-
-.py-4 {
-  padding-top: 1rem;
-  padding-bottom: 1rem;
-}
-
-.p-2 {
-  padding: 0.5rem;
-}
-
-.p-4 {
-  padding: 1rem;
-}
-
-.-mr-2 {
-  margin-right: -0.5rem;
-}
-
-.space-x-1 > * + * {
-  margin-left: 0.25rem;
-}
-
-.flex-col {
-  flex-direction: column;
-}
-
-.hidden {
-  display: none;
-}
-
-.block {
-  display: block;
-}
-
-.w-6 {
-  width: 1.5rem;
-}
-
-.h-6 {
-  height: 1.5rem;
-}
-
-.h-8 {
-  height: 2rem;
-}
-
-.h-10 {
-  height: 2.5rem;
-}
-
-/* Responsive utilities */
-@media (min-width: 1024px) {
-  .lg\:flex {
-    display: flex;
-  }
-  
-  .lg\:hidden {
-    display: none;
-  }
-  
-  .lg\:py-4 {
-    padding-top: 1rem;
-    padding-bottom: 1rem;
-  }
-  
-  .lg\:h-10 {
-    height: 2.5rem;
-  }
+/* The header's content row. Shares `--app-padding` and the 1200px cap with
+   `.opennem-stripes-container` below, so the wordmark and the first region
+   heading sit on one left edge at every width. */
+.opennem-header-inner {
+  max-width: 1200px;
+  padding-left: var(--app-padding);
+  padding-right: var(--app-padding);
 }
 
 /* Stripes page layout */
@@ -247,92 +155,41 @@ header a {
   padding-top: 0;
 }
 
+/* No horizontal padding: `.opennem-stripes-container` around it already applies
+   `--app-padding`, and adding a second helping put the date range 40px inside
+   the right edge that the ⓘ in the header above it sits on. (It was 16px inside
+   before the gutter grew, which is why it read as a margin rather than a bug.) */
 .opennem-stripes-header {
   display: flex;
   justify-content: flex-end;
   align-items: center;
   margin-top: 10px;
   margin-bottom: 0;
-  padding: 0 var(--app-padding);
-  background-color: #faf9f6;
+  background-color: var(--oe-light-warm-grey);
   padding-top: 5px;
   padding-bottom: 5px;
 }
 
-.opennem-stripes-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.opennem-stripes-title h1 {
-  font-size: 24px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.opennem-dropdown {
-  background: var(--buttons-background);
-  border: var(--border-style);
-  border-radius: var(--header-hover-radius);
-  padding: 8px 12px;
-  font-family: var(--font-stack);
-  font-size: var(--body-size);
-  color: var(--primary);
-  cursor: pointer;
-  min-width: 200px;
-}
-
+/* The date-range readout above the stripes. 20px is the design system's `lg`
+   step; the old 19.6px was a measurement of a screenshot. */
 .opennem-date-range {
-  font-size: 19.6px;
-  color: rgb(74, 74, 74);
+  font-size: 20px;
+  line-height: 24px;
+  color: var(--oe-mid-grey);
   font-weight: 300;
   font-family: var(--font-stack);
 }
 
-.opennem-partial-data-indicator {
-  font-size: 12px;
-  color: var(--opennem-primary);
-  font-weight: 500;
-  margin-top: 4px;
-  padding: 4px 8px;
-  background-color: rgba(227, 74, 51, 0.1);
-  border-radius: 4px;
-  border: 1px solid rgba(227, 74, 51, 0.3);
-}
-
-/* Scale bar */
-.opennem-scale-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-bottom: 20px;
-  padding: 0 var(--app-padding);
-}
-
-.opennem-scale-gradient {
-  width: 200px;
-  height: 20px;
-  background: linear-gradient(to right, 
-    #22c55e 0%,    /* Green for high values */
-    #84cc16 25%,   /* Light green */
-    #eab308 50%,   /* Yellow */
-    #f97316 75%,   /* Orange */
-    #ef4444 100%   /* Red for low values */
-  );
-  border: 1px solid var(--border-colour);
-}
-
-.opennem-scale-label {
-  font-size: 12px;
-  color: var(--dark-grey);
-  font-weight: 500;
-}
+/* Deleted here, unreferenced by any component and off-palette to the last
+   declaration: `.opennem-stripes-title`, `.opennem-dropdown`,
+   `.opennem-partial-data-indicator`, and the `.opennem-scale-*` trio — whose
+   gradient was a five-stop green→red rainbow that no longer resembles anything
+   this app draws, let alone the design system. Retinting rules nothing renders
+   would have been the wrong kind of thorough. */
 
 /* Stripes visualisation */
 .opennem-stripes-viz {
-  background: #faf9f6;
+  background: var(--oe-light-warm-grey);
   user-select: none; /* Prevent text selection during drag */
   touch-action: pan-y; /* Allow vertical scroll but handle horizontal drag */
   /* Removed overflow constraints to allow sticky positioning */
@@ -354,12 +211,15 @@ header a {
 }
 
 .opennem-region-header {
-  background: #faf9f6;
-  color: black;
+  background: var(--oe-light-warm-grey);
+  color: var(--oe-dark-grey);
   padding: 8px 0;
-  font-size: 18px;
+  /* `lg` on the type scale (20/24), semibold, no tracking — the design system's
+     own heading treatment. Was 18px with +0.5px of letter-spacing, neither of
+     which is a step on any scale it defines. */
+  font-size: 20px;
+  line-height: 24px;
   font-weight: 600;
-  letter-spacing: 0.5px;
   padding-left: 6px;
   margin-left: 0;
   display: flex;
@@ -388,7 +248,7 @@ header a {
 /* The date range, shown here only while the page-head copy is out of sight and
    this region's header is the pinned one. Sits in the slot the tooltip normally
    occupies, and matches its height so the header never changes size on the
-   handover. Sized between the region name (18px) and the tooltip chips (9.9px):
+   handover. Sized between the region name (20px) and the tooltip chips (9.9px):
    readable, but plainly subordinate to the region it sits beside. */
 .opennem-region-date-range {
   margin-left: auto;
@@ -399,7 +259,7 @@ header a {
   font-family: var(--font-stack);
   font-size: 14px;
   font-weight: 300;
-  color: rgb(74, 74, 74);
+  color: var(--oe-mid-grey);
   white-space: nowrap;
   font-variant-numeric: tabular-nums; /* digits don't wobble while panning */
   font-feature-settings: 'tnum' 1;
@@ -444,9 +304,11 @@ header a {
   align-items: center;
   justify-content: flex-start;
   height: 16px;
-  font-size: 9px;
-  font-weight: 400;
-  color: #bbb;
+  /* The design system's chart axis-tick style, exactly: 10px, weight 300,
+     mid-warm-grey. (Was 9px/400 — off the scale in both.) */
+  font-size: 10px;
+  font-weight: 300;
+  color: var(--oe-mid-warm-grey);
   border-right: none;
   padding-left: 4px;
   cursor: pointer;
@@ -462,7 +324,7 @@ header a {
 
 .opennem-month-label:hover,
 .opennem-month-label.hovered {
-  box-shadow: inset 0 0 0 3px rgba(239, 68, 68, 0.5); /* Same red as hover line */
+  box-shadow: inset 0 0 0 3px var(--oe-focus-line);
 }
 
 .opennem-month-label:last-child {
@@ -505,7 +367,7 @@ header a {
 }
 
 .opennem-facility-label {
-  background: #faf9f6;
+  background: var(--oe-light-warm-grey);
   padding: 2px 6px;
   font-size: 12px;
   color: var(--dark-grey);
@@ -530,9 +392,9 @@ header a {
   z-index: var(--z-hovercard);
   max-width: 220px;
   padding: 8px 10px;
-  background: white;
+  background: var(--oe-white);
   border: 1px solid var(--border-colour);
-  border-radius: 4px;
+  border-radius: 6px;    /* `rounded-lg` — the design system's radius for panels and tooltips */
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   font-size: 12px;
   line-height: 1.4;
@@ -551,7 +413,7 @@ header a {
   margin-left: 6px;
   font-size: 11px;
   font-weight: 400;
-  color: #767676;
+  color: var(--oe-mid-grey);
 }
 
 .facility-hovercard-units {
@@ -565,7 +427,18 @@ header a {
   max-height: 200px;
   overflow-y: auto;
   font-size: 11px;
-  color: #767676;
+  color: var(--oe-mid-grey);
+}
+
+/* A value, so DM Mono with tabular figures — the design system's rule for
+   anything numeric. The mono face is also what finally makes this column line
+   up: the grid gave it a right edge, but "52 MW" and "660 MW" were being set in
+   a proportional face. */
+.facility-hovercard-unit-capacity,
+.facility-hovercard-unit-years {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 .facility-hovercard-unit-capacity {
@@ -626,7 +499,7 @@ header a {
   top: 0;
   bottom: 0;
   width: calc(100% / 365 * 1.1); /* Width of one day, 10% wider to compensate for rounding */
-  background-color: rgba(255, 0, 0, 0.5); /* 50% opacity red */
+  background-color: var(--oe-focus-line);
   pointer-events: none; /* Don't interfere with mouse events */
   left: var(--hover-x, -100%); /* Inherits from document root */
   transition: none; /* No transition for immediate response */
@@ -644,36 +517,12 @@ header a {
   position: relative;
 }
 
-.opennem-stripe-segment {
-  flex: 1;
-  height: 100%;
-  border-right: 1px solid rgba(0, 0, 0, 0.01);
-  cursor: pointer;
-  transition: opacity 0.1s ease;
-}
-
-.opennem-stripe-segment:hover {
-  opacity: 0.8;
-}
-
-/* Canvas-based stripes */
-.opennem-stripe-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
 /* Removed duplicate .opennem-facility-canvas definition - merged with the one above */
 
-/* Hover indicator line */
-.opennem-hover-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  background: rgba(239, 68, 68, 0.3); /* Translucent red */
-  pointer-events: none;
-  z-index: 10;
-}
+/* Also gone, all unreferenced: `.opennem-stripe-segment` (+ :hover),
+   `.opennem-stripe-canvas` and `.opennem-hover-line` — the last a second,
+   divergent definition of the scrub indicator that `.opennem-stripe-data::before`
+   actually draws. */
 
 /* Tooltip - OpenElectricity style */
 .hover-date-value {
@@ -681,7 +530,7 @@ header a {
   align-items: center;
   height: 19px;
   font-family: var(--font-stack);
-  font-size: 9.9px;
+  font-size: 10px; /* `xxs` — was 9.9px, which was on no scale at all */
   white-space: nowrap;
   flex-wrap: nowrap;
   margin-left: auto; /* Push to the right */
@@ -697,21 +546,25 @@ header a {
 
 .hover-date {
   font-weight: 600;
-  background-color: rgba(227, 74, 51, 0.1); /* opennem-primary with 0.1 opacity */
-  color: #444;
-  border-radius: 1px;
+  background-color: rgba(199, 69, 35, 0.1); /* opennem-primary with 0.1 opacity */
+  color: var(--oe-dark-grey);
+  border-radius: 2px;
   flex-shrink: 0;
   padding: 3px 6px 2px; /* 6px each side — date sits 6px in from the chip's RHS */
 }
 
-/* Reserve exactly the widest single date ("28 May 2026" ≈ 67px at this font) so the
+/* Reserve exactly the widest single date ("28 May 2026" ≈ 68px at this font) so the
    date area never changes width as you scrub across days. Right-aligned with
    tabular-nums, so the date's right edge stays pinned and shorter dates grow leftward
    into the reserved space; a date range (region/facility hover) exceeds this and
-   expands rather than clips. */
+   expands rather than clips.
+
+   Stays DM Sans, not DM Mono: the design system reserves the mono face for
+   *values*, and a date set in mono next to a mono percentage reads as two
+   numbers rather than a label and its number. */
 .hover-date time {
   display: inline-block;
-  min-width: 68px;
+  min-width: 69px;
   text-align: right;
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
@@ -720,7 +573,7 @@ header a {
 .hover-values {
   display: inline-flex;
   align-items: center;
-  border-radius: 1px;
+  border-radius: 2px;
   flex-shrink: 0;
   font-weight: 400;
 }
@@ -729,16 +582,18 @@ header a {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #333;
+  color: var(--oe-dark-grey);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
+/* The number itself: DM Mono, the design system's face for values. */
 .hover-values strong {
-  font-weight: 700;
+  font-family: var(--font-data);
+  font-weight: 500;                    /* DM Mono ships 400 and 500 only */
   margin-left: 4px;
   display: inline-block;
-  min-width: 3.6em;                    /* fits "100.0%", the widest value, at 9.9px DM Sans */
+  min-width: 3.6em;                    /* "100.0%" — 6 glyphs at DM Mono's 0.6em advance */
   text-align: right;                   /* % stays at a fixed right edge; label sits left of it */
   font-variant-numeric: tabular-nums;  /* equal-advance digits — no wobble between values */
   font-feature-settings: 'tnum' 1;
@@ -756,43 +611,34 @@ header a {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #666;
+  color: var(--oe-mid-grey);
   padding-left: 16px;
-  border-left: 1px solid #e5e5e5;
+  border-left: 1px solid var(--oe-warm-grey);
 }
 
 .total-value strong {
-  color: #333;
+  color: var(--oe-dark-grey);
   font-weight: 600;
 }
 
 /* Responsive design */
 @media (max-width: 768px) {
-  .opennem-header-content {
-    flex-direction: column;
-    gap: 16px;
-    align-items: flex-start;
-  }
-  
   /* Hide navigation links on mobile */
   header nav.flex {
     display: none !important;
   }
-  
+
   .opennem-stripes-header {
     flex-direction: row;
     justify-content: flex-end;
   }
-  
+
   /* Show date range on mobile with smaller font */
   .opennem-date-range {
     font-size: 14px;
+    line-height: 18px;
   }
-  
-  .opennem-scale-bar {
-    justify-content: flex-start;
-  }
-  
+
   .opennem-facility-label {
     min-width: 45px;
     max-width: 45px;
@@ -813,7 +659,11 @@ header a {
   /* Reduce region header padding but maintain sticky */
   .opennem-region-header {
     padding: 4px 0 2px 0;
+    /* `base` (16/20). The line-height has to come down with the size — the
+       desktop rule sets 24px, and leaving it here padded every region heading on
+       a phone by 4px it wasn't asking for. */
     font-size: 16px;
+    line-height: 20px;
     /* Sticky properties inherited from desktop */
   }
   
@@ -831,7 +681,7 @@ header a {
     min-width: unset;
     max-width: calc(100% - 8px);
     background: none;
-    color: #333;
+    color: var(--oe-dark-grey);
     font-size: 10px;
     font-weight: 500;
     /* Tappable so tap-to-pin and long-press-for-the-hovercard work on mobile
@@ -982,7 +832,7 @@ header a {
   width: 34px;
   height: 34px;
   padding: 0;
-  color: #6a6a6a;
+  color: var(--oe-mid-grey);
   background: transparent;
   border: none;                 /* the icon is already a circle — no outer ring */
   cursor: pointer;
@@ -1015,13 +865,29 @@ header a {
   align-items: stretch;
   gap: 14px;
 }
+/* DM Sans, sentence case — NOT the uppercase Space Grotesk the design system
+   gives an "eyebrow".
+ *
+ * The written spec says Space Grotesk is for "labels, buttons, eyebrows, almost
+ * always uppercase", and this was set that way first. Open Electricity's own
+ * site says otherwise about this particular kind of thing: its top nav
+ * (Tracker / Facilities / Records) and its list controls (Region / Technology /
+ * Metric) are all sentence-case DM Sans, and the uppercase Space Grotesk is kept
+ * for section eyebrows — "MOST RECENT", "AUG 2026". This toggle is a nav row,
+ * not a section label, so it follows the nav.
+ *
+ * `.opennem-stats-table thead th` and `.shortcuts-group-title` are the eyebrows
+ * in this app, and those do go uppercase Space Grotesk.
+ *
+ * The red underline on the active option is ours: a two-state toggle needs a
+ * clearer "you are here" than a six-item nav does. */
 .opennem-fleet-toggle-option {
   font-family: var(--font-stack);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   line-height: 1;
   padding: 4px 0 5px;
-  color: #6a6a6a;
+  color: var(--oe-mid-grey);
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
@@ -1046,7 +912,7 @@ header a {
    two text sizes scale with the viewport rather than stepping at a breakpoint —
    a step leaves one side of it cramped, which is how this started. The vw
    coefficients are chosen so 402px (iPhone 16 Pro) lands on the design sizes,
-   20px and 13px, and the floors hold 320px together. Measured slack between the
+   20px and 14px, and the floors hold 320px together. Measured slack between the
    wordmark and the controls: 32px at 320, 31px at 360, 50px at 402. */
 @media (max-width: 600px) {
   .opennem-brand {
@@ -1059,7 +925,7 @@ header a {
     gap: clamp(8px, 3vw, 12px);
   }
   .opennem-fleet-toggle-option {
-    font-size: clamp(11px, 3.24vw, 13px);
+    font-size: clamp(11px, 3.24vw, 14px);
   }
   .opennem-help-button {
     width: 30px;
@@ -1081,9 +947,9 @@ header a {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
-  /* Strong scrim: the page is near-white beige (#faf9f6), so a plain card
-     would wash out. A dark translucent scrim + blur gives clear separation. */
+  padding: 16px;
+  /* Strong scrim: the page is light-warm-grey, near enough to white that a plain
+     card would wash out. A dark translucent scrim + blur gives clear separation. */
   background: rgba(30, 30, 30, 0.55);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
@@ -1092,10 +958,10 @@ header a {
 }
 
 .modal-card {
-  background: #ffffff;                /* white, not beige → pops against the scrim */
+  background: var(--oe-white);                /* white, not beige → pops against the scrim */
   color: var(--primary);
   border: 1px solid var(--border-colour);
-  border-radius: 8px;
+  border-radius: 10px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
   width: 100%;
   max-width: 460px;
@@ -1132,14 +998,14 @@ header a {
   justify-content: center;
   font-size: 22px;
   line-height: 1;
-  color: #6a6a6a;
+  color: var(--oe-mid-grey);
   background: var(--buttons-background);
   border: 1px solid var(--border-colour);
   border-radius: var(--header-hover-radius);
   cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease;
 }
-.modal-close:hover { color: var(--dark-grey); background: #ececec; }
+.modal-close:hover { color: var(--dark-grey); background: var(--oe-warm-grey); }
 .modal-close:focus-visible { outline: 2px solid var(--opennem-primary); outline-offset: 2px; }
 
 .modal-body {
@@ -1147,7 +1013,7 @@ header a {
   overflow-y: auto;                   /* long content scrolls; header stays put */
   font-size: var(--body-size);
   line-height: 1.6;
-  color: #333;
+  color: var(--oe-dark-grey);
 }
 
 @keyframes modal-fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -1170,35 +1036,39 @@ header a {
   min-width: 22px;                    /* square-ish for single characters */
   height: 22px;
   padding: 0 6px;
-  font-family: var(--font-stack);
+  font-family: var(--font-ui);        /* a keycap is a label — Space Grotesk */
   font-size: 12px;
   font-weight: 500;
   line-height: 1;
   color: var(--dark-grey);
   background: var(--buttons-background);
-  border: 1px solid #cfcfcf;
-  border-radius: 5px;
+  border: 1px solid var(--oe-mid-warm-grey);
+  border-radius: 4px;
   box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.08), 0 1px 1px rgba(0, 0, 0, 0.12);
   white-space: nowrap;
   vertical-align: middle;
 }
 
 .key-combo { display: inline-flex; align-items: center; gap: 4px; }
-.key-combo-plus { color: #9a9a9a; font-size: 11px; }
+.key-combo-plus { color: var(--oe-mid-grey); font-size: 11px; }
 
 /* ============================================================
    Welcome dialog
    ============================================================ */
-.welcome-intro { margin: 0 0 12px; color: #444; }
+.welcome-intro { margin: 0 0 12px; color: var(--oe-dark-grey); }
 
+/* `list-style` is spelled out because Tailwind's preflight resets `ul` to no
+   marker, and without it these read as five stacked paragraphs rather than a
+   list. Open Electricity restores discs the same way, in `.portable-override`. */
 .welcome-list {
   margin: 0;
   padding-left: 18px;
+  list-style: disc outside;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
-.welcome-list li { color: #333; }
+.welcome-list li { color: var(--oe-dark-grey); }
 
 .welcome-swatch {
   display: inline-block;
@@ -1209,9 +1079,15 @@ header a {
   margin: 0 2px;
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
-.welcome-swatch--out   { background: #d24646; }   /* red = out of service */
-.welcome-swatch--light { background: #bfbfbf; }   /* lightly loaded (20% grey ramp) */
-.welcome-swatch--full  { background: #000000; }   /* fully loaded */
+/* These are DATA colours, not UI ones: each must be the exact value
+   capacity-factor-color-map.ts paints, or the legend lies about the chart. Change
+   one there and change it here. Two are literals rather than palette tokens
+   because the ramp is not made of palette colours — see the header comment on
+   that file for why "no data" in particular sits off the design system. */
+.welcome-swatch--out    { background: var(--oe-red); }  /* out of service */
+.welcome-swatch--light  { background: #bfbfbf; }        /* lightly loaded (ramp's lightest step) */
+.welcome-swatch--full   { background: var(--oe-black); }/* fully loaded */
+.welcome-swatch--nodata { background: #e6f3ff; }        /* no data */
 
 /* Inline keycap that also opens the shortcuts dialog */
 .welcome-kbd-button {
@@ -1226,22 +1102,25 @@ header a {
 .welcome-kbd-button:focus-visible {
   outline: 2px solid var(--opennem-primary);
   outline-offset: 2px;
-  border-radius: 5px;
+  border-radius: 4px;
 }
 
 .welcome-credits {
   margin: 18px 0 0;
   padding-top: 14px;
-  border-top: 1px solid var(--border-colour);
+  border-top: 1px solid var(--divider-colour);
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--oe-mid-grey);
 }
+/* Quiet links, following Open Electricity's own `.portable-override a` — inline
+   prose links there are neutral-with-underline and only go red on hover, rather
+   than the brick red the design system gives a link that has to be found. */
 .welcome-credits a {
-  color: #555;
+  color: var(--oe-mid-grey);
   text-decoration: underline;
   white-space: nowrap;   /* keep "Simon Holmes à Court" (and the API link) from breaking mid-name */
 }
-.welcome-credits a:hover { color: var(--dark-grey); }
+.welcome-credits a:hover { color: var(--oe-dark-red); }
 
 /* ============================================================
    Shortcuts dialog
@@ -1250,13 +1129,16 @@ header a {
 .shortcuts-group { margin-bottom: 18px; }
 .shortcuts-group:last-child { margin-bottom: 0; }
 
+/* An "eyebrow": `.subhead-secondary` from the design system, one step down in
+   size because it labels a group inside a dialog rather than a page section. */
 .shortcuts-group-title {
   margin: 0 0 8px;
-  font-size: 11px;
-  font-weight: 600;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: #8a8a8a;
+  letter-spacing: 0.63px;
+  color: var(--oe-mid-grey);
 }
 
 .shortcut-row {
@@ -1265,7 +1147,7 @@ header a {
   justify-content: space-between;
   gap: 16px;
   padding: 6px 0;
-  border-bottom: var(--border-style);   /* 1px dotted #cdcdcd, matches the app */
+  border-bottom: var(--border-style);   /* 1px dotted mid-warm-grey, matches the app */
 }
 .shortcut-row:last-child { border-bottom: none; }
 
@@ -1276,8 +1158,17 @@ header a {
   margin: 0;
   flex-shrink: 0;
 }
-.shortcut-sep { color: #9a9a9a; font-size: 12px; }
-.shortcut-desc { margin: 0; color: #333; text-align: right; }
+.shortcut-sep { color: var(--oe-mid-grey); font-size: 12px; }
+/* `sm` (14/18), not the 16px body step: this is a dense two-column reference
+   table, and at prose size the longest description wraps against a keycap
+   column that can't shrink. */
+.shortcut-desc {
+  margin: 0;
+  font-size: 14px;
+  line-height: 18px;
+  color: var(--oe-dark-grey);
+  text-align: right;
+}
 
 /* ============================================================
    Stats / records page (/stats)
@@ -1293,17 +1184,20 @@ header a {
 .opennem-stats-intro {
   margin: 8px 0 28px;
 }
+/* `2xl` at 28/32, semibold, `tight` tracking — the design system's h2, which is
+   what this is. (Was 28px/700 with an em-relative tracking of its own invention.) */
 .opennem-stats-intro h1 {
   font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  line-height: 32px;
+  font-weight: 600;
+  letter-spacing: -0.48px;
   color: var(--dark-grey);
   margin: 0 0 8px;
 }
 .opennem-stats-intro p {
-  font-size: 14px;
-  line-height: 1.6;
-  color: #555;
+  font-size: 16px;
+  line-height: 24px;
+  color: var(--oe-mid-grey);
   max-width: 660px;
   margin: 0;
 }
@@ -1314,11 +1208,11 @@ header a {
 /* Data-recency disclosure: quieter than the intro copy, but always present so
    the age of the underlying cached data is never something you have to guess. */
 .opennem-stats-intro p.opennem-stats-recency {
-  font-size: 12.5px;
-  color: #7a7a7a;
+  font-size: 12px;
+  color: var(--oe-mid-grey);
   margin-top: 10px;
   padding-left: 10px;
-  border-left: 2px solid #e0e0e0;
+  border-left: 2px solid var(--oe-warm-grey);
   max-width: 660px;
 }
 
@@ -1328,15 +1222,19 @@ header a {
 .opennem-stats-panel-head {
   margin-bottom: 8px;
 }
+/* `lg` — the step below the page title, and the same size as a region heading
+   over on the stripes. */
 .opennem-stats-panel-head h2 {
-  font-size: 18px;
+  font-size: 20px;
+  line-height: 24px;
   font-weight: 600;
   color: var(--dark-grey);
   margin: 0;
 }
 .opennem-stats-panel-head p {
-  font-size: 12.5px;
-  color: #6a6a6a;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--oe-mid-grey);
   margin: 3px 0 0;
 }
 
@@ -1348,15 +1246,18 @@ header a {
   border-collapse: collapse;
   font-size: 14px;
 }
+/* Column headings are eyebrows: uppercase Space Grotesk, `wider` tracking,
+   mid-grey — `.subhead-secondary`, one size down for a table. */
 .opennem-stats-table thead th {
-  font-size: 11px;
-  font-weight: 600;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #8a8a8a;
+  letter-spacing: 0.63px;
+  color: var(--oe-mid-grey);
   text-align: right;
   padding: 0 0 8px 20px;
-  border-bottom: 1px solid #e5e5e5;
+  border-bottom: 1px solid var(--oe-mid-warm-grey);
   white-space: nowrap;
 }
 .opennem-stats-table thead th.opennem-stats-rowlabel {
@@ -1376,7 +1277,12 @@ header a {
   display: none;
 }
 
+/* Every cell in this column is a value, so the whole column is DM Mono with
+   tabular figures — the design system's rule, and the reason the numbers now
+   line up on their digits rather than merely on their right edge. DM Mono ships
+   400 and 500 only, so "bold" here is 500. */
 .opennem-stats-num {
+  font-family: var(--font-data);
   text-align: right;
   padding: 10px 0 10px 20px;
   vertical-align: top;
@@ -1387,19 +1293,39 @@ header a {
 
 .opennem-stats-value {
   display: block;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 500;
   color: var(--dark-grey);
-  line-height: 1.2;
+  line-height: 1.25;
 }
+/* The qualifier under a value ("12 Jan 2025 · 512 GWh/day") — a caption, so it
+   goes back to the body face. */
 .opennem-stats-sub {
   display: block;
-  font-size: 11.5px;
-  color: #8a8a8a;
+  font-family: var(--font-stack);
+  font-size: 12px;
+  color: var(--oe-mid-grey);
   margin-top: 2px;
 }
+
+/* "GWh" on a total: smaller and grey, the design system's treatment of a unit
+   suffix, and the same relationship `.capacity-unit` gives the MW on a
+   station's capacity. The leading space is drawn here rather than in the string
+   so it can be a hair's breadth rather than a full mono advance. */
+.opennem-stats-unit {
+  font-size: 0.72em;
+  font-weight: 400;
+  color: var(--oe-mid-grey);
+  margin-left: 0.35em;
+}
+/* Inside the caption line the unit is already grey and small, so it only needs
+   the size step — colouring it again would sink it below the date beside it. */
+.opennem-stats-sub .opennem-stats-unit {
+  font-size: 0.85em;
+  margin-left: 0.25em;
+}
 .opennem-stats-empty {
-  color: #bbb;
+  color: var(--oe-mid-warm-grey);
   font-weight: 400;
 }
 
@@ -1407,10 +1333,10 @@ header a {
    to both: it is neither a gap nor a total, and reads as working, not result. */
 .opennem-stats-adjustment {
   display: block;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
-  color: #6f6f6f;
-  line-height: 1.2;
+  color: var(--oe-mid-grey);
+  line-height: 1.25;
 }
 
 .opennem-stats-flag {
@@ -1446,7 +1372,7 @@ header a {
   max-width: 120px;
   height: 4px;
   margin: 6px 0 0 auto;
-  background: #ececec;
+  background: var(--oe-warm-grey);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -1460,31 +1386,31 @@ header a {
 /* Row separators and emphasis for network subtotals / grand total. */
 .opennem-stats-row > td,
 .opennem-stats-row > th {
-  border-bottom: 1px dotted #e0e0e0;
+  border-bottom: 1px dotted var(--oe-warm-grey);
 }
 .opennem-stats-row-network > th,
 .opennem-stats-row-network > td {
-  border-top: 1px solid #d8d8d8;
+  border-top: 1px solid var(--oe-mid-warm-grey);
 }
 .opennem-stats-row-network .opennem-stats-rowlabel,
 .opennem-stats-row-total .opennem-stats-rowlabel {
   font-weight: 700;
-  color: black;
+  color: var(--oe-black);
 }
 .opennem-stats-row-total > th,
 .opennem-stats-row-total > td {
-  border-top: 2px solid #333;
+  border-top: 2px solid var(--oe-dark-grey);
 }
 .opennem-stats-row-total .opennem-stats-value {
-  color: black;
+  color: var(--oe-black);
 }
 
 .opennem-stats-note {
-  font-size: 11.5px;
-  color: #8a8a8a;
+  font-size: 12px;
+  color: var(--oe-mid-grey);
   line-height: 1.6;
   margin-top: 24px;
-  border-top: 1px dotted #cdcdcd;
+  border-top: 1px dotted var(--oe-mid-warm-grey);
   padding-top: 14px;
   max-width: 740px;
 }
@@ -1496,8 +1422,12 @@ header a {
   .opennem-stats-rowlabel-short {
     display: inline;
   }
+  /* `xl` — the design system's own h2 at mobile is 28/32, but this page title
+     shares its line with nothing and 24px keeps the intro paragraph beneath it
+     on two lines rather than four. */
   .opennem-stats-intro h1 {
-    font-size: 22px;
+    font-size: 24px;
+    line-height: 28px;
   }
 }
 

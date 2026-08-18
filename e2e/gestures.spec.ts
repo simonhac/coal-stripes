@@ -386,4 +386,25 @@ test.describe('gesture navigator', () => {
     await page.waitForTimeout(500);
     expect(await offset(page)).toBe(before);
   });
+
+  /**
+   * The trackpad/touch equivalent of the two tests above: a horizontal pan must
+   * not reach the browser as a swipe-back.
+   *
+   * Asserted on the ROOT element, which is the only place that works. The
+   * viewport takes its overscroll behaviour from `html` and does NOT inherit it
+   * from `<body>` — unlike `overflow`, which does. This has regressed once
+   * already, by the rule being moved to `body` while the stylesheet still looked
+   * correct at a glance, and it is invisible in CI and in devtools because the
+   * declaration is present and computed either way. Playwright cannot synthesise
+   * the OS-level swipe itself, so the reachable guarantee is that the rule lands
+   * where the browser reads it.
+   */
+  test('the root element suppresses horizontal overscroll, so a pan is never a swipe-back', async ({ page }) => {
+    await loadApp(page);
+    const onRoot = await page.evaluate(
+      () => getComputedStyle(document.documentElement).overscrollBehaviorX,
+    );
+    expect(onRoot).toBe('none');
+  });
 });

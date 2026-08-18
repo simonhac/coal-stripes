@@ -10,6 +10,7 @@ import { RegionSection } from '../components/RegionSection';
 import { DateRange } from '../components/DateRange';
 import { useQueries, useQueryClient, type NotifyOnChangeProps } from '@tanstack/react-query';
 import { yearQueryOptions } from '@/client/year-queries';
+import { loadRosterSnapshot, saveRosterSnapshot, type RosterFacility } from '@/client/roster-snapshot';
 import { getRegionNames } from '@/client/cap-fac-stats';
 import { FleetModeProvider } from '@/client/fleet-mode-context';
 import { endTooltip } from '@/client/tooltip-bus';
@@ -44,8 +45,13 @@ const ROSTER_NOTIFY_ON: NotifyOnChangeProps = ['data', 'status'];
 // roster including SA1 and retired plants.
 function buildFacilitiesByRegion(
   yearResults: CapFacYear[]
-): Map<string, { code: string; name: string }[]> {
+): Map<string, RosterFacility[]> {
   const regionFacilityMaps = new Map<string, Map<string, string>>();
+  // Row heights, taken from the built tiles — the very canvas height
+  // CompositeTile reserves. Carried in the roster so a cached one (see
+  // roster-snapshot) can size next load's rows exactly, with no reflow when the
+  // real tiles arrive. Later years win: a facility that gained a unit is taller.
+  const heights = new Map<string, number>();
   for (const yearData of yearResults) {
     for (const unit of yearData.data.data) {
       if (unit.region) {
@@ -55,9 +61,12 @@ function buildFacilitiesByRegion(
         regionFacilityMaps.get(unit.region)!.set(unit.facility_code, unit.facility_name);
       }
     }
+    for (const [facilityCode, tile] of yearData.facilityTiles) {
+      heights.set(facilityCode, tile.getCanvas().height);
+    }
   }
 
-  const facilitiesMap = new Map<string, { code: string; name: string }[]>();
+  const facilitiesMap = new Map<string, RosterFacility[]>();
   const sortedRegions = [...ALL_REGION_CODES].sort((a, b) =>
     getRegionNames(a).long.localeCompare(getRegionNames(b).long)
   );
@@ -65,7 +74,7 @@ function buildFacilitiesByRegion(
     const facilityMap = regionFacilityMaps.get(regionCode);
     if (facilityMap && facilityMap.size > 0) {
       const sortedFacilities = Array.from(facilityMap.entries())
-        .map(([code, name]) => ({ code, name }))
+        .map(([code, name]) => ({ code, name, height: heights.get(code) }))
         .sort((a, b) => a.name.localeCompare(b.name));
       facilitiesMap.set(regionCode, sortedFacilities);
     }
@@ -187,18 +196,47 @@ function Home() {
   const rosterError = rosterResults.find(r => r.error)?.error ?? null;
   const rosterLoaded = rosterLeft !== undefined && (rosterYears.length === 1 || rosterRight !== undefined);
 
+  // Everything below the page head depends on state the server cannot see — the
+  // query cache, and localStorage. So the server renders the head and nothing
+  // else, and this flag marks the first render that is allowed to know better.
+  // It is what keeps the first-visit spinner out of the SSR'd HTML.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
+
+  // The roster this device saw last time, read once after hydration (never
+  // during SSR, where it doesn't exist and would mismatch). It is the same
+  // "hold the last good roster" idea as the ref below, extended across reloads.
+  const [snapshotRoster, setSnapshotRoster] = useState<Map<string, RosterFacility[]> | null>(null);
+  useEffect(() => {
+    setSnapshotRoster(loadRosterSnapshot(mode));
+  }, [mode]);
+
   // Hold the last good roster while a mode switch loads, so the rows don't
   // vanish behind the spinner mid-session. (useQueries takes no
   // placeholderData, so this is the equivalent by hand.)
-  const lastRosterRef = useRef<Map<string, { code: string; name: string }[]>>(new Map());
+  //
+  // Seeded from the snapshot on a reload, which is what lets the page render its
+  // real shell — headers, labels, correctly-sized shimmering rows — before any
+  // data has arrived. A live roster always supersedes it on the next render.
+  const lastRosterRef = useRef<Map<string, RosterFacility[]>>(new Map());
   const facilitiesByRegion = useMemo(() => {
     if (rosterLoaded) {
       lastRosterRef.current = buildFacilitiesByRegion(
         [rosterLeft, rosterRight].filter(Boolean) as CapFacYear[]
       );
+    } else if (lastRosterRef.current.size === 0 && snapshotRoster) {
+      lastRosterRef.current = snapshotRoster;
     }
     return lastRosterRef.current;
-  }, [rosterLoaded, rosterLeft, rosterRight]);
+  }, [rosterLoaded, rosterLeft, rosterRight, snapshotRoster]);
+
+  // Record the shape of the page for the next load. Keyed on the built roster
+  // rather than done inside the memo above, which must stay pure.
+  useEffect(() => {
+    if (rosterLoaded) saveRosterSnapshot(mode, facilitiesByRegion);
+  }, [rosterLoaded, facilitiesByRegion, mode]);
 
   // Gesture spring → rendered date. Offset can be negative for elastic overshoot.
   //
@@ -332,13 +370,22 @@ function Home() {
   useRecoverFailedYears();
 
   // On the first load, position the timeline. On a later mode switch, keep the
-  // current navigation target.
+  // current navigation target (hence `prev ??`).
+  //
+  // Deliberately independent of the data: both dates are just
+  // `boundaries.latestDataDay`, so waiting on `rosterLoaded` held the header,
+  // the date range and every row behind the spinner for a network round trip
+  // they never needed.
+  //
+  // Still an effect rather than a useState initialiser, though, because
+  // latestDataDay is today-dependent (getTodayAEST() − 1) while the SSR document
+  // is edge-cached for an hour: an initialiser would hydration-mismatch against
+  // an hour-old document across AEST midnight.
   useEffect(() => {
-    if (!rosterLoaded) return;
     targetEndDateRef.current ??= boundaries.latestDataDay;
     setTargetEndDate(prev => prev ?? boundaries.latestDataDay);
     setAnimatedEndDate(prev => prev ?? boundaries.latestDataDay);
-  }, [rosterLoaded, boundaries]);
+  }, [boundaries]);
 
 
   // Ensure the page has focus on mount for keyboard navigation
@@ -406,6 +453,7 @@ function Home() {
           <h2>Unable to load data</h2>
           <p>{rosterError instanceof Error ? rosterError.message : 'Failed to load data'}</p>
           <button
+            className="oe-button"
             onClick={() => {
               void queryClient.refetchQueries({ predicate: isFailedYearQuery });
             }}
@@ -417,27 +465,26 @@ function Home() {
     );
   }
 
-  // Gate on having *a* roster rather than a freshly-loaded one, so a mode
-  // switch keeps the current rows on screen instead of flashing the spinner.
-  // Both dates are settled together by an effect once the first roster lands.
-  if (facilitiesByRegion.size === 0 || !targetEndDate || !animatedEndDate) {
-    return (
-      <div className="opennem-loading">
-        <div className="opennem-loading-spinner"></div>
-        Loading stripes…
-      </div>
-    );
-  }
+  // Rows can be drawn as soon as the page's SHAPE is known — from a live roster
+  // or, on a reload, from the snapshot — which is well before the stripes
+  // themselves arrive. The rows that have no data yet shimmer (CompositeTile),
+  // at the heights the roster records, so nothing reflows when they fill in.
+  const canDrawRows = facilitiesByRegion.size > 0 && targetEndDate !== null && animatedEndDate !== null;
 
   return (
     <FleetModeProvider value={mode}>
-      {/* Performance Monitor */}
-      <PerformanceDisplay />
+      {/* Performance Monitor. Client-only: it seeds its state from
+          localStorage, which the server can't see. */}
+      {hydrated && <PerformanceDisplay />}
 
       {/* Header + date range. Grouped so the sticky header's scope ends exactly
           at the top of the viz below — that's what makes the first region header
           push the page header out of view instead of sliding over it. See
-          `.opennem-page-head` in opennem.css. */}
+          `.opennem-page-head` in opennem.css.
+
+          Rendered unconditionally, including on the server, so it is in the HTML
+          itself: on a reload the top of the page is painted before a single line
+          of JavaScript runs, and never moves again. */}
       <div className="opennem-page-head" ref={pageHeadRef}>
         <OpenElectricityHeader
           onOpenHelp={openWelcome}
@@ -453,44 +500,56 @@ function Home() {
         </div>
       </div>
 
-      <div className="opennem-stripes-container">
-        {/* Main Stripes Visualisation. data-offset is where the stripes ARE;
-            data-target-offset is where they're headed — they agree except
-            mid-glide, and the e2e suite asserts on both. */}
-        <div
-          ref={(el) => {
-            containerRef.current = el;
-            elementRef.current = el;
-          }}
-          data-testid="stripes-viz"
-          data-offset={Math.round(currentOffset)}
-          data-target-offset={Math.round(
-            getDaysBetween(boundaries.earliestDataEndDay, targetEndDate)
-          )}
-          data-max-offset={maxOffset}
-          className="opennem-stripes-viz"
-          {...bind()}
-        >
-          {/* Create a section for each region */}
-          {Array.from(facilitiesByRegion.entries()).map(([regionCode, facilities]) => {
-            return (
-              <RegionSection
-                key={regionCode}
-                regionCode={regionCode}
-                facilities={facilities}
-                endDate={animatedEndDate}
-                animatedDateRange={animatedDateRange}
-                targetDateRange={targetDateRange}
-                onMonthClick={handleMonthClick}
-                isMobile={isMobile}
-              />
-            );
-          })}
+      {canDrawRows ? (
+        <div className="opennem-stripes-container">
+          {/* Main Stripes Visualisation. data-offset is where the stripes ARE;
+              data-target-offset is where they're headed — they agree except
+              mid-glide, and the e2e suite asserts on both. */}
+          <div
+            ref={(el) => {
+              containerRef.current = el;
+              elementRef.current = el;
+            }}
+            data-testid="stripes-viz"
+            data-offset={Math.round(currentOffset)}
+            data-target-offset={Math.round(
+              getDaysBetween(boundaries.earliestDataEndDay, targetEndDate)
+            )}
+            data-max-offset={maxOffset}
+            className="opennem-stripes-viz"
+            {...bind()}
+          >
+            {/* Create a section for each region */}
+            {Array.from(facilitiesByRegion.entries()).map(([regionCode, facilities]) => {
+              return (
+                <RegionSection
+                  key={regionCode}
+                  regionCode={regionCode}
+                  facilities={facilities}
+                  endDate={animatedEndDate}
+                  animatedDateRange={animatedDateRange}
+                  targetDateRange={targetDateRange}
+                  onMonthClick={handleMonthClick}
+                  isMobile={isMobile}
+                />
+              );
+            })}
 
-          {/* Bottom spacer */}
-          <div style={{ height: '50px', clear: 'both' }} />
+            {/* Bottom spacer */}
+            <div style={{ height: '50px', clear: 'both' }} />
+          </div>
         </div>
-      </div>
+      ) : hydrated ? (
+        // A device that has genuinely never loaded this page: no roster, no
+        // snapshot, nothing to draw. `hydrated` is what keeps this off the
+        // server — rendering it there put "Loading stripes…" in the HTML, so it
+        // painted on every single load, refreshes included, whether or not any
+        // data was actually missing.
+        <div className="opennem-loading">
+          <div className="opennem-loading-spinner"></div>
+          Loading stripes…
+        </div>
+      ) : null}
 
       {/* Onboarding / help dialogs */}
       <WelcomeDialog

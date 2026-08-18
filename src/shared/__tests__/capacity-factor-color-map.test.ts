@@ -13,22 +13,34 @@ function hexToAbgr(hex: string): number {
   return ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
 }
 
+/**
+ * The ramp's two named anchors, named so a palette change is a two-line edit
+ * here rather than a nine-assertion sweep.
+ *
+ * `OFFLINE_RED` is Open Electricity's brand red. `NO_DATA` is deliberately NOT a
+ * design-system colour: the grey ramp occupies the whole greyscale axis, so
+ * "unknown" has to leave that axis to stay unmistakable. See the header comment
+ * on capacity-factor-color-map.ts.
+ */
+const OFFLINE_RED = '#c74523';
+const NO_DATA = '#e6f3ff';
+
 describe('capacityFactorColorMap', () => {
   describe('red band (below 20%)', () => {
     it('paints 0% red', () => {
-      expect(capacityFactorColorMap.getHexColor(0)).toBe('#d24646');
+      expect(capacityFactorColorMap.getHexColor(0)).toBe(OFFLINE_RED);
     });
 
     it('paints 19% red', () => {
-      expect(capacityFactorColorMap.getHexColor(19)).toBe('#d24646');
+      expect(capacityFactorColorMap.getHexColor(19)).toBe(OFFLINE_RED);
     });
 
     it('rounds before deciding, so 19.4% is still red', () => {
-      expect(capacityFactorColorMap.getHexColor(19.4)).toBe('#d24646');
+      expect(capacityFactorColorMap.getHexColor(19.4)).toBe(OFFLINE_RED);
     });
 
     it('clamps negatives into the red band', () => {
-      expect(capacityFactorColorMap.getHexColor(-10)).toBe('#d24646');
+      expect(capacityFactorColorMap.getHexColor(-10)).toBe(OFFLINE_RED);
     });
   });
 
@@ -59,12 +71,12 @@ describe('capacityFactorColorMap', () => {
   });
 
   describe('no data', () => {
-    it('paints null pale blue, never red or grey', () => {
-      expect(capacityFactorColorMap.getHexColor(null)).toBe('#e6f3ff');
+    it('paints null pale blue, never red or a ramp step', () => {
+      expect(capacityFactorColorMap.getHexColor(null)).toBe(NO_DATA);
     });
 
     it('paints null pale blue in the canvas form too', () => {
-      expect(capacityFactorColorMap.getIntColor(null) >>> 0).toBe(hexToAbgr('#e6f3ff'));
+      expect(capacityFactorColorMap.getIntColor(null) >>> 0).toBe(hexToAbgr(NO_DATA));
     });
   });
 
@@ -80,9 +92,9 @@ describe('capacityFactorColorMap', () => {
 
   describe('getProportionColorHex', () => {
     it('delegates to the shared map', () => {
-      expect(getProportionColorHex(19)).toBe('#d24646');
+      expect(getProportionColorHex(19)).toBe(OFFLINE_RED);
       expect(getProportionColorHex(20)).toBe('#bfbfbf');
-      expect(getProportionColorHex(null)).toBe('#e6f3ff');
+      expect(getProportionColorHex(null)).toBe(NO_DATA);
     });
   });
 });

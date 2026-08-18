@@ -99,7 +99,9 @@ describe('FacilityYearTile', () => {
     };
 
     const PAGE_BACKGROUND = [0xfa, 0xf9, 0xf6];
-    const NO_DATA_BLUE = [0xe6, 0xf3, 0xff];
+    // "No data" — off the greyscale axis the ramp occupies, so it can never be
+    // read as a very low capacity factor.
+    const NO_DATA = [0xe6, 0xf3, 0xff];
 
     // LD01 in 2000: missing until 30 March because a gap that began in October
     // 1999 ran over New Year. The year's own values cannot tell that apart from
@@ -119,8 +121,8 @@ describe('FacilityYearTile', () => {
       const unit = { ...mockUnit('LD01', 500, gapOverNewYear), commenced: '1970-12-31' };
       new FacilityYearTile(createFacility('LIDDELL', [unit]), 2023);
 
-      expect(rgbAt(0)).toEqual(NO_DATA_BLUE);
-      expect(rgbAt(88)).toEqual(NO_DATA_BLUE);
+      expect(rgbAt(0)).toEqual(NO_DATA);
+      expect(rgbAt(88)).toEqual(NO_DATA);
     });
 
     it('still paints a genuine pre-commission run as page background', () => {
@@ -150,9 +152,9 @@ describe('FacilityYearTile', () => {
       const unit = { ...mockUnit('BW01', 660, partialFirstYear), commenced: '1985-01-01' };
       new FacilityYearTile(createFacility('BAYSW', [unit]), 1998);
 
-      expect(rgbAt(0)).toEqual(NO_DATA_BLUE);
-      expect(rgbAt(339)).toEqual(NO_DATA_BLUE);
-      expect(rgbAt(340)).not.toEqual(NO_DATA_BLUE);
+      expect(rgbAt(0)).toEqual(NO_DATA);
+      expect(rgbAt(339)).toEqual(NO_DATA);
+      expect(rgbAt(340)).not.toEqual(NO_DATA);
     });
   });
 

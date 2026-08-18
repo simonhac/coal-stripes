@@ -38,6 +38,13 @@ export function WelcomeDialog({
           loaded to <span className="welcome-swatch welcome-swatch--full" />{' '}
           fully loaded. A long run of red means the whole station is offline.
         </li>
+        {/* Spelled out, because the one thing a reader must not do with this
+            chart is read a gap as a zero. */}
+        <li>
+          A pale blue <span className="welcome-swatch welcome-swatch--nodata" />{' '}
+          bar means no data — the day is in the future, or the reading never
+          reached us. It never means zero.
+        </li>
         <li>
           {isTouch
             ? 'Tap and hold a day to see a tooltip about that unit on that day.'
