@@ -27,58 +27,37 @@ export interface UnitHistoryDTO {
   data: (number | null)[];
 }
 
-/** One generating unit's metadata plus a year of capacity factors. */
-export interface GeneratingUnitDTO {
-  network: string; // 'nem' or 'wem'
-  region?: string; // NEM region code (e.g. 'NSW1'); undefined for WEM units
-  data_type: string;
-  units: string;
-  capacity: number; // registered capacity in MW
+/**
+ * One unit's slice of a single year — everything that is genuinely per-year.
+ *
+ * This is what a year file on the wire actually holds. Every OTHER fact about a
+ * unit is year-INDEPENDENT (it comes from OpenElectricity's facilities roster,
+ * not from the year's energy rows) and lives in UnitMetadata, served once per
+ * document instead of once per year. `duid` stays because it is the join key.
+ *
+ * Splitting on that boundary is what makes a historical year immutable. The
+ * fields that moved included `last_seen`, which advances daily for every
+ * operating unit — so the year 2000 payload changed its bytes every single day,
+ * and the store dutifully marked a 26-year-old year as revised and purged its
+ * edge copy. See @/shared/unit-metadata for the join, and docs/plans/.
+ */
+export interface YearUnitDTO {
   // The unit's dispatchable unit identifier (DUID) — the market's unique code
-  // for a generating unit, e.g. 'BW01' for Bayswater unit 1.
+  // for a generating unit, e.g. 'BW01' for Bayswater unit 1. The join key.
   duid: string;
-  facility_code: string;
-  facility_name: string;
-  fueltech: string; // 'coal_black' or 'coal_brown'
-  // The unit's operating status as at the time the payload was built — NOT as
-  // at the payload's year. A unit retired in 2012 is 'retired' in every year's
-  // payload, including 1999 when it was running. This is what lets the client
-  // derive the `current` fleet view without a second request; see
-  // @/shared/fleet-filter.
-  status: 'operating' | 'retired';
-  // When this unit existed, from OpenElectricity's unit metadata — NOT inferred
-  // from the year in `history`, which is what lets a gap straddling 31 Dec be
-  // told apart from a commissioning. `commenced` is the pre-commission boundary
-  // and is the field to trust; `first_seen`/`last_seen` are the data frontier
-  // and may lag it badly (`data_first_seen` reports the start of the later
-  // contiguous run for units with early gaps), so they may only widen an
-  // observed span, never narrow it. Optional: payloads cached before these
-  // fields existed still satisfy the contract, and consumers fall back to
-  // inferring the span from the values.
-  commenced?: string | null; // ISO date
-  commenced_specificity?: UnitDateSpecificity | null;
-  first_seen?: string | null; // ISO date
-  last_seen?: string | null; // ISO date
   history: UnitHistoryDTO;
 
   // ---- Data-quality accounting -------------------------------------------
-  // The three fields below exist so /stats can state what OpenElectricity
-  // actually holds, not merely what survives our own folding. None affects the
+  // Both fields below exist so /stats can state what OpenElectricity actually
+  // holds, not merely what survives our own folding. Neither affects the
   // visualisation; see @/server/coal-stats-service for how each is consumed.
+  // They are genuinely per-year — a count of days, and a series — which is why
+  // they stayed here while `foldedInto` (a static property of the unit) moved.
 
-  // Set when this unit's readings are folded into another DUID's row (see
-  // SUPERSEDED_BY in @/server/cap-fac-data-service). Such a row belongs to NO
-  // fleet view — @/shared/fleet-filter drops it — and contributes no generation,
-  // because its energy is already counted in the absorbing row. It is emitted
-  // solely so the fold can see the member's own nulls, which folding would
-  // otherwise make invisible. Its `history` is the member's RAW pattern: no
-  // retired-unit 0-fill, no pre-commission blanking, so a null here means
-  // OpenElectricity had nothing for that day.
-  foldedInto?: string | null;
   // For a row that absorbs other DUIDs, this unit's OWN readings without them,
-  // filled by the same raw rules as a folded member's `history`. Lets the fold
-  // separate the absorbing row's own gaps from those it inherited by starting at
-  // its members' first reading. Absent on every unit that absorbs nothing.
+  // filled by the raw rules described on `foldedInto`. Lets the fold separate
+  // the absorbing row's own gaps from those it inherited by starting at its
+  // members' first reading. Absent on every unit that absorbs nothing.
   selfHistory?: UnitHistoryDTO;
   // Days where the retired-unit 0-fill wrote 0 over a day OpenElectricity
   // explicitly returned as null — real holes this payload hides. Arises when
@@ -87,15 +66,111 @@ export interface GeneratingUnitDTO {
   suppressedNullDays?: number;
 }
 
+/**
+ * Everything true of a unit regardless of which year you are looking at.
+ *
+ * Served once, inlined into the SSR document, and joined onto each year's rows
+ * by DUID — see @/shared/unit-metadata. None of it is derived from a year's
+ * energy data: it all comes from the facilities roster, which is why one copy
+ * can stand in for the 29 that used to ride in the year files.
+ */
+export interface UnitMetadata {
+  network: string; // 'nem' or 'wem'
+  region?: string; // NEM region code (e.g. 'NSW1'); 'WEM' for WEM units
+  capacity: number; // registered capacity in MW
+  facility_code: string;
+  facility_name: string;
+  fueltech: string; // 'coal_black' or 'coal_brown'
+  // The unit's operating status as at the time the metadata was built — NOT as
+  // at any particular year. A unit retired in 2012 is 'retired' when you look
+  // at 1999, when it was running. This is what lets the client derive the
+  // `current` fleet view without a second request; see @/shared/fleet-filter.
+  status: 'operating' | 'retired';
+  // When this unit existed, from OpenElectricity's unit metadata — NOT inferred
+  // from the year in `history`, which is what lets a gap straddling 31 Dec be
+  // told apart from a commissioning. `commenced` is the pre-commission boundary
+  // and is the field to trust; `first_seen`/`last_seen` are the data frontier
+  // and may lag it badly (`data_first_seen` reports the start of the later
+  // contiguous run for units with early gaps), so they may only widen an
+  // observed span, never narrow it. Optional: a metadata blob written before
+  // these fields existed still satisfies the contract, and consumers fall back
+  // to inferring the span from the values.
+  commenced?: string | null; // ISO date
+  commenced_specificity?: UnitDateSpecificity | null;
+  first_seen?: string | null; // ISO date
+  last_seen?: string | null; // ISO date
+  // Set when this unit's readings are folded into another DUID's row (see
+  // SUPERSEDED_BY in @/server/cap-fac-data-service). Such a row belongs to NO
+  // fleet view — @/shared/fleet-filter drops it — and contributes no generation,
+  // because its energy is already counted in the absorbing row. It is emitted
+  // solely so the fold can see the member's own nulls, which folding would
+  // otherwise make invisible. Its `history` is the member's RAW pattern: no
+  // retired-unit 0-fill, no pre-commission blanking, so a null there means
+  // OpenElectricity had nothing for that day.
+  //
+  // Metadata rather than per-year because SUPERSEDED_BY is a static map: a
+  // member is folded in every year or in none.
+  foldedInto?: string | null;
+}
+
+/**
+ * A unit's year slice with its metadata joined back on — the shape every
+ * consumer downstream of @/shared/unit-metadata still sees, unchanged.
+ */
+export type GeneratingUnitDTO = YearUnitDTO & UnitMetadata;
+
 /** How precisely OpenElectricity knows a lifecycle date. */
 export type UnitDateSpecificity = 'year' | 'quarter' | 'month' | 'day';
 
-/** The full payload for one calendar year: every coal unit's history. */
-export interface GeneratingUnitCapFacHistoryDTO {
+/** One calendar year exactly as it is stored in R2 and sent on the wire. */
+export interface YearCapFacHistoryDTO {
   type: "capacity_factors";
   version: string;
   created_at: string;
+  data: YearUnitDTO[];
+}
+
+/** The same year, joined against the metadata blob. */
+export interface GeneratingUnitCapFacHistoryDTO
+  extends Omit<YearCapFacHistoryDTO, 'data'> {
   data: GeneratingUnitDTO[];
+}
+
+/**
+ * The metadata blob: every unit's year-independent facts, plus where each
+ * region's record begins.
+ *
+ * Small enough to inline (≈2.0 KB gzipped against a ~3.5 KB document) which is
+ * why there is no `/api/metadata` route — a separate fetch would cost a round
+ * trip on a zone whose edge is in Singapore for less than it saves. It is
+ * emitted into the head by @/routes/__root and read back by
+ * @/client/unit-metadata-inline.
+ */
+export interface UnitMetadataDTO {
+  type: 'unit_metadata';
+  version: string; // must equal CF_DTO_VERSION; a mismatch means a skewed deploy
+  created_at: string;
+  // Constant across every unit, so stated once here rather than 99 times. They
+  // describe `history` (daily energy, converted to a capacity factor) and
+  // `capacity` (MW) respectively.
+  data_type: 'energy';
+  units: 'MW';
+  /**
+   * The first day each region has ANY data, keyed as regionKeyOf() keys it
+   * (NEM region codes, plus 'WEM').
+   *
+   * This is the fact that `leadingBackgroundDays` used to have to infer from
+   * whichever one or two year payloads happened to be loaded — which cannot
+   * tell "the record starts here" from "this region has a year-long collection
+   * gap here". Derived by scanning the stored years ascending, never from
+   * `data_first_seen`, which reports the start of a unit's later contiguous run
+   * (MM4 claims 2000-02-28 with data from 1999-01-06).
+   *
+   * A region with no answer is ABSENT rather than guessed at.
+   */
+  regions: Record<string, { firstDataDay: string }>;
+  /** Keyed by DUID. */
+  unitsByDuid: Record<string, UnitMetadata>;
 }
 
 // ============================================================================

@@ -3,6 +3,7 @@ import { parseDate } from '@internationalized/date';
 import { getDayIndex, getTodayAEST } from '@/shared/date-utils';
 import { setupTestLogger } from '../test-helpers';
 import { cleanupRequestLogger } from '@/server/request-logger';
+import { hydrateYear } from '@/shared/unit-metadata';
 
 describe('Null vs Zero Data Handling', () => {
   let service: CapFacDataService;
@@ -40,7 +41,10 @@ describe('Null vs Zero Data Handling', () => {
     // Fetch data for current year
     console.log(`📅 Fetching ${currentYear} data...`);
     
-    const result = await service.getCapacityFactors(currentYear);
+    const result = hydrateYear(
+      await service.getCapacityFactors(currentYear),
+      await service.getUnitMetadata(),
+    );
     
     console.log(`✅ Fetched data with ${result.data.length} units`);
     

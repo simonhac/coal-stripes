@@ -29,6 +29,7 @@ import { cache } from 'cloudflare:workers';
 import { isAuthorisedPurgeRequest } from '@/server/auth';
 import { DOCUMENT_TAG, NO_STORE } from '@/server/cache-headers';
 import { getCapFacDataService } from '@/server/cap-fac-data-service';
+import { clearDocumentUnitMetadataMemo } from '@/server/document-unit-metadata';
 import { getAESTDateTimeString } from '@/shared/date-utils';
 
 // Every tag the routes emit at the top level. Tier-, year- and
@@ -104,8 +105,11 @@ export const Route = createFileRoute('/api/admin/purge')({
         // The 24 h facilities roster memo lives in module scope, so this only
         // clears it on the isolate that happens to serve this request. Other
         // isolates keep theirs until it expires. Called out in the response
-        // rather than papered over.
+        // rather than papered over. The document's 60 s metadata memo goes with
+        // it: purging the documents and then re-rendering them from a memo of
+        // the blob we just invalidated would defeat the purge.
         getCapFacDataService().clearFacilitiesCache();
+        clearDocumentUnitMetadataMemo();
 
         return Response.json(
           {

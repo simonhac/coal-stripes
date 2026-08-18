@@ -18,13 +18,20 @@
  * `x-cf-source` header on a real request, which is observable from outside and
  * cannot be fooled by the prober warming what it measures.
  */
-import { COAL_STATS_TAG, yearTag } from '@/server/cache-headers';
+import { COAL_STATS_TAG, DOCUMENT_TAG, yearTag } from '@/server/cache-headers';
 import { allDataYears, currentDataYear } from '@/server/data-years';
+import { clearDocumentUnitMetadataMemo } from '@/server/document-unit-metadata';
 import { resolvePurgeTarget } from '@/server/purge';
 import { mapPool } from '@/shared/map-pool';
 import { computeCoalStats } from '@/server/coal-stats-service';
 import { STALE_WINDOW_MULTIPLE, windowsOverdue } from '@/server/refresh-schedule';
-import { buildYear, putStats, statsIsDue, yearFreshness } from '@/server/year-store';
+import {
+  buildUnitMetadata,
+  buildYear,
+  putStats,
+  statsIsDue,
+  yearFreshness,
+} from '@/server/year-store';
 
 /** Stop starting new work after this long, so a sweep can't overrun its cron. */
 const REFRESH_BUDGET_MS = 240_000;
@@ -56,6 +63,8 @@ export interface RefreshSummary {
   failed: number;
   /** Years already past STALE_WINDOW_MULTIPLE of their window when the sweep began. */
   stale: number;
+  metadataWritten: boolean;
+  metadataChanged: boolean;
   statsWritten: boolean;
   statsChanged: boolean;
   purgedTags: number;
@@ -148,13 +157,15 @@ async function purgeChanged(tags: string[], from?: CacheContext): Promise<number
 }
 
 /**
- * Sweep every year, then the stats, then purge whatever moved.
+ * Sweep every year, then the metadata, then the stats, then purge whatever moved.
  *
- * Order matters twice. Stats fold the year payloads, so rebuilding them first
- * would fold the previous generation's numbers and then immediately be a day
- * stale. And the purge comes last, once both are written: purging before the
- * store is updated would send the next reader to R2 for the copy we were about
- * to replace.
+ * Order matters three times now. The metadata's region first-data days are
+ * scanned out of the stored years, so it goes after them. The stats fold the
+ * year payloads *joined against that metadata*, so they go after both —
+ * rebuilding them first would fold the previous generation's numbers and then
+ * immediately be a day stale. And the purge comes last, once everything is
+ * written: purging before the store is updated would send the next reader to R2
+ * for the copy we were about to replace.
  *
  * Most ticks write nothing. Each year costs one R2 HEAD to find out it is not
  * due yet — 29 HEADs every ten minutes is ~125k class-B ops a month against a
@@ -193,6 +204,28 @@ export async function refreshAll(cacheContext?: CacheContext): Promise<RefreshSu
   // that re-fetched byte-identical numbers still counted, so the current year's
   // hourly rewrite refolded the stats ~24 times a day to produce the same
   // answer.
+  // The metadata blob is rebuilt every tick, unconditionally: it costs one
+  // memoised facilities call plus a short scan of the oldest years, and there is
+  // no per-file freshness tier that would say anything useful about a single
+  // object every year depends on. The hash decides whether anything happened.
+  //
+  // Dropping the in-isolate memo matters on the tick a unit actually changes:
+  // this isolate may well serve a document in the next minute, and it should not
+  // serve the copy it is in the middle of replacing.
+  let metadataWritten = false;
+  let metadataChanged = false;
+  try {
+    const write = await buildUnitMetadata();
+    metadataWritten = true;
+    metadataChanged = write.changed;
+    if (write.changed) clearDocumentUnitMetadataMemo();
+  } catch (error) {
+    console.error(JSON.stringify({
+      log: 'refresh:metadata-failed',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+
   let statsWritten = false;
   let statsChanged = false;
   if (changedYears.length > 0 || (await statsIsDue())) {
@@ -208,8 +241,20 @@ export async function refreshAll(cacheContext?: CacheContext): Promise<RefreshSu
     }
   }
 
+  // Documents are purged ONLY when the metadata's content actually moved. They
+  // carry it inlined, so a change has to reach them — but they are also the most
+  // expensive thing on the zone to drop, and the tempting reflex of purging them
+  // whenever the blob is *rewritten* would flush every document every ten
+  // minutes. What makes restraint correct rather than merely cheap is that the
+  // one field which churns daily, `last_seen`, cannot mislead a stale document:
+  // `aliveSpan` only ever WIDENS a span, so observed data always wins over a
+  // metadata date that has fallen behind (see @/shared/data-gaps).
   const purgedTags = await purgeChanged(
-    [...changedYears.map(yearTag), ...(statsChanged ? [COAL_STATS_TAG] : [])],
+    [
+      ...changedYears.map(yearTag),
+      ...(statsChanged ? [COAL_STATS_TAG] : []),
+      ...(metadataChanged ? [DOCUMENT_TAG] : []),
+    ],
     cacheContext,
   );
 
@@ -220,6 +265,8 @@ export async function refreshAll(cacheContext?: CacheContext): Promise<RefreshSu
     deferred: outcomes.filter((o) => o === 'deferred').length,
     failed,
     stale: results.filter((r) => r.stale).length,
+    metadataWritten,
+    metadataChanged,
     statsWritten,
     statsChanged,
     purgedTags,

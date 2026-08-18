@@ -106,18 +106,28 @@ describe('CapFacDataService - Year-based Fetching', () => {
       expect(result.created_at).not.toContain('[Australia/Brisbane]');
       expect(result.created_at).not.toContain('.');
       
-      // Check first unit structure
+      // Check first unit structure. A year row is a DUID and its values, and
+      // nothing else — everything a unit *is* comes from getUnitMetadata below.
       const firstUnit = result.data[0];
-      expect(firstUnit).toHaveProperty('network');
-      expect(firstUnit).toHaveProperty('region');
       expect(firstUnit).toHaveProperty('duid');
-      expect(firstUnit).toHaveProperty('facility_name');
-      expect(firstUnit).toHaveProperty('capacity');
       expect(firstUnit).toHaveProperty('history');
       expect(firstUnit.history).toHaveProperty('data');
       expect(firstUnit.history).toHaveProperty('start');
       expect(firstUnit.history).toHaveProperty('last');
-      
+
+      // ...and the metadata covers every DUID the year emitted, which is what
+      // makes the join total. See @/shared/unit-metadata.
+      const metadata = await service.getUnitMetadata();
+      for (const unit of result.data) {
+        expect(metadata[unit.duid]).toBeDefined();
+      }
+      const firstMeta = metadata[firstUnit.duid];
+      expect(firstMeta).toHaveProperty('network');
+      expect(firstMeta).toHaveProperty('region');
+      expect(firstMeta).toHaveProperty('facility_name');
+      expect(firstMeta).toHaveProperty('capacity');
+
+
       // Check unit data
       expect(firstUnit.history.data).toBeInstanceOf(Array);
       expect(firstUnit.history.data.length).toBe(365);

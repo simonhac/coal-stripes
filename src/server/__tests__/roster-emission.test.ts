@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { Mock } from 'vitest';
 import { CapFacDataService } from '@/server/cap-fac-data-service';
 import { filterFleet } from '@/shared/fleet-filter';
+import { hydrateYear } from '@/shared/unit-metadata';
 import { parseDate } from '@internationalized/date';
 import { getDaysBetween, getTodayAEST } from '@/shared/date-utils';
 import { setupTestLogger, cleanupTestLogger } from '../test-helpers';
@@ -177,9 +178,12 @@ describe('roster emission', () => {
       expect.objectContaining({ status_id: ['operating', 'retired'] })
     );
 
-    const byDuid = new Map(result.data.map((u) => [u.duid, u]));
-    expect(byDuid.get('LV01')!.status).toBe('operating');
-    expect(byDuid.get('GN01')!.status).toBe('retired');
+    // `status` is a year-independent fact and so lives in the metadata, not in
+    // the year payload — but both must still describe the same two rows.
+    expect(result.data.map((u) => u.duid).sort()).toEqual(['GN01', 'LV01']);
+    const metadata = await service.getUnitMetadata();
+    expect(metadata.LV01.status).toBe('operating');
+    expect(metadata.GN01.status).toBe('retired');
   });
 
   it('emits an all-null row for a roster unit with no data this year', async () => {
@@ -342,11 +346,16 @@ describe('aggregate DUIDs (Playford B)', () => {
     getFacilityData.mockResolvedValue({ datatable: { getRows: () => [] } });
 
     const service = new CapFacDataService('key');
-    const full = await service.getCapacityFactors(YEAR);
+    // The two halves of a payload, built from the same roster walk — which is
+    // the point of the split: the aggregate/member branch is emitted once.
+    const full = hydrateYear(
+      await service.getCapacityFactors(YEAR),
+      await service.getUnitMetadata(),
+    );
 
     // A 240 MW station must not be drawn as 480 MW of rows. The members are in
     // the payload (the stats fold needs their nulls; see
-    // GeneratingUnitDTO.foldedInto) but belong to no fleet, `full` included.
+    // UnitMetadata.foldedInto) but belong to no fleet, `full` included.
     expect(filterFleet(full, 'full').data.map((u) => u.duid)).toEqual(['PLAYB-AG']);
     // `current` additionally drops the station itself here: this fixture returns
     // no rows at all, so its year is entirely null.
@@ -369,6 +378,26 @@ describe('aggregate DUIDs (Playford B)', () => {
       'PLAYFB4',
     ]);
     expect(members.every((u) => u.foldedInto === 'PLAYB-AG')).toBe(true);
+  });
+
+  it('keeps the year payload to a DUID and its values, and nothing else', async () => {
+    // The whole point of the split. A metadata field that crept back in here
+    // would be repeated across all 29 year files — and `last_seen` in
+    // particular would make a 1999 payload change its bytes every day, which is
+    // what this is guarding against. See @/shared/unit-metadata.
+    getFacilities.mockResolvedValue(playford());
+    getFacilityData.mockResolvedValue({ datatable: { getRows: () => [] } });
+
+    const year = await new CapFacDataService('key').getCapacityFactors(YEAR);
+
+    for (const unit of year.data) {
+      expect(Object.keys(unit).sort()).toEqual(
+        expect.arrayContaining(['duid', 'history']),
+      );
+      expect(Object.keys(unit).filter(
+        (k) => !['duid', 'history', 'selfHistory', 'suppressedNullDays'].includes(k),
+      )).toEqual([]);
+    }
   });
 
   it('never synthesises red zeros for a member after its metering moved', async () => {

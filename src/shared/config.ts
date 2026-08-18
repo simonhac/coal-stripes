@@ -169,7 +169,13 @@ export const TILE_CONFIG = {
 // what OpenElectricity holds rather than what survives our folding. A bump is
 // required rather than merely tidy: pre-deploy JS has no `foldedInto` filter, so
 // serving it a v2 payload would draw Playford B as five rows.
-export const CF_DTO_VERSION = 'v2';
+// v2 → v3: per-unit metadata left the year payloads entirely. A year now carries
+// a DUID and its daily values, nothing else, and joins against one metadata blob
+// inlined into the SSR document (@/shared/unit-metadata). Pre-deploy JS handed a
+// v3 payload would find no capacity, no facility and no region on any row and
+// render an empty chart. The bump also gives the blob its own key namespace
+// (`v3/unit-metadata.json`) alongside `v3/years/…`.
+export const CF_DTO_VERSION = 'v3';
 
 // Cache freshness policy, shared by the server route (Cache-Control headers)
 // and the client (TanStack Query staleTime).

@@ -21,6 +21,7 @@ import { CapFacDataService } from '@/server/cap-fac-data-service';
 import { computeCoalStats } from '@/server/coal-stats-service';
 import { currentDataYear, earliestDataYear, yearRange } from '@/server/data-years';
 import { readEnv } from '@/server/runtime-env';
+import { CF_DTO_VERSION } from '@/shared/config';
 
 describe('gap adjustments (live API)', () => {
   it('foots up from the counted gaps to the unit-level total', async () => {
@@ -35,7 +36,23 @@ describe('gap adjustments (live API)', () => {
       )
     );
 
-    const stats = await computeCoalStats(async (year) => built.get(year) ?? null);
+    // The metadata comes from the same service, so the join is exactly the one
+    // production performs — the fold reads capacity, region and foldedInto, and
+    // none of them are in a year payload any more.
+    const metadata = await service.getUnitMetadata();
+
+    const stats = await computeCoalStats(
+      async (year) => built.get(year) ?? null,
+      async () => ({
+        type: 'unit_metadata',
+        version: CF_DTO_VERSION,
+        created_at: '',
+        data_type: 'energy',
+        units: 'MW',
+        regions: {},
+        unitsByDuid: metadata,
+      }),
+    );
     const dq = stats.dataQuality;
     const adjustments = dq.adjustments ?? [];
 

@@ -13,6 +13,7 @@ import {
   SELF_HEAL_GUARD,
   STALE_DOCUMENT_TRIPWIRE,
 } from '@/client/stale-document-tripwire';
+import { unitMetadataScript } from '@/client/unit-metadata-inline';
 import appCss from '@/styles/app.css?url';
 
 const TITLE = 'Coal Availability';
@@ -22,7 +23,32 @@ const SOCIAL_DESCRIPTION =
 const SITE = 'https://stripes.energy';
 
 export const Route = createRootRoute({
-  head: () => ({
+  /**
+   * Read the unit metadata so `head` can inline it — see
+   * @/client/unit-metadata-inline for why it travels in the document rather than
+   * over a second request.
+   *
+   * The `import.meta.env.SSR` guard is load-bearing twice over. A root loader
+   * re-runs on the CLIENT for subsequent navigations (`/` → `/stats`), where
+   * there is no R2 binding to read; returning null there emits no second script,
+   * and none is needed, because the one the SSR document carried ran at parse
+   * time and set the global for the life of the tab. `staleTime: Infinity` keeps
+   * even that from being attempted on a whim.
+   *
+   * And the import is dynamic, *inside* the guard, so the browser bundle never
+   * pulls in the store: `import.meta.env.SSR` is replaced with a literal `false`
+   * in the client build, which makes this whole branch dead code and takes the
+   * OpenElectricity client and the R2 binding out with it. A top-level import
+   * would rely on tree-shaking to achieve the same thing, and quietly stop doing
+   * so the day something in that graph gained a side effect.
+   */
+  loader: async () => {
+    if (!import.meta.env.SSR) return null;
+    const { readDocumentUnitMetadata } = await import('@/server/document-unit-metadata');
+    return readDocumentUnitMetadata();
+  },
+  staleTime: Infinity,
+  head: ({ loaderData }) => ({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
@@ -65,10 +91,18 @@ export const Route = createRootRoute({
       { rel: 'stylesheet', href: appCss },
     ],
 
-    // Inline, and in the head, because it has to run in the one case where
-    // nothing else on the page can: when every hashed asset this document names
-    // has 404ed. See @/client/stale-document-tripwire.
-    scripts: [{ children: STALE_DOCUMENT_TRIPWIRE }],
+    scripts: [
+      // The unit metadata every year payload joins against. First, so it is set
+      // before anything that could possibly read it. Absent on a client
+      // navigation, and absent if the store could not produce a blob — in which
+      // case the page renders no rows rather than rows built on a guess.
+      ...(loaderData ? [{ children: unitMetadataScript(loaderData) }] : []),
+
+      // Inline, and in the head, because it has to run in the one case where
+      // nothing else on the page can: when every hashed asset this document names
+      // has 404ed. See @/client/stale-document-tripwire.
+      { children: STALE_DOCUMENT_TRIPWIRE },
+    ],
   }),
   component: RootComponent,
 });

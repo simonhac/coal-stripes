@@ -14,12 +14,17 @@
  * elsewhere.
  */
 import { describe, expect, it } from 'vitest';
-import { computeCoalStats, type YearReader } from '@/server/coal-stats-service';
+import {
+  computeCoalStats,
+  type UnitMetadataReader,
+  type YearReader,
+} from '@/server/coal-stats-service';
 import { earliestDataYear, currentDataYear } from '@/server/data-years';
-import type { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
+import type { UnitMetadata, YearCapFacHistoryDTO } from '@/shared/types';
+import { makeUnitMetadata } from './helpers/metadata';
 
 /** A minimal, unit-free payload: enough shape for the provenance path. */
-function payload(createdAt: string): GeneratingUnitCapFacHistoryDTO {
+function payload(createdAt: string): YearCapFacHistoryDTO {
   return {
     type: 'capacity_factors',
     version: '1.0',
@@ -27,6 +32,9 @@ function payload(createdAt: string): GeneratingUnitCapFacHistoryDTO {
     data: [],
   };
 }
+
+/** No units at all — the provenance tests read nothing but `created_at`. */
+const noUnits: UnitMetadataReader = async () => makeUnitMetadata({});
 
 /** Stamp for a year, so each year is distinguishable. */
 const stampFor = (year: number): string =>
@@ -43,20 +51,23 @@ const allYears = (): number[] => {
   return years;
 };
 
+interface UnitSpec {
+  duid: string;
+  days: string;
+  foldedInto?: string;
+  self?: string;
+  suppressedNullDays?: number;
+}
+
 /**
  * A payload holding one unit, whose daily values are given as a string: '.' is a
  * null day, a digit is that capacity factor. Keeps the gap shapes below legible.
+ *
+ * Returns the metadata alongside it, because a year payload no longer says what
+ * a DUID *is* — `capacity`, `region` and `foldedInto` all live in the blob now,
+ * and the fold reads all three. See @/shared/unit-metadata.
  */
-function unitPayload(
-  year: number,
-  units: Array<{
-    duid: string;
-    days: string;
-    foldedInto?: string;
-    self?: string;
-    suppressedNullDays?: number;
-  }>
-): GeneratingUnitCapFacHistoryDTO {
+function unitPayload(year: number, units: UnitSpec[]): YearCapFacHistoryDTO {
   const history = (days: string) => ({
     start: `${year}-01-01`,
     last: `${year}-01-${String(days.length).padStart(2, '0')}`,
@@ -68,22 +79,27 @@ function unitPayload(
     version: '1.0',
     created_at: stampFor(year),
     data: units.map((u) => ({
-      network: 'nem',
-      region: 'SA1',
-      data_type: 'energy',
-      units: 'MW',
-      capacity: 100,
       duid: u.duid,
-      facility_code: 'F',
-      facility_name: 'F',
-      fueltech: 'coal_black',
-      status: 'retired' as const,
       history: history(u.days),
-      ...(u.foldedInto ? { foldedInto: u.foldedInto } : {}),
       ...(u.self ? { selfHistory: history(u.self) } : {}),
       ...(u.suppressedNullDays ? { suppressedNullDays: u.suppressedNullDays } : {}),
     })),
   };
+}
+
+function unitMetadata(units: UnitSpec[]): UnitMetadataReader {
+  const over: Record<string, Partial<UnitMetadata>> = {};
+  for (const u of units) {
+    over[u.duid] = {
+      region: 'SA1',
+      capacity: 100,
+      facility_code: 'F',
+      facility_name: 'F',
+      status: 'retired',
+      ...(u.foldedInto ? { foldedInto: u.foldedInto } : {}),
+    };
+  }
+  return async () => makeUnitMetadata(over);
 }
 
 describe('computeCoalStats — gap adjustments', () => {
@@ -91,19 +107,19 @@ describe('computeCoalStats — gap adjustments', () => {
   // mid-December, so a payload dated 1 January would sit before the timeline's
   // origin and every day would be clipped away.
   const YEAR = earliestDataYear() + 1;
-  const only = (dto: GeneratingUnitCapFacHistoryDTO): YearReader =>
+  const only = (dto: YearCapFacHistoryDTO): YearReader =>
     async (year) => (year === YEAR ? dto : payload(stampFor(year)));
+
+  /** The pair a fold needs: this year's values, and what its DUIDs are. */
+  const fold = (units: UnitSpec[]) =>
+    computeCoalStats(only(unitPayload(YEAR, units)), unitMetadata(units));
 
   it('counts a folded member\'s own gaps, which no row would show', async () => {
     // The aggregate has no interior gap; the member it absorbed has two.
-    const stats = await computeCoalStats(
-      only(
-        unitPayload(YEAR, [
-          { duid: 'AGG', days: '5555' },
-          { duid: 'MEM1', days: '5..5', foldedInto: 'AGG' },
-        ])
-      )
-    );
+    const stats = await fold([
+      { duid: 'AGG', days: '5555' },
+      { duid: 'MEM1', days: '5..5', foldedInto: 'AGG' },
+    ]);
     const dq = stats.dataQuality;
 
     // The member is accounted for but never rendered as a gap row.
@@ -119,9 +135,7 @@ describe('computeCoalStats — gap adjustments', () => {
   it('credits back the span an absorbing row inherits from its members', async () => {
     // The row runs day 1-4 with a hole at day 2 (inherited: the member's data
     // starts first). Its OWN series starts at day 3, so that hole is not its.
-    const stats = await computeCoalStats(
-      only(unitPayload(YEAR, [{ duid: 'AGG', days: '5.55', self: '..55' }]))
-    );
+    const stats = await fold([{ duid: 'AGG', days: '5.55', self: '..55' }]);
     const dq = stats.dataQuality;
 
     expect(dq.totalHoleUnitDays).toBe(1);
@@ -132,9 +146,7 @@ describe('computeCoalStats — gap adjustments', () => {
   });
 
   it('adds back nulls the retired-unit 0-fill covered', async () => {
-    const stats = await computeCoalStats(
-      only(unitPayload(YEAR, [{ duid: 'LD', days: '5005', suppressedNullDays: 2 }]))
-    );
+    const stats = await fold([{ duid: 'LD', days: '5005', suppressedNullDays: 2 }]);
     const dq = stats.dataQuality;
 
     // The fill already turned those days into zeros, so nothing reads as a gap.
@@ -146,9 +158,10 @@ describe('computeCoalStats — gap adjustments', () => {
   });
 
   it('omits an adjustment worth nothing, and always foots up', async () => {
-    const stats = await computeCoalStats(
-      only(unitPayload(YEAR, [{ duid: 'AGG', days: '55' }, { duid: 'M', days: '55', foldedInto: 'AGG' }]))
-    );
+    const stats = await fold([
+      { duid: 'AGG', days: '55' },
+      { duid: 'M', days: '55', foldedInto: 'AGG' },
+    ]);
     const dq = stats.dataQuality;
 
     expect(dq.adjustments).toEqual([]);
@@ -158,7 +171,7 @@ describe('computeCoalStats — gap adjustments', () => {
 
 describe('computeCoalStats — data provenance', () => {
   it('records a builtAt for every year it read', async () => {
-    const stats = await computeCoalStats(reader());
+    const stats = await computeCoalStats(reader(), noUnits);
     const sources = stats.sources;
 
     expect(sources).toBeDefined();
@@ -169,7 +182,7 @@ describe('computeCoalStats — data provenance', () => {
   });
 
   it('reports the oldest and newest payload build times', async () => {
-    const sources = (await computeCoalStats(reader())).sources!;
+    const sources = (await computeCoalStats(reader(), noUnits)).sources!;
 
     // stampFor is ordered by year, so the extremes are the range endpoints.
     expect(sources.oldestBuiltAt).toBe(stampFor(earliestDataYear()));
@@ -179,7 +192,7 @@ describe('computeCoalStats — data provenance', () => {
   it('marks a year that failed to load as null rather than dropping it', async () => {
     const failed = currentDataYear() - 1;
 
-    const sources = (await computeCoalStats(reader([failed]))).sources!;
+    const sources = (await computeCoalStats(reader([failed]), noUnits)).sources!;
     const entry = sources.years.find((s) => s.year === failed);
 
     expect(entry).toEqual({ year: failed, builtAt: null });
@@ -188,7 +201,7 @@ describe('computeCoalStats — data provenance', () => {
   });
 
   it('reports nulls when no year could be loaded at all', async () => {
-    const sources = (await computeCoalStats(reader(allYears()))).sources!;
+    const sources = (await computeCoalStats(reader(allYears()), noUnits)).sources!;
 
     expect(sources.oldestBuiltAt).toBeNull();
     expect(sources.newestBuiltAt).toBeNull();

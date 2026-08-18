@@ -3,13 +3,14 @@ import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { getDaysBetween, getMonthName, getDateFromIndex } from '@/shared/date-utils';
 import { getProportionColorHex } from '@/shared/capacity-factor-color-map';
-import { CapFacYear } from '@/client/cap-fac-year';
+import { CapFacYear, inferredRegionStart } from '@/client/cap-fac-year';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { DATE_BOUNDARIES, PAGE_BACKGROUND_HEX } from '@/shared/config';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { useFleetMode } from '@/client/fleet-mode-context';
 import { getRegionNames } from '@/client/cap-fac-stats';
 import { getMonthLabelIndentPercent } from '@/client/month-label-layout';
+import { regionFirstDataDay } from '@/client/unit-metadata-inline';
 import { emitTooltip, endTooltip } from '@/client/tooltip-bus';
 import { useTouchAsHover } from '@/hooks/useTouchAsHover';
 import { getPointerPosition } from '@/hooks/useHoverIndicator';
@@ -281,17 +282,18 @@ function CapFacXAxisComponent({
     return getDateFromIndex(year, idx);
   };
   const frontierDate = frontierDateForYear(endYear) ?? frontierDateForYear(startYear);
-  // The region's first data day in the visible window: months before it (before
-  // the region was commissioned) fade to the page background, matching the stripe
-  // rows, rather than pale blue.
-  const leadingDateForYear = (year: number): CalendarDate | null => {
-    const data = yearDataMap.get(year);
-    if (!data) return null;
-    const idx = data.regionFirstDataDayIndex.get(regionCode) ?? -1;
-    if (idx < 0) return null;
-    return getDateFromIndex(year, idx);
-  };
-  const leadingDate = leadingDateForYear(startYear) ?? leadingDateForYear(endYear);
+  // The day this region's record begins: months before it fade to the page
+  // background, matching the stripe rows, rather than pale blue.
+  //
+  // A fact from the metadata blob, falling back to the loaded years only when
+  // the blob has no answer. Resolved exactly as CompositeTile resolves it, in
+  // the same order — the axis and the stripes above it have to agree on where a
+  // region's record starts, or the axis fades while the stripes stay blue. See
+  // leadingBackgroundDays in @/client/cap-fac-year.
+  const leadingDate =
+    regionFirstDataDay(regionCode) ??
+    inferredRegionStart(startYear, yearDataMap.get(startYear), regionCode) ??
+    inferredRegionStart(endYear, yearDataMap.get(endYear), regionCode);
   const clampPct = (v: number) => Math.max(0, Math.min(v, 1)) * 100;
   // A region with no data anywhere in the visible window fades the whole strip to
   // the page background (matching the stripe rows) rather than pale-blue cells.

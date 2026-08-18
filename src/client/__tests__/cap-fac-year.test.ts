@@ -1,4 +1,9 @@
-import { createCapFacYear, leadingBackgroundDays } from '../cap-fac-year';
+import {
+  createCapFacYear,
+  inferredRegionStart,
+  leadingBackgroundDays,
+  regionHasDataInWindow,
+} from '../cap-fac-year';
 import { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 import { MockCanvas } from './helpers/mock-canvas';
 import { CalendarDate, endOfMonth } from '@internationalized/date';
@@ -66,8 +71,6 @@ describe('cap-fac-year', () => {
           {
             network: 'NEM',
             region: 'NSW1',
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 100,
             duid: 'UNIT1',
             facility_code: 'FAC1',
@@ -84,8 +87,6 @@ describe('cap-fac-year', () => {
           {
             network: 'NEM',
             region: 'NSW1',
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 200,
             duid: 'UNIT2',
             facility_code: 'FAC1',
@@ -124,8 +125,6 @@ describe('cap-fac-year', () => {
           {
             network: 'WEM',
             // Note: WEM units don't have a region property
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 150,
             duid: 'WEM_UNIT1',
             facility_code: 'WEM_FAC1',
@@ -163,8 +162,6 @@ describe('cap-fac-year', () => {
           {
             network: 'NEM',
             region: 'QLD1',
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 100,
             duid: 'UNIT1',
             facility_code: 'FAC1',
@@ -181,8 +178,6 @@ describe('cap-fac-year', () => {
           {
             network: 'NEM',
             region: 'QLD1',
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 200,
             duid: 'UNIT2',
             facility_code: 'FAC2',
@@ -229,8 +224,6 @@ describe('cap-fac-year', () => {
           {
             network: 'NEM',
             // Missing region property
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 100,
             duid: 'UNIT1',
             facility_code: 'FAC1',
@@ -263,8 +256,6 @@ describe('cap-fac-year', () => {
           {
             network: 'NEM',
             region: 'NSW1',
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 100,
             duid: 'NSW_UNIT1',
             facility_code: 'NSW_FAC1',
@@ -281,8 +272,6 @@ describe('cap-fac-year', () => {
           {
             network: 'NEM',
             region: 'VIC1',
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 200,
             duid: 'VIC_UNIT1',
             facility_code: 'VIC_FAC1',
@@ -298,8 +287,6 @@ describe('cap-fac-year', () => {
           },
           {
             network: 'WEM',
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 150,
             duid: 'WEM_UNIT1',
             facility_code: 'WEM_FAC1',
@@ -339,8 +326,6 @@ describe('cap-fac-year', () => {
           {
             network: 'NEM',
             region: 'NSW1',
-            data_type: 'capacity_factor',
-            units: 'MW',
             capacity: 100,
             duid: 'UNIT1',
             facility_code: 'FAC1',
@@ -412,5 +397,103 @@ describe('leadingBackgroundDays', () => {
     const windowStart = new CalendarDate(1998, 11, 7);
     // Region starts later than the global record: the region bound must win.
     expect(leadingBackgroundDays(windowStart, GLOBAL, WEM_START, TILE)).toBe(TILE);
+  });
+});
+
+/**
+ * Whether a region has any data in the VISIBLE WINDOW — which is a different
+ * question from where its record begins, and must not be answered with the same
+ * number.
+ *
+ * The bug this pins: stepping the window one day, from ending 31 Dec 2005 to
+ * ending 1 Jan 2006, flipped every WEM row from page background to a solid year
+ * of pale blue. The window now touched 2006, 2006 has WEM data *somewhere*
+ * (from 20 September), and a test that asked only "does the end year have any
+ * data at all" said yes — for a window whose last visible day is 1 January.
+ *
+ * Both halves have to be positional: data lands in the visible TAIL of the start
+ * year if that year's last data day reaches it, and in the visible HEAD of the
+ * end year if that year's first data day falls inside it.
+ */
+describe('regionHasDataInWindow', () => {
+  const WEM = 'WEM';
+  /** 0-based day-of-year of 20 Sep 2006, WEM's first day of coal data. */
+  const WEM_FIRST_2006 = 262;
+
+  const bounds = (first: number, last: number) => ({
+    regionFirstDataDayIndex: new Map([[WEM, first]]),
+    regionLastDataDayIndex: new Map([[WEM, last]]),
+  });
+
+  // 2005 holds no WEM data at all; 2006 holds it from 20 Sep to year end.
+  const y2005 = bounds(-1, -1);
+  const y2006 = bounds(WEM_FIRST_2006, 364);
+
+  it('reports nothing for a window wholly inside the empty year', () => {
+    // 1 Jan – 31 Dec 2005.
+    expect(regionHasDataInWindow(y2005, undefined, WEM, 0, 364, true)).toBe(false);
+  });
+
+  it('reports nothing when the window only just reaches into the year data starts', () => {
+    // 2 Jan 2005 – 1 Jan 2006: one visible day of 2006, 262 days before WEM
+    // begins. This is the step that used to turn the whole region pale blue.
+    expect(regionHasDataInWindow(y2005, y2006, WEM, 1, 0, false)).toBe(false);
+  });
+
+  it('reports data once the window head reaches the region first data day', () => {
+    // 7 Oct 2005 – 6 Oct 2006: day 278 of 2006 is visible, and WEM starts on 262.
+    expect(regionHasDataInWindow(y2005, y2006, WEM, 279, 278, false)).toBe(true);
+  });
+
+  it('reports data when the start year tail carries it', () => {
+    // A later window: 2006 data reaches the year end, so the tail is populated.
+    expect(regionHasDataInWindow(y2006, bounds(0, 364), WEM, 300, 100, false)).toBe(true);
+  });
+
+  it('reports nothing when the start year data stops before the window opens', () => {
+    // A region retired mid-year: last data day 100, window opens on day 200.
+    expect(regionHasDataInWindow(bounds(0, 100), undefined, WEM, 200, 364, true)).toBe(false);
+  });
+
+  it('reports nothing while the years are still loading', () => {
+    expect(regionHasDataInWindow(undefined, undefined, WEM, 0, 364, true)).toBe(false);
+  });
+});
+
+/**
+ * The stand-in for the metadata blob's region first-data day, used only while
+ * there isn't one — a cold store, or the window after a deploy before the cron
+ * has scanned.
+ *
+ * It is the loaded year's own first data day, which is what this used to be
+ * before the fact existed. Deliberately NOT the minimum of the units'
+ * `first_seen`: that field reports the start of a unit's later contiguous run,
+ * so it can only ever be too LATE, and too late here means painting page
+ * background over real generation. An inference drawn from actual values can
+ * never do that — its failure mode is the harmless one, reading a year-long
+ * collection gap as a start, which is exactly what it did before.
+ */
+describe('inferredRegionStart', () => {
+  const WEM = 'WEM';
+  const bounds = (first: number) => ({
+    regionFirstDataDayIndex: new Map([[WEM, first]]),
+    regionLastDataDayIndex: new Map([[WEM, 364]]),
+  });
+
+  it('reads the first data day of the loaded year', () => {
+    // 20 Sep 2006 is day 262 of 2006.
+    expect(inferredRegionStart(2006, bounds(262), WEM)?.toString()).toBe('2006-09-20');
+  });
+
+  it('has no answer for a year with no data for the region', () => {
+    expect(inferredRegionStart(2005, bounds(-1), WEM)).toBeNull();
+  });
+
+  it('has no answer while the year is still loading', () => {
+    expect(inferredRegionStart(2005, undefined, WEM)).toBeNull();
+  });
+
+  it('has no answer for a region the year does not mention', () => {
+    expect(inferredRegionStart(2006, bounds(262), 'NSW1')).toBeNull();
   });
 });
