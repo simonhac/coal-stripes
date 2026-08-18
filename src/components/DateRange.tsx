@@ -12,7 +12,11 @@ export function formatDateRange(dateRange: { start: CalendarDate; end: CalendarD
 }
 
 export function DateRange({ dateRange }: DateRangeProps) {
-  if (!dateRange) return <span>Loading...</span>;
+  // Before the timeline has been positioned — the first frames of any load —
+  // hold the row's height without announcing anything. This readout sits in the
+  // page head, above the stripes, so a flash of "Loading..." here is precisely
+  // the jolt the rest of the shell is arranged to avoid.
+  if (!dateRange) return <div className="opennem-date-range">&nbsp;</div>;
 
   return (
     <div className="opennem-date-range">

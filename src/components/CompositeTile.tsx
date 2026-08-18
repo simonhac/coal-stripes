@@ -18,6 +18,7 @@ import React, { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { CalendarDate } from '@internationalized/date';
 import { FacilityYearTile } from '@/client/facility-year-tile';
+import { leadingBackgroundDays } from '@/client/cap-fac-year';
 import { getDayIndex, isLeapYear, getDaysBetween, getDateFromIndex } from '@/shared/date-utils';
 import { yearQueryOptions, isValidYear } from '@/client/year-queries';
 import { formatUnitName } from '@/client/unit-names';
@@ -38,6 +39,13 @@ interface CompositeTileProps {
   regionCode: string;
   animatedDateRange?: { start: CalendarDate; end: CalendarDate };
   minCanvasHeight?: number;
+  /**
+   * The row's height before any tile has been built, from the cached roster
+   * (see roster-snapshot). Only load-bearing on a reload, where rows now render
+   * ahead of their data; without it every row would start at the 12px default
+   * and jump to its real 25–96px when the tiles landed.
+   */
+  fallbackHeight?: number;
 }
 
 type TileState = 'hasData' | 'pendingData' | 'error' | 'idle';
@@ -53,10 +61,13 @@ const CompositeTileComponent = ({
   facilityName,
   regionCode,
   animatedDateRange,
-  minCanvasHeight = 20
+  minCanvasHeight = 20,
+  fallbackHeight
 }: CompositeTileProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastKnownHeightRef = useRef<number>(12); // Default height
+  // Seeded from the cached roster when there is one, so a row that renders
+  // before its tiles exist is already the right height. 12 is the last resort.
+  const lastKnownHeightRef = useRef<number>(fallbackHeight ?? 12);
   const animationFrameRef = useRef<number | null>(null);
   const lastRenderRef = useRef<{
     startStr: string;
@@ -151,6 +162,20 @@ const CompositeTileComponent = ({
       return getDateFromIndex(year, idx);
     };
 
+    // The mirror of the frontier: the first day this region has data, before
+    // which the row is not "missing" but "not yet begun", and so fades to the
+    // page background rather than reading as a hole in the record.
+    //
+    // The start year wins when it has any data, exactly as CapFacXAxis does for
+    // the month strip — the two overlays have to agree on where a region's
+    // record starts, or the axis fades while the stripes above it stay blue.
+    const regionStartFor = (year: number, data: typeof leftData): CalendarDate | null => {
+      if (!data) return null;
+      const idx = data.regionFirstDataDayIndex.get(regionCode) ?? -1;
+      if (idx < 0) return null;
+      return getDateFromIndex(year, idx);
+    };
+
     // This region's first/last data day per year, so render() can tell whether
     // the region has any data at all in the visible window (→ fade the whole row
     // to the page background) vs an interior gap (→ pale blue).
@@ -166,6 +191,8 @@ const CompositeTileComponent = ({
       rightState: right.state,
       leftFrontierDate: frontierDateFor(startYear, leftData),
       rightFrontierDate: rightNeeded ? frontierDateFor(endYear, rightData) : null,
+      leftRegionStart: regionStartFor(startYear, leftData),
+      rightRegionStart: rightNeeded ? regionStartFor(endYear, rightData) : null,
       leftBounds: boundsFor(leftData),
       rightBounds: boundsFor(rightData),
     };
@@ -182,9 +209,12 @@ const CompositeTileComponent = ({
   // px to ~1,900 px in a single reflow: CLS 0.57 on its own, all of the
   // measured score.
   //
-  // Everything needed is already available synchronously: `tiles` is a useMemo,
-  // and by the time a row mounts the page has gated on its roster year being
-  // loaded, so the real height is known on the very first frame.
+  // Everything needed is available synchronously: `tiles` is a useMemo, so a
+  // row whose year is already loaded knows its real height on the very first
+  // frame. A row that renders *ahead* of its data — which is now the normal case
+  // on a reload — takes `fallbackHeight` from the cached roster instead, which
+  // is the same canvas height, recorded on the previous visit. Losing that
+  // would reintroduce the reflow described above, one row at a time.
   const canvasHeight =
     tiles.left?.getCanvas().height ??
     tiles.right?.getCanvas().height ??
@@ -603,11 +633,15 @@ const CompositeTileComponent = ({
             ctx.fillRect(startIdx, 0, DATE_BOUNDARIES.TILE_WIDTH - startIdx, canvas.height);
           }
         }
-        // …and the leading region before the earliest data.
-        const preDataEndIdx = Math.max(0, Math.min(
-          getDaysBetween(dateRange.start, boundaries.earliestDataDay),
-          DATE_BOUNDARIES.TILE_WIDTH
-        ));
+        // …and the leading region, before the record begins — the global
+        // earliest day OR this region's first data day, whichever is later. See
+        // leadingBackgroundDays for why the region bound is load-bearing.
+        const preDataEndIdx = leadingBackgroundDays(
+          dateRange.start,
+          boundaries.earliestDataDay,
+          tiles.leftRegionStart ?? tiles.rightRegionStart,
+          DATE_BOUNDARIES.TILE_WIDTH,
+        );
         if (preDataEndIdx > 0) {
           ctx.fillRect(0, 0, preDataEndIdx, canvas.height);
         }

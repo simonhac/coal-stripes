@@ -13,8 +13,7 @@ import {
   SELF_HEAL_GUARD,
   STALE_DOCUMENT_TRIPWIRE,
 } from '@/client/stale-document-tripwire';
-import globalsCss from '@/styles/globals.css?url';
-import opennemCss from '@/styles/opennem.css?url';
+import appCss from '@/styles/app.css?url';
 
 const TITLE = 'Coal Availability';
 const DESCRIPTION = 'Australian coal power plant capacity factor visualisation';
@@ -52,31 +51,18 @@ export const Route = createRootRoute({
     links: [
       { rel: 'icon', href: '/favicon.svg' },
 
-      // DM Sans, linked here rather than @import-ed from opennem.css.
+      // One stylesheet, one origin. app.css bundles Tailwind (themed by Open
+      // Electricity's tailwind.config.js), the three design-system faces, and
+      // our own opennem.css.
       //
-      // An @import is only discovered once the importing sheet has been
-      // downloaded AND parsed, so the font stylesheet sat behind opennem.css in
-      // a serial chain and could not start until it landed — measured at ~340 ms
-      // on this zone, whose edge is in Singapore. Linked from the head it is in
-      // the initial HTML, so the browser's preload scanner starts all three
-      // sheets together.
-      //
-      // The preconnects cover the second hop: fonts.googleapis.com returns
-      // @font-face rules pointing at fonts.gstatic.com, a different origin whose
-      // handshake would otherwise begin only after that CSS parses. gstatic
-      // needs crossOrigin because fonts are fetched in CORS mode; without it the
-      // browser opens a second, unusable connection.
-      { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-      { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossOrigin: 'anonymous' },
-      {
-        rel: 'stylesheet',
-        href: 'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap',
-      },
-
-      // Next let each page import its own CSS; here both sheets are linked once
-      // from the root so /diagnostics stops being the odd one out.
-      { rel: 'stylesheet', href: globalsCss },
-      { rel: 'stylesheet', href: opennemCss },
+      // The three faces used to come from fonts.googleapis.com, which cost two
+      // extra handshakes on a zone whose edge is in Singapore: the Google
+      // stylesheet, then fonts.gstatic.com, whose connection could not even
+      // begin until that stylesheet parsed. Two preconnect hints and a long
+      // comment existed to soften that. Self-hosting via @fontsource deletes the
+      // problem instead — the woff2s are same-origin assets served by this
+      // Worker, fingerprinted, and cached at the same edge as everything else.
+      { rel: 'stylesheet', href: appCss },
     ],
 
     // Inline, and in the head, because it has to run in the one case where

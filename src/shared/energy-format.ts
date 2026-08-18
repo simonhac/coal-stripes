@@ -22,16 +22,30 @@ function grouped(value: number): string {
 }
 
 /**
- * Format an energy quantity in MWh using an adaptive unit.
- *   < 1 GWh   → "820 MWh"
- *   < 1 TWh   → "559.6 GWh"
- *   otherwise → "204 TWh"
+ * Format an energy quantity in MWh using an adaptive unit, as a number and its
+ * unit separately.
+ *   < 1 GWh   → { value: "820",   unit: "MWh" }
+ *   < 1 TWh   → { value: "559.6", unit: "GWh" }
+ *   otherwise → { value: "204",   unit: "TWh" }
+ *
+ * Split because Open Electricity's design system sets a unit suffix smaller and
+ * grey than the number it qualifies — the same treatment `formatCapacityValue`
+ * and `.capacity-unit` already give a station's MW.
+ */
+export function formatEnergyParts(mwh: number): { value: string; unit: string } {
+  const abs = Math.abs(mwh);
+  if (abs >= 1_000_000) return { value: grouped(mwh / 1_000_000), unit: 'TWh' };
+  if (abs >= 1_000) return { value: grouped(mwh / 1_000), unit: 'GWh' };
+  return { value: Math.round(mwh).toLocaleString(AU), unit: 'MWh' };
+}
+
+/**
+ * The same quantity as one string, for places that can't style a fragment —
+ * `title` attributes, aria labels, tests.
  */
 export function formatEnergy(mwh: number): string {
-  const abs = Math.abs(mwh);
-  if (abs >= 1_000_000) return `${grouped(mwh / 1_000_000)} TWh`;
-  if (abs >= 1_000) return `${grouped(mwh / 1_000)} GWh`;
-  return `${Math.round(mwh).toLocaleString(AU)} MWh`;
+  const { value, unit } = formatEnergyParts(mwh);
+  return `${value} ${unit}`;
 }
 
 /**

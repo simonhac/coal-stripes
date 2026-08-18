@@ -335,7 +335,7 @@ function CacheManagement() {
           ← Back to the visualisation
         </Link>
         <h1 style={{ margin: '10px 0 4px', fontSize: '22px' }}>Cache management</h1>
-        <p style={{ margin: 0, color: '#555', fontSize: '13px' }}>
+        <p style={{ margin: 0, color: 'var(--oe-mid-grey)', fontSize: '13px' }}>
           Every file in the R2 store. <strong>Flush</strong> re-fetches it from OpenElectricity,
           rewrites it, and clears the edge cache.
         </p>
@@ -365,11 +365,11 @@ function CacheManagement() {
           twice and made one fault look like two. The flush error wins: it is
           the thing the operator just did. */}
       {(error ?? store.error) && (
-        <p style={{ color: '#c00', fontSize: '13px', margin: '0 0 10px' }}>
+        <p style={{ color: 'var(--oe-error-red)', fontSize: '13px', margin: '0 0 10px' }}>
           {error ?? describeFetchError(store.error)}
         </p>
       )}
-      {note && <p style={{ color: '#555', fontSize: '13px', margin: '0 0 10px' }}>{note}</p>}
+      {note && <p style={{ color: 'var(--oe-mid-grey)', fontSize: '13px', margin: '0 0 10px' }}>{note}</p>}
 
       <div style={{ overflowX: 'auto' }}>
         <table style={table}>
@@ -397,7 +397,7 @@ function CacheManagement() {
       </div>
 
       {store.isFetching && entries.length === 0 && (
-        <p style={{ color: '#555', fontSize: '13px' }}>Reading the store…</p>
+        <p style={{ color: 'var(--oe-mid-grey)', fontSize: '13px' }}>Reading the store…</p>
       )}
     </main>
   );
@@ -492,54 +492,71 @@ function statusText(entry: StoreEntry, status: RowStatus | undefined): string {
   return '—';
 }
 
+/**
+ * Status text colour, on the design system's semantic trio.
+ *
+ * `--oe-alert-yellow` is Open Electricity's name for #EB1F70, which is a
+ * magenta. The name is theirs and so is the value; we use it for "in flight"
+ * because it is the one token in the palette that is neither pass nor fail.
+ */
 function statusColour(entry: StoreEntry, status: RowStatus | undefined): string {
-  if (status?.state === 'failed') return '#c00';
-  if (status?.state === 'done') return status.changed ? '#137333' : '#777';
-  if (status) return '#b06000';
-  if (!entry.builtAt || entry.stale) return '#c00';
-  return '#777';
+  if (status?.state === 'failed') return 'var(--oe-error-red)';
+  if (status?.state === 'done') return status.changed ? 'var(--oe-success-green)' : 'var(--oe-mid-grey)';
+  if (status) return 'var(--oe-alert-yellow)';
+  if (!entry.builtAt || entry.stale) return 'var(--oe-error-red)';
+  return 'var(--oe-mid-grey)';
 }
 
+// Design-system tokens, read from the custom properties opennem.css publishes,
+// rather than the hand-picked greys and the guessed `var(--font-body)` /
+// `var(--font-mono)` (neither of which was ever defined) that were here before.
 const page: React.CSSProperties = {
   maxWidth: '760px',
   margin: '0 auto',
   padding: '32px 20px 80px',
-  fontFamily: 'var(--font-body, system-ui, sans-serif)',
-  color: '#1a1a1a',
+  fontFamily: 'var(--font-stack)',
+  color: 'var(--oe-dark-grey)',
 };
 const table: React.CSSProperties = {
   borderCollapse: 'collapse',
   fontSize: '13px',
-  fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+  fontFamily: 'var(--font-data)',
+  fontVariantNumeric: 'tabular-nums',
   minWidth: '520px',
 };
 const cell: React.CSSProperties = {
   padding: '4px 10px',
-  borderBottom: '1px solid #e5e5e5',
+  borderBottom: '1px solid var(--oe-warm-grey)',
   whiteSpace: 'nowrap',
 };
 const headCell: React.CSSProperties = {
   ...cell,
   textAlign: 'left',
-  fontWeight: 600,
-  borderBottom: '2px solid #ccc',
+  fontWeight: 500,
+  borderBottom: '2px solid var(--oe-mid-warm-grey)',
   position: 'sticky',
   top: 0,
-  background: '#fff',
+  background: 'var(--oe-white)',
 };
+// Open Electricity's house button, inline so it can sit in this file's style
+// objects alongside the rest. Kept small — these are admin controls, not calls
+// to action — but the fill, the face and the radius are the real ones.
 const button: React.CSSProperties = {
+  fontFamily: 'var(--font-ui)',
   fontSize: '12px',
-  padding: '3px 10px',
-  border: '1px solid #999',
+  fontWeight: 500,
+  padding: '4px 10px',
+  border: '1px solid var(--oe-black)',
   borderRadius: '4px',
-  background: '#f4f4f4',
+  background: 'var(--oe-black)',
+  color: 'var(--oe-white)',
   cursor: 'pointer',
 };
 const input: React.CSSProperties = {
+  fontFamily: 'var(--font-data)',
   fontSize: '12px',
   padding: '3px 8px',
-  border: '1px solid #999',
+  border: '1px solid var(--oe-mid-warm-grey)',
   borderRadius: '4px',
-  fontFamily: 'var(--font-mono, ui-monospace, monospace)',
   width: '200px',
 };

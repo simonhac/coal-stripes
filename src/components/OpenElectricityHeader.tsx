@@ -13,20 +13,23 @@ interface OpenElectricityHeaderProps {
 }
 
 export function OpenElectricityHeader({ onOpenHelp, fleetMode, onFleetModeChange }: OpenElectricityHeaderProps) {
-  // These class names look like Tailwind and are not: `.sticky`, `.flex`,
-  // `.justify-between`, `.mx-auto`, `.px-4`, `.py-3` and friends are hand-written
-  // in opennem.css under "Base utility classes for header". Tailwind was
-  // installed but never wired up (no CSS file imported it), so removing Tailwind
-  // changes nothing here — but removing these classes breaks the header layout,
-  // which is how that was discovered.
+  // These class names are Tailwind, themed by Open Electricity's own config —
+  // which they were not until recently. They used to be hand-written look-alikes
+  // living in opennem.css, because Tailwind had been added to package.json but
+  // never wired into the build.
+  //
+  // The horizontal padding and the 1200px cap are NOT written here: they come
+  // from `.opennem-header-inner`, which reads the same `--app-padding` as
+  // `.opennem-stripes-container`. Those two left edges are the ones a reader
+  // sees line up, and the only way to keep them together is to have one number.
   //
   // Sticky, not fixed: staying in flow is what lets the first region header push
   // this header off screen instead of sliding over it. The push comes for free
   // from the sticky containing block — `.opennem-page-head` in opennem.css ends
   // exactly where the first region begins.
   return (
-    <header className="border-b sticky top-0 z-50" style={{ backgroundColor: '#faf9f6', borderBottom: '1px solid #e5e5e5' }}>
-      <div className="mx-auto px-4 py-3 lg:py-4" style={{ maxWidth: '1200px' }}>
+    <header className="sticky top-0 z-50 border-b border-mid-warm-grey bg-light-warm-grey">
+      <div className="opennem-header-inner mx-auto py-3 lg:py-4">
         <div className="flex items-center justify-between">
           {/* Wordmark — this is an independent project, not an official Open
               Electricity site, so we use our own "Coal ⚡ Stripes" wordmark while

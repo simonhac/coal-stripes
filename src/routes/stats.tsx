@@ -3,7 +3,12 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { OpenElectricityHeader } from '@/components/OpenElectricityHeader';
 import { statsQueryOptions } from '@/client/stats-queries';
-import { formatEnergy, formatPercent, type Granularity } from '@/shared/energy-format';
+import {
+  formatEnergy,
+  formatEnergyParts,
+  formatPercent,
+  type Granularity,
+} from '@/shared/energy-format';
 import { formatAgeFromAEST } from '@/shared/date-utils';
 import type { CoalGenerationStatsDTO, GranularityStat, StatRow, StatValue } from '@/shared/types';
 
@@ -39,26 +44,46 @@ function holeTitle(value: StatValue): string | undefined {
   return `${holeUnitDays.toLocaleString('en-AU')} unit-days missing in this period — the total is a lower bound${est}`;
 }
 
+/**
+ * A quantity and its unit, the design system's way round: the number carries the
+ * weight and the unit sits smaller and grey beside it. Same treatment as the MW
+ * on a station's capacity in the facility hovercard.
+ */
+function Energy({ mwh }: { mwh: number }) {
+  const { value, unit } = formatEnergyParts(mwh);
+  return (
+    <>
+      {value}
+      <span className="opennem-stats-unit">{unit}</span>
+    </>
+  );
+}
+
 function ValueCell({ value, granularity }: { value: StatValue | null; granularity: Granularity }) {
   if (!value) {
     return <td className="opennem-stats-num opennem-stats-empty">—</td>;
   }
-  const sub =
-    granularity === 'day'
-      ? value.label
-      : `${value.label} · ${formatEnergy(value.avgPerDay)}/day`;
   const title = holeTitle(value);
   return (
     <td className="opennem-stats-num">
       <span className="opennem-stats-value">
-        {formatEnergy(value.total)}
+        <Energy mwh={value.total} />
         {title && (
           <sup className="opennem-stats-flag" title={title}>
             *
           </sup>
         )}
       </span>
-      <span className="opennem-stats-sub">{sub}</span>
+      <span className="opennem-stats-sub">
+        {value.label}
+        {granularity !== 'day' && (
+          <>
+            {' · '}
+            <Energy mwh={value.avgPerDay} />
+            /day
+          </>
+        )}
+      </span>
     </td>
   );
 }

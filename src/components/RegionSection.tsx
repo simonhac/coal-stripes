@@ -5,10 +5,11 @@ import { CapFacXAxis } from './CapFacXAxis';
 import { FacilityLabel } from './FacilityLabel';
 import { RegionLabel } from './RegionLabel';
 import { RegionTooltip } from './RegionTooltip';
+import type { RosterFacility } from '@/client/roster-snapshot';
 
 interface RegionSectionProps {
   regionCode: string;
-  facilities: { code: string; name: string }[];
+  facilities: RosterFacility[];
   endDate: CalendarDate;
   animatedDateRange: { start: CalendarDate; end: CalendarDate } | null;
   /** Navigation's destination, for the date range this header may have to show. */
@@ -65,6 +66,7 @@ export function RegionSection({
                   regionCode={regionCode}
                   animatedDateRange={animatedDateRange}
                   minCanvasHeight={25}
+                  fallbackHeight={facility.height}
                 />
               </div>
             );

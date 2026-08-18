@@ -94,7 +94,7 @@ export function CapFacTooltip({ data }: CapFacTooltipProps) {
         <time>{formattedDate}</time>
       </span>
       <span className="hover-values">
-        <span className="tooltip-icon" style={{ backgroundColor: '#333' }}></span>
+        <span className="tooltip-icon" style={{ backgroundColor: 'var(--oe-dark-grey)' }}></span>
         {data.label} <strong>{getCapacityValue(data.capacityFactor)}</strong>
       </span>
     </div>

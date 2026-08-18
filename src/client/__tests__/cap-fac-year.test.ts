@@ -1,4 +1,4 @@
-import { createCapFacYear } from '../cap-fac-year';
+import { createCapFacYear, leadingBackgroundDays } from '../cap-fac-year';
 import { GeneratingUnitCapFacHistoryDTO } from '@/shared/types';
 import { MockCanvas } from './helpers/mock-canvas';
 import { CalendarDate, endOfMonth } from '@internationalized/date';
@@ -366,5 +366,51 @@ describe('cap-fac-year', () => {
         expect(nsw1Factors![i]).toBe(0.0);
       }
     });
+  });
+});
+
+/**
+ * The leading page-background overlay, and the WEM regression it exists for.
+ *
+ * The record as a whole starts 1998-12-07, but WEM's coal series does not begin
+ * until 2006-09-20. Using only the global boundary left every WEM day between
+ * those two dates painted as pale blue "no data" — a hole in the record where
+ * there was no record yet — the instant one day of real WEM data entered the
+ * window and the whole-row `regionHasDataInWindow` fill stopped applying.
+ */
+describe('leadingBackgroundDays', () => {
+  const GLOBAL = new CalendarDate(1998, 12, 7);
+  const WEM_START = new CalendarDate(2006, 9, 20);
+  const TILE = 365;
+
+  it('covers everything before a region whose record starts late', () => {
+    // The exact window the bug was measured on: 348 of 365 days were pale blue.
+    const windowStart = new CalendarDate(2005, 10, 7);
+    expect(leadingBackgroundDays(windowStart, GLOBAL, WEM_START, TILE)).toBe(348);
+  });
+
+  it('covers a whole tile still entirely before the region starts', () => {
+    expect(leadingBackgroundDays(new CalendarDate(2003, 1, 1), GLOBAL, WEM_START, TILE)).toBe(TILE);
+  });
+
+  it('covers nothing once the window is wholly inside the region record', () => {
+    expect(leadingBackgroundDays(new CalendarDate(2010, 1, 1), GLOBAL, WEM_START, TILE)).toBe(0);
+  });
+
+  it('leaves a region that starts with the record alone', () => {
+    // A NEM region in 2005: its first data day is long past, so no leading fill.
+    const nswStart = new CalendarDate(2005, 1, 1);
+    expect(leadingBackgroundDays(new CalendarDate(2005, 10, 7), GLOBAL, nswStart, TILE)).toBe(0);
+  });
+
+  it('still honours the global boundary when the region start is unknown', () => {
+    // Overstepping to the left of the record with no region bound available.
+    expect(leadingBackgroundDays(new CalendarDate(1998, 11, 7), GLOBAL, null, TILE)).toBe(30);
+  });
+
+  it('takes the later of the two boundaries, never the earlier', () => {
+    const windowStart = new CalendarDate(1998, 11, 7);
+    // Region starts later than the global record: the region bound must win.
+    expect(leadingBackgroundDays(windowStart, GLOBAL, WEM_START, TILE)).toBe(TILE);
   });
 });
