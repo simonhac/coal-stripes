@@ -37,6 +37,7 @@ import { featureFlags } from '@/shared/feature-flags';
 import { getDateBoundaries } from '@/shared/date-boundaries';
 import { tileMonitor } from '@/shared/tile-monitor';
 import { DATE_BOUNDARIES, PAGE_BACKGROUND_HEX } from '@/shared/config';
+import { NO_DATA_HEX } from '@/shared/capacity-factor-color-map';
 
 interface CompositeTileProps {
   endDate: CalendarDate;
@@ -213,8 +214,10 @@ const CompositeTileComponent = ({
   const displayHeight = Math.max(canvasHeight, minCanvasHeight);
 
   const drawErrorState = (ctx: CanvasRenderingContext2D, left: number, width: number, height: number) => {
-    // Use light blue color to indicate unavailable data
-    ctx.fillStyle = '#e6f3ff';
+    // A year we could not fetch is a year we have no readings for, so it takes
+    // the same pale blue as any other unknown day — from the colour map, not a
+    // literal, so it cannot drift away from the stripes beside it.
+    ctx.fillStyle = NO_DATA_HEX;
     ctx.fillRect(left, 0, width, height);
   };
 

@@ -47,9 +47,22 @@ export async function scrollTo(page: Page, y: number) {
 }
 
 /**
- * The centre of the first element matching `selector` that is fully on screen,
- * so a test can point at it with page.mouse without Playwright scrolling the
- * page out from under it.
+ * The centre of the first element matching `selector` that a `page.mouse` click
+ * would actually land on.
+ *
+ * The question these tests need answered is not "where is this element" but
+ * "can I point at it" — the page has a sticky header, a sticky region header
+ * and a portalled hovercard, any of which can cover a label that is perfectly
+ * visible in the layout. So the test is the direct one: put the centre inside
+ * the viewport, then ask the document what is on top there and require it to be
+ * the element or something inside it.
+ *
+ * It used to approximate that with `top > 120 && bottom < innerHeight - 40`,
+ * which is where this got interesting: at the default 1280×720 the first region
+ * label sits at 111 and the second's bottom at 681, so the two guards missed by
+ * 9px and 1px respectively and NO region label qualified. Two tests had been
+ * failing on a margin nobody had reason to look at. Geometry guessed at the
+ * answer; `elementFromPoint` knows it.
  */
 export async function onScreenCentre(
   page: Page,
@@ -60,14 +73,23 @@ export async function onScreenCentre(
     ({ sel, minW }) => {
       for (const el of Array.from(document.querySelectorAll(sel))) {
         const r = el.getBoundingClientRect();
-        if (r.top > 120 && r.bottom < window.innerHeight - 40 && r.width > minW && r.height > 4) {
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-        }
+        if (r.width <= minW || r.height <= 4) continue;
+
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) continue;
+
+        // Topmost at that point, and `el` is on the path a click would take:
+        // either the hit IS `el`, or it is a descendant whose event bubbles
+        // through it. An ancestor doesn't count — that means something has
+        // taken `el` out of the hit path, and the click would miss.
+        const hit = document.elementFromPoint(x, y);
+        if (hit && (hit === el || el.contains(hit))) return { x, y };
       }
       return null;
     },
     { sel: selector, minW: minWidth }
   );
-  expect(point, `no on-screen ${selector}`).not.toBeNull();
+  expect(point, `no clickable on-screen ${selector}`).not.toBeNull();
   return point!;
 }

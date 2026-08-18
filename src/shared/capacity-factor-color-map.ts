@@ -13,6 +13,21 @@
  *
  *   offline  `red` #C74523     — the brand accent, which the design system also
  *                                uses for its error and alert states.
+ *
+ *                                Worth being explicit that this IS a departure,
+ *                                not a match: the design system confines red to
+ *                                interactive signalling — links, focus rings,
+ *                                "the brick-red accent appearing only on focus"
+ *                                in charts — and here it carries a *data*
+ *                                meaning. Two consequences follow, and both are
+ *                                accepted rather than unnoticed. The scrub line
+ *                                (`--oe-focus-line`, the same red at 60%) now
+ *                                shares a hue with a large share of the stripes
+ *                                it moves over, so focus is less legible than
+ *                                the design system intends. And Open Electricity
+ *                                ships coal_black #121212 and coal_brown
+ *                                #744A26, so this is a coal chart containing
+ *                                neither — see `full`, below, for why.
  *   full     `black` #000000    — the design system also has a `coal_black`
  *                                (#121212) for coal *series*, but that is a
  *                                categorical colour for telling fuels apart in a
@@ -29,11 +44,21 @@
  * low one, and this codebase treats that distinction as load-bearing (see the
  * null-is-never-zero rule in CLAUDE.md).
  *
- * Two things tell a reader what the colours mean. `StripesLegend` — the ramp
- * above the stripes — derives its gradient from `getRampGradientCss()` below
- * and its swatch from `NO_DATA_HEX`, so it cannot drift. The welcome dialog's
- * `.welcome-swatch--*` rules in src/styles/opennem.css are hand-written CSS and
- * must be kept in step with these by hand.
+ * Understating it would be a mistake, though: the design system opens its
+ * colour section with "the palette is warm-neutral — no cool blue-greys
+ * anywhere in the chrome", so of everything in this app this is the single most
+ * conspicuous break with it. One alternative has not been tried and would keep
+ * the palette intact if it ever needs to be: a non-fill treatment — a hatch, or
+ * `warm-grey` carrying a hairline — distinguishes "no reading" by texture
+ * rather than by adding a hue. It costs more to draw on a canvas of
+ * one-pixel-wide columns, which is why it was not the first answer.
+ *
+ * Two things tell a reader what the colours mean, and neither restates a value.
+ * `StripesLegend` — the ramp above the stripes — derives its gradient from
+ * `getRampGradientCss()` below and its swatch from `NO_DATA_HEX`. `WelcomeDialog`
+ * asks `getHexColor()` for all four of its swatches, `null` included. (It used
+ * to carry `.welcome-swatch--*` rules in src/styles/opennem.css that repeated
+ * these by hand; they are gone.)
  *
  * The ramp is anchored at both ends rather than being a plain `255 × (1 −
  * cf/100)`: its lightest step stays #bfbfbf wherever the red threshold sits, so

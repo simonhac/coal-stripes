@@ -1,6 +1,26 @@
 import { Modal } from './Modal';
 import { Kbd } from './Kbd';
 import type { DeviceCapabilities } from '@/hooks/useDeviceCapabilities';
+import {
+  capacityFactorColorMap,
+  RED_THRESHOLD_PCT,
+} from '@/shared/capacity-factor-color-map';
+
+/**
+ * The four swatches in the prose below, each asked of the same map that paints
+ * the stripes — the way `StripesLegend` does it, and for the same reason: a
+ * hand-written copy of a data colour is a copy that will eventually be wrong,
+ * and this dialog is where a reader is told what the colours mean.
+ *
+ * `null` is the map's own spelling of "no reading", so the pale blue comes back
+ * from the same call rather than from a second constant.
+ */
+const SWATCH = {
+  out: capacityFactorColorMap.getHexColor(0),
+  light: capacityFactorColorMap.getHexColor(RED_THRESHOLD_PCT),
+  full: capacityFactorColorMap.getHexColor(100),
+  nodata: capacityFactorColorMap.getHexColor(null),
+};
 
 interface WelcomeDialogProps {
   isOpen: boolean;
@@ -32,16 +52,18 @@ export function WelcomeDialog({
         </li>
         <li>
           One thin bar per day of the year, coloured by capacity factor:{' '}
-          <span className="welcome-swatch welcome-swatch--out" /> red = out of
-          service, graduating from{' '}
-          <span className="welcome-swatch welcome-swatch--light" /> lightly
-          loaded to <span className="welcome-swatch welcome-swatch--full" />{' '}
+          <span className="welcome-swatch" style={{ background: SWATCH.out }} />{' '}
+          red = out of service, graduating from{' '}
+          <span className="welcome-swatch" style={{ background: SWATCH.light }} />{' '}
+          lightly loaded to{' '}
+          <span className="welcome-swatch" style={{ background: SWATCH.full }} />{' '}
           fully loaded. A long run of red means the whole station is offline.
         </li>
         {/* Spelled out, because the one thing a reader must not do with this
             chart is read a gap as a zero. */}
         <li>
-          A pale blue <span className="welcome-swatch welcome-swatch--nodata" />{' '}
+          A pale blue{' '}
+          <span className="welcome-swatch" style={{ background: SWATCH.nodata }} />{' '}
           bar means no data — the day is in the future, or the reading never
           reached us. It never means zero.
         </li>
